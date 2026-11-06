@@ -5,6 +5,7 @@ defmodule Deployer.Monitor do
 
   alias Deployer.Monitor
   alias Foundation.Catalog
+  alias Foundation.Yaml.Readiness
 
   @behaviour Monitor.Adapter
 
@@ -35,7 +36,7 @@ defmodule Deployer.Monitor do
           start_time: nil | integer(),
           started_at: nil | DateTime.t(),
           last_crash_at: nil | DateTime.t(),
-          timeout_app_ready: integer(),
+          readiness: Readiness.t(),
           retry_delay_pre_commands: integer(),
           pre_commands_run: map() | nil,
           reported_pre_commands: [String.t()]
@@ -57,7 +58,7 @@ defmodule Deployer.Monitor do
             start_time: nil,
             started_at: nil,
             last_crash_at: nil,
-            timeout_app_ready: nil,
+            readiness: %Readiness{},
             retry_delay_pre_commands: nil,
             pre_commands_run: nil,
             reported_pre_commands: []

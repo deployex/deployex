@@ -719,6 +719,9 @@ defmodule DeployexWeb.Components.ConfigChangesModal do
 
   defp format_value(:env, list), do: Enum.join(list, " ")
 
+  defp format_value(:readiness, %{type: type, min_ready_ms: min_ready_ms}),
+    do: "type: #{type} min_ready_ms: #{min_ready_ms}"
+
   defp format_value(_, value), do: to_string(value)
 
   defp format_cert_value(nil), do: "none"

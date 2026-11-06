@@ -26,6 +26,12 @@ defmodule Sentinel.Config.Changes do
           apply_strategy: apply_strategy()
         }
 
+  @type readiness_change :: %{
+          old: Foundation.Yaml.Readiness.t(),
+          new: Foundation.Yaml.Readiness.t(),
+          apply_strategy: apply_strategy()
+        }
+
   @type app_diff :: %{
           optional(:language) => string_change(),
           optional(:replicas) => numeric_change(),
@@ -33,6 +39,7 @@ defmodule Sentinel.Config.Changes do
           optional(:deploy_schedule_interval_ms) => numeric_change(),
           optional(:replica_ports) => list_change(),
           optional(:env) => list_change(),
+          optional(:readiness) => readiness_change(),
           optional(:monitoring) => list_change(),
           optional(:certificates) => certificate_change()
         }

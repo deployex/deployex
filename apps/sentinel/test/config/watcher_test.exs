@@ -924,6 +924,67 @@ defmodule Sentinel.Config.WatcherTest do
   end
 
   describe "application changes detection" do
+    for {label, old_readiness, new_readiness, changed?} <- [
+          {"a changed type", %Yaml.Readiness{}, %Yaml.Readiness{type: :otp}, true},
+          {"an app from a version without readiness, with the default", nil, %Yaml.Readiness{},
+           false},
+          {"an app from a version without readiness, with another value", nil,
+           %Yaml.Readiness{type: :otp}, true}
+        ] do
+      test "readiness changes - #{label}" do
+        test_pid = self()
+        ref = make_ref()
+        old_readiness = unquote(Macro.escape(old_readiness))
+        new_readiness = unquote(Macro.escape(new_readiness))
+
+        old_application = application_with_readiness(old_readiness)
+
+        new_application = %{
+          @default_application
+          | readiness: new_readiness,
+            replicas: @default_application.replicas + 1
+        }
+
+        with_mocks([
+          {Upgradable, [],
+           [
+             from_app_env: fn ->
+               Map.merge(@default_upgradable, %{applications: [old_application]})
+             end,
+             from_yaml: fn _config ->
+               Map.merge(@default_upgradable, %{applications: [new_application]})
+             end
+           ]},
+          {Yaml, [],
+           [
+             load: fn %Yaml{config_checksum: "current_checksum"} ->
+               send(test_pid, {:handle_ref_event, ref})
+               {:ok, %Yaml{}}
+             end
+           ]}
+        ]) do
+          capture_log(fn ->
+            {:ok, _pid} = Watcher.start_link(name: :test_changes, check_interval_ms: 10)
+
+            assert_receive {:handle_ref_event, ^ref}, 1_000
+            :sys.get_state(:test_changes)
+          end)
+
+          {:ok, changes} = Watcher.get_pending_changes(:test_changes)
+          details = changes.summary.applications.details[@default_application.name]
+
+          if unquote(changed?) do
+            assert %{new: ^new_readiness, apply_strategy: :next_deploy} =
+                     details.changes.readiness
+
+            assert :next_deploy in details.apply_strategies
+          else
+            refute Map.has_key?(details.changes, :readiness)
+          end
+        end
+      end
+    end
+
     test "detects added application" do
       test_pid = self()
       ref = make_ref()
@@ -2326,4 +2387,9 @@ defmodule Sentinel.Config.WatcherTest do
       assert Upgradable.from_yaml(%Yaml{auth: @auth}).auth == @auth
     end
   end
+
+  defp application_with_readiness(nil), do: Map.delete(@default_application, :readiness)
+
+  defp application_with_readiness(readiness),
+    do: %{@default_application | readiness: readiness}
 end

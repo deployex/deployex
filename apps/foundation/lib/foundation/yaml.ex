@@ -56,6 +56,24 @@ defmodule Foundation.Yaml do
           }
   end
 
+  defmodule Readiness do
+    @moduledoc """
+    Provides structure to define when a started application counts as ready
+
+    With `:timeout` the OS process only has to stay up for `min_ready_ms`. With `:otp` the
+    node must also answer over distribution with its boot status.
+    """
+
+    @derive Jason.Encoder
+
+    defstruct type: :timeout, min_ready_ms: :timer.seconds(30)
+
+    @type t :: %__MODULE__{
+            type: :timeout | :otp,
+            min_ready_ms: non_neg_integer()
+          }
+  end
+
   defmodule Ports do
     @moduledoc """
     Provides structure to define Ports feature
@@ -238,7 +256,8 @@ defmodule Foundation.Yaml do
       :replica_ports,
       :env,
       :monitoring,
-      :certificates
+      :certificates,
+      readiness: %Foundation.Yaml.Readiness{}
     ]
 
     @type t :: %__MODULE__{
@@ -250,7 +269,8 @@ defmodule Foundation.Yaml do
             replica_ports: [Foundation.Yaml.Ports.t()],
             env: [String.t()],
             monitoring: [{atom(), Foundation.Yaml.Monitoring.t()}],
-            certificates: [Foundation.Yaml.Certificate.t()]
+            certificates: [Foundation.Yaml.Certificate.t()],
+            readiness: Foundation.Yaml.Readiness.t()
           }
   end
 
@@ -666,8 +686,36 @@ defmodule Foundation.Yaml do
       replica_ports: parse_ports(data["replica_ports"]),
       env: parse_env(data["env"]),
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),
-      certificates: parse_certificates(data["certificates"])
+      certificates: parse_certificates(data["certificates"]),
+      readiness: parse_readiness(data["readiness"])
     }
+  end
+
+  defp parse_readiness(nil), do: %Readiness{}
+
+  defp parse_readiness(%{} = data) do
+    %Readiness{
+      type: parse_readiness_type(data["type"]),
+      min_ready_ms: parse_min_ready_ms(data["min_ready_ms"])
+    }
+  end
+
+  defp parse_readiness(value),
+    do: raise("readiness #{inspect(value)} not supported, expected a section with type")
+
+  defp parse_readiness_type(type) when type in [nil, "timeout"], do: :timeout
+  defp parse_readiness_type("otp"), do: :otp
+
+  defp parse_readiness_type(type),
+    do: raise("readiness type #{inspect(type)} not supported, expected timeout or otp")
+
+  defp parse_min_ready_ms(nil), do: %Readiness{}.min_ready_ms
+  defp parse_min_ready_ms(value) when is_integer(value) and value >= 0, do: value
+
+  defp parse_min_ready_ms(value) do
+    raise(
+      "readiness min_ready_ms #{inspect(value)} not supported, expected a non negative integer"
+    )
   end
 
   defp parse_ports(nil), do: []
