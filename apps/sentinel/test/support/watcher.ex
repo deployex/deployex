@@ -173,6 +173,11 @@ defmodule Sentinel.Fixture.Watcher do
                   apply_strategy: :immediate
                 },
                 deploy_schedule_interval_ms: %{new: 8000, old: 5000, apply_strategy: :immediate},
+                readiness: %{
+                  new: %Foundation.Yaml.Readiness{type: :otp, min_ready_ms: 60_000},
+                  old: %Foundation.Yaml.Readiness{},
+                  apply_strategy: :next_deploy
+                },
                 replica_ports: %{
                   new: [
                     %Foundation.Yaml.Ports{key: "PORT", base: 4000},

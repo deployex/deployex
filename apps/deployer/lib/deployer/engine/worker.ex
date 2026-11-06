@@ -37,6 +37,7 @@ defmodule Deployer.Engine.Worker do
           deployment_to_terminate: map(),
           deploy_rollback_timeout_ms: non_neg_integer(),
           deploy_schedule_interval_ms: non_neg_integer(),
+          readiness: Foundation.Yaml.Readiness.t(),
           pending_pre_commands: map() | nil
         }
 
@@ -52,6 +53,7 @@ defmodule Deployer.Engine.Worker do
             deployment_to_terminate: nil,
             deploy_rollback_timeout_ms: 0,
             deploy_schedule_interval_ms: 0,
+            readiness: %Foundation.Yaml.Readiness{},
             pending_pre_commands: nil
 
   @dialyzer {:nowarn_function, initialize_version: 1}
@@ -78,8 +80,11 @@ defmodule Deployer.Engine.Worker do
       ) do
     Logger.info("Initializing Engine Server for #{name}")
 
-    # A restart after a relup gets the start argument the old code built, without this field
-    state = Map.put_new(state, :pending_pre_commands, nil)
+    # A restart after a relup gets the start argument the old code built, without these fields
+    state =
+      state
+      |> Map.put_new(:pending_pre_commands, nil)
+      |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
 
     # Subscribe before reading, in this order. A change made in between then arrives as a
     # message instead of being lost in the gap. Reading here is also what makes a restarted
@@ -492,6 +497,7 @@ defmodule Deployer.Engine.Worker do
   - env
   - deploy_rollback_timeout_ms
   - deploy_schedule_interval_ms
+  - readiness
   - replica_ports
   - replicas
 
@@ -528,10 +534,12 @@ defmodule Deployer.Engine.Worker do
 
   defp schedule_new_deployment(timeout), do: Process.send_after(self(), :schedule, timeout)
 
-  # An older version built the state without pending_pre_commands, or deployments without a field
+  # An older version built the state without pending_pre_commands or readiness, or deployments
+  # without a field
   defp upgrade_state(state) do
     state
     |> Map.put_new(:pending_pre_commands, nil)
+    |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
     |> Map.update!(
       :deployments,
       &Map.new(&1, fn {i, deployment} -> {i, upgrade_deployment(deployment)} end)
@@ -750,7 +758,8 @@ defmodule Deployer.Engine.Worker do
           sname: sname,
           language: language,
           ports: ports,
-          env: env
+          env: env,
+          readiness: state.readiness
         })
 
       # A monitor that already runs the app does not report it running again, so a rollback
@@ -822,7 +831,8 @@ defmodule Deployer.Engine.Worker do
       sname: sname,
       language: state.language,
       ports: ports,
-      env: state.env
+      env: state.env,
+      readiness: state.readiness
     })
   end
 
@@ -1349,7 +1359,8 @@ defmodule Deployer.Engine.Worker do
         sname: new_sname,
         language: language,
         ports: available_ports,
-        env: env
+        env: env,
+        readiness: state.readiness
       })
     end)
 

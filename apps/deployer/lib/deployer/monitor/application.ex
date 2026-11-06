@@ -10,6 +10,7 @@ defmodule Deployer.Monitor.Application do
   alias Deployer.Status
   alias Foundation.Catalog
   alias Foundation.Common
+  alias Foundation.Yaml.Readiness
   alias Host.Commander
 
   @behaviour Monitor.Adapter
@@ -19,6 +20,7 @@ defmodule Deployer.Monitor.Application do
   @max_backoff_ms :timer.minutes(5)
   # The restarts each instance keeps, for the dashboard
   @restart_history 10
+  @readiness_check_interval :timer.seconds(1)
 
   ### ==========================================================================
   ### Callback functions
@@ -42,7 +44,7 @@ defmodule Deployer.Monitor.Application do
 
     {:ok,
      update_non_blocking_state(%Monitor{
-       timeout_app_ready: service.timeout_app_ready,
+       readiness: service.readiness,
        retry_delay_pre_commands: service.retry_delay_pre_commands,
        name: service.name,
        sname: service.sname,
@@ -192,16 +194,28 @@ defmodule Deployer.Monitor.Application do
 
   def handle_info({:check_running, pid, sname}, state)
       when pid == state.current_pid and sname == state.sname do
-    Logger.info(" # Application sname: #{state.sname} is running")
+    %{node: node} = Catalog.node_info(sname)
 
-    Engine.notify_application_running(sname)
+    if Monitor.Probe.ready?(readiness(state), node, state.language) do
+      Logger.info(" # Application sname: #{state.sname} is running")
 
-    # NOTE: The application reached a stable state, so the backoff sequence starts
-    #       over on the next crash. The crash_restart_count is a lifetime total and
-    #       is never reset here.
-    state = %{state | status: :running, consecutive_crash_count: 0}
+      Engine.notify_application_running(sname)
 
-    {:noreply, update_non_blocking_state(state)}
+      # NOTE: The application reached a stable state, so the backoff sequence starts
+      #       over on the next crash. The crash_restart_count is a lifetime total and
+      #       is never reset here.
+      state = %{state | status: :running, consecutive_crash_count: 0}
+
+      {:noreply, update_non_blocking_state(state)}
+    else
+      # The status stays :starting. For a deployment, the rollback timer of the engine worker is
+      # the deadline, and it stops this monitor when the application never gets ready
+      Logger.debug(" # Application sname: #{state.sname} is not ready yet")
+
+      Process.send_after(self(), {:check_running, pid, sname}, @readiness_check_interval)
+
+      {:noreply, state}
+    end
   end
 
   def handle_info({:check_running, _pid, _sname}, state) do
@@ -318,7 +332,9 @@ defmodule Deployer.Monitor.Application do
      |> Map.put_new(:last_crash_at, nil)
      |> Map.put_new(:watchdog_restart_count, 0)
      |> Map.put_new(:restarts, [])
-     |> Map.put_new_lazy(:started_at, fn -> Common.monotonic_to_utc(state.start_time) end)}
+     |> Map.put_new_lazy(:started_at, fn -> Common.monotonic_to_utc(state.start_time) end)
+     |> Map.put_new_lazy(:readiness, fn -> %Readiness{min_ready_ms: state.timeout_app_ready} end)
+     |> Map.delete(:timeout_app_ready)}
   end
 
   ### ==========================================================================
@@ -400,10 +416,12 @@ defmodule Deployer.Monitor.Application do
   defp trigger_run_service(sname, timeout \\ 1),
     do: Process.send_after(self(), {:run_service, sname}, timeout)
 
+  # Map.get, since a state that missed code_change on a relup has no readiness key
+  defp readiness(state), do: Map.get(state, :readiness, %Readiness{})
+
   defp run_service(
          %Monitor{
            sname: sname,
-           timeout_app_ready: timeout_app_ready,
            retry_delay_pre_commands: retry_delay_pre_commands
          } = state,
          version_map
@@ -444,7 +462,7 @@ defmodule Deployer.Monitor.Application do
         " # Running sname: #{sname}, monitoring pid = #{inspect(pid)}, OS process = #{os_pid} sname: #{sname}"
       )
 
-      Process.send_after(self(), {:check_running, pid, sname}, timeout_app_ready)
+      Process.send_after(self(), {:check_running, pid, sname}, readiness(state).min_ready_ms)
 
       # Map.put, since a state that missed code_change on a relup has no started_at key. The pre_commands
       # passed, so a later failure starts a new run of reports

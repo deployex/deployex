@@ -13,6 +13,7 @@ defmodule Deployer.MonitorTest do
   alias Deployer.Monitor.Service
   alias Foundation.Catalog
   alias Foundation.Fixture.Catalog, as: FixtureCatalog
+  alias Foundation.Yaml.Readiness
 
   setup do
     FixtureCatalog.cleanup()
@@ -259,7 +260,7 @@ defmodule Deployer.MonitorTest do
 
       Host.CommanderMock
       |> expect(:run_link, fn _command, _options ->
-        # Wait a timer greater than timeout_app_ready to guarantee app is in the
+        # Wait a timer greater than min_ready_ms to guarantee app is in the
         # running state
         Process.send_after(test_pid_process, {:handle_ref_event, test_event_ref}, 100)
         {:ok, test_pid_process, os_pid}
@@ -273,7 +274,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: "elixir",
                  ports: ports,
-                 timeout_app_ready: 10
+                 readiness: %Readiness{min_ready_ms: 10}
                })
 
       MonitorApp.subscribe_new_deploy()
@@ -283,6 +284,86 @@ defmodule Deployer.MonitorTest do
       assert %{status: :running} = MonitorApp.state(sname)
 
       assert_receive {:new_deploy, _source_sname, _deploy_sname}, 1_000
+
+      assert :ok = MonitorApp.stop_service(name, sname)
+    end
+
+    @tag :capture_log
+    test "Running application - otp readiness waits for the boot of the node to finish",
+         %{elixir_name: name, elixir_sname: sname, ports: ports} do
+      test_pid_process = self()
+      FixtureFiles.create_bin_files(sname)
+      %{node: node} = Catalog.node_info(sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn ^sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      Host.CommanderMock
+      |> expect(:run_link, fn _command, _options -> {:ok, test_pid_process, 123_456} end)
+      |> stub(:run, fn _command, _options -> {:ok, test_pid_process} end)
+      |> stub(:stop, fn ^test_pid_process -> :ok end)
+
+      Foundation.RpcMock
+      |> expect(:call, fn ^node, :init, :get_status, [], _timeout ->
+        send(test_pid_process, :not_ready_answered)
+        {:starting, :applications_loaded}
+      end)
+      |> expect(:call, fn ^node, :init, :get_status, [], _timeout ->
+        send(test_pid_process, :ready_answered)
+        {:started, :started}
+      end)
+
+      assert {:ok, _pid} =
+               MonitorApp.start_service(%Service{
+                 name: name,
+                 sname: sname,
+                 language: "elixir",
+                 ports: ports,
+                 readiness: %Readiness{type: :otp, min_ready_ms: 10}
+               })
+
+      assert_receive :not_ready_answered, 1_000
+      assert %{status: :starting} = MonitorApp.state(sname)
+
+      assert_receive :ready_answered, 2_000
+      assert :ok = wait_for_status(sname, :running)
+
+      assert :ok = MonitorApp.stop_service(name, sname)
+    end
+
+    @tag :capture_log
+    test "Running application - otp readiness that never passes stays starting",
+         %{elixir_name: name, elixir_sname: sname, ports: ports} do
+      test_pid_process = self()
+      FixtureFiles.create_bin_files(sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn ^sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      Host.CommanderMock
+      |> expect(:run_link, fn _command, _options -> {:ok, test_pid_process, 123_456} end)
+      |> stub(:run, fn _command, _options -> {:ok, test_pid_process} end)
+      |> stub(:stop, fn ^test_pid_process -> :ok end)
+
+      Foundation.RpcMock
+      |> stub(:call, fn _node, :init, :get_status, [], _timeout ->
+        send(test_pid_process, :probed)
+        {:badrpc, :nodedown}
+      end)
+
+      assert {:ok, _pid} =
+               MonitorApp.start_service(%Service{
+                 name: name,
+                 sname: sname,
+                 language: "elixir",
+                 ports: ports,
+                 readiness: %Readiness{type: :otp, min_ready_ms: 10}
+               })
+
+      # Asked again after the first answer, and it is still not reported as running
+      assert_receive :probed, 1_000
+      assert_receive :probed, 2_000
+      assert %{status: :starting, consecutive_crash_count: 0} = MonitorApp.state(sname)
 
       assert :ok = MonitorApp.stop_service(name, sname)
     end
@@ -316,7 +397,7 @@ defmodule Deployer.MonitorTest do
                  language: "elixir",
                  ports: ports,
                  env: ["RELEASE_COOKIE=app-cookie"],
-                 timeout_app_ready: 10
+                 readiness: %Readiness{min_ready_ms: 10}
                })
 
       assert_receive {:start_command, command}, 1_000
@@ -366,7 +447,7 @@ defmodule Deployer.MonitorTest do
                      "TEST_QUOTE=it's",
                      "TEST_EQUALS=k=v"
                    ],
-                   timeout_app_ready: 10
+                   readiness: %Readiness{min_ready_ms: 10}
                  })
 
         assert_receive {:start_command, command}, 1_000
@@ -420,7 +501,7 @@ defmodule Deployer.MonitorTest do
                    sname: sname,
                    language: language,
                    ports: context.ports,
-                   timeout_app_ready: 10
+                   readiness: %Readiness{min_ready_ms: 10}
                  })
 
         assert_receive {:start_command, command}, 1_000
@@ -464,7 +545,7 @@ defmodule Deployer.MonitorTest do
 
       Host.CommanderMock
       |> expect(:run_link, fn _command, _options ->
-        # Wait a timer greater than timeout_app_ready to guarantee app is in the
+        # Wait a timer greater than min_ready_ms to guarantee app is in the
         # running state
         Process.send_after(test_pid_process, {:handle_ref_event, test_event_ref}, 100)
         {:ok, test_pid_process, os_pid}
@@ -478,7 +559,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: language,
                  ports: ports,
-                 timeout_app_ready: 10
+                 readiness: %Readiness{min_ready_ms: 10}
                })
 
       assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -507,7 +588,7 @@ defmodule Deployer.MonitorTest do
 
       Host.CommanderMock
       |> expect(:run_link, fn _command, _options ->
-        # Wait a timer greater than timeout_app_ready to guarantee app is in the
+        # Wait a timer greater than min_ready_ms to guarantee app is in the
         # running state
         Process.send_after(test_pid_process, {:handle_ref_event, test_event_ref}, 100)
         {:ok, test_pid_process, os_pid}
@@ -521,7 +602,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: language,
                  ports: ports,
-                 timeout_app_ready: 10
+                 readiness: %Readiness{min_ready_ms: 10}
                })
 
       assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -565,7 +646,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: "elixir",
                  ports: ports,
-                 timeout_app_ready: 10
+                 readiness: %Readiness{min_ready_ms: 10}
                })
 
       assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -609,7 +690,7 @@ defmodule Deployer.MonitorTest do
                           sname: sname,
                           language: language,
                           ports: ports,
-                          timeout_app_ready: 10
+                          readiness: %Readiness{min_ready_ms: 10}
                         })
 
                assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -654,7 +735,7 @@ defmodule Deployer.MonitorTest do
                           sname: sname,
                           language: language,
                           ports: ports,
-                          timeout_app_ready: 10
+                          readiness: %Readiness{min_ready_ms: 10}
                         })
 
                assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -743,7 +824,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: "elixir",
                  ports: ports,
-                 timeout_app_ready: 10,
+                 readiness: %Readiness{min_ready_ms: 10},
                  retry_delay_pre_commands: 10
                })
 
@@ -1229,7 +1310,15 @@ defmodule Deployer.MonitorTest do
       state = %Deployer.Monitor{sname: "myelixir-abc"}
 
       old_state =
-        Map.drop(state, [:pre_commands_run, :reported_pre_commands, :started_at, :last_crash_at])
+        state
+        |> Map.drop([
+          :pre_commands_run,
+          :reported_pre_commands,
+          :started_at,
+          :last_crash_at,
+          :readiness
+        ])
+        |> Map.put(:timeout_app_ready, %Readiness{}.min_ready_ms)
 
       assert {:ok, ^state} = MonitorApp.code_change("0.10.0", old_state, [])
 
@@ -1261,7 +1350,7 @@ defmodule Deployer.MonitorTest do
 
       Host.CommanderMock
       |> expect(:run_link, fn _command, _options ->
-        # Wait a timer greater than timeout_app_ready to guarantee app is in the
+        # Wait a timer greater than min_ready_ms to guarantee app is in the
         # running state
         Process.send_after(test_pid_process, {:handle_ref_event, test_event_ref}, 100)
         {:ok, test_pid_process, os_pid}
@@ -1278,7 +1367,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: "elixir",
                  ports: ports,
-                 timeout_app_ready: 10
+                 readiness: %Readiness{min_ready_ms: 10}
                })
 
       assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -1328,7 +1417,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: "elixir",
                  ports: ports,
-                 timeout_app_ready: 10
+                 readiness: %Readiness{min_ready_ms: 10}
                })
 
       assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -1368,7 +1457,7 @@ defmodule Deployer.MonitorTest do
 
       Host.CommanderMock
       |> expect(:run_link, fn _command, _options ->
-        # Wait a timer greater than timeout_app_ready to guarantee app is in the
+        # Wait a timer greater than min_ready_ms to guarantee app is in the
         # running state
         Process.send_after(test_pid_process, {:handle_ref_event, test_event_ref}, 100)
         {:ok, test_pid_process, os_pid}
@@ -1382,7 +1471,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: "elixir",
                  ports: ports,
-                 timeout_app_ready: 10
+                 readiness: %Readiness{min_ready_ms: 10}
                })
 
       assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -1434,7 +1523,7 @@ defmodule Deployer.MonitorTest do
                           sname: sname,
                           language: "elixir",
                           ports: ports,
-                          timeout_app_ready: 10
+                          readiness: %Readiness{min_ready_ms: 10}
                         })
 
                assert {:error, :application_is_not_running} = MonitorApp.restart(sname)
@@ -1461,7 +1550,7 @@ defmodule Deployer.MonitorTest do
 
       Host.CommanderMock
       |> expect(:run_link, fn _command, _options ->
-        # Wait a timer greater than timeout_app_ready to guarantee app is in the
+        # Wait a timer greater than min_ready_ms to guarantee app is in the
         # running state
         Process.send_after(test_pid_process, {:handle_ref_event, test_event_ref}, 100)
         {:ok, test_pid_process, os_pid}
@@ -1479,7 +1568,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: "elixir",
                  ports: ports,
-                 timeout_app_ready: 10
+                 readiness: %Readiness{min_ready_ms: 10}
                })
 
       assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -1566,7 +1655,7 @@ defmodule Deployer.MonitorTest do
                  sname: sname,
                  language: "elixir",
                  ports: ports,
-                 timeout_app_ready: 10,
+                 readiness: %Readiness{min_ready_ms: 10},
                  retry_delay_pre_commands: 10
                })
 
@@ -1746,7 +1835,7 @@ defmodule Deployer.MonitorTest do
 
     Host.CommanderMock
     |> expect(:run_link, fn _command, _options ->
-      # Wait a timer greater than timeout_app_ready to guarantee app is in the
+      # Wait a timer greater than min_ready_ms to guarantee app is in the
       # running state
       Process.send_after(test_pid_process, {:handle_ref_event, test_event_ref}, 100)
       {:ok, test_pid_process, os_pid}
@@ -1762,7 +1851,7 @@ defmodule Deployer.MonitorTest do
                sname: sname,
                language: "elixir",
                ports: ports,
-               timeout_app_ready: 10
+               readiness: %Readiness{min_ready_ms: 10}
              })
 
     assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
@@ -1830,7 +1919,7 @@ defmodule Deployer.MonitorTest do
                sname: sname,
                language: "elixir",
                ports: ports,
-               timeout_app_ready: 10
+               readiness: %Readiness{min_ready_ms: 10}
              })
 
     assert_receive {:handle_ref_event, ^ref}, 1_000
@@ -1848,5 +1937,19 @@ defmodule Deployer.MonitorTest do
   defp running_pre_command do
     exec_pid = spawn_link(fn -> Process.sleep(:infinity) end)
     {:ok, exec_pid, System.unique_integer([:positive])}
+  end
+
+  defp wait_for_status(sname, status, attempts \\ 100)
+  defp wait_for_status(_sname, _status, 0), do: :timeout
+
+  defp wait_for_status(sname, status, attempts) do
+    case MonitorApp.state(sname) do
+      %{status: ^status} ->
+        :ok
+
+      _state ->
+        Process.sleep(10)
+        wait_for_status(sname, status, attempts - 1)
+    end
   end
 end

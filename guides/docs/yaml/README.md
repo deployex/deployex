@@ -210,6 +210,11 @@ applications:
     # Deployment Configuration (optional with defaults)
     deploy_rollback_timeout_ms: 600000 # Max deployment time before rollback, and max time for hot upgrade pre-commands to start and to run (default: 600000)
     deploy_schedule_interval_ms: 5000  # Check for new deployments interval (default: 5000)
+
+    # Readiness Configuration (optional with defaults)
+    readiness:
+      type: "otp"                      # timeout or otp (default: timeout)
+      min_ready_ms: 30000              # Min time the application stays up before it counts as ready (default: 30000)
     
     # Port Configuration (optional)
     replica_ports:                     # Each replica gets: base + replica_index
@@ -368,6 +373,15 @@ If the secret is missing when the `auth` section is applied, DeployEx logs a war
 - `deploy_schedule_interval_ms` - Deployment check interval
 - `replica_ports` - Port configuration for replicas
 - `env` - Environment variables
+- `readiness` - When a started application counts as ready, which is when the previous version stops. Applied on the next deployment. See [Application Readiness](#application-readiness)
+
+#### Application Readiness
+
+The rollback window closes and the previous version stops when the new instance counts as ready.
+`deploy_rollback_timeout_ms` is the deadline: a version that does not get ready in time is ghosted and the previous version keeps running.
+
+- `timeout` (default) - The OS process stays up for `min_ready_ms`. This does not check the application, so one that stays up but never serves still replaces the previous version.
+- `otp` - The OS process stays up for `min_ready_ms`, and the node reports over OTP distribution that its boot script finished. This requires no change to the application, but it does not check that the application is serving requests or can reach its dependencies. A Gleam application boots from `-eval`, after the boot script, so for Gleam this only checks that the node is up and answering, not that `main` finished its own setup.
 
 #### Application Certificates
 
