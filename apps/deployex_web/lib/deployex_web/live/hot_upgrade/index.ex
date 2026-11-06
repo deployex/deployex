@@ -11,6 +11,7 @@ defmodule DeployexWeb.HotUpgradeLive do
   alias DeployexWeb.Helper
   alias DeployexWeb.HotUpgrade.Data
   alias DeployexWeb.UI.Icons
+  alias DeployexWeb.UI.StepLeds
   alias DeployexWeb.UI.Tags
   alias Foundation.Common
 
@@ -351,43 +352,30 @@ defmodule DeployexWeb.HotUpgradeLive do
           <:header>Hot Upgrade Progress</:header>
 
           <div id="upgrade-progress" class="mt-6 flex flex-col gap-4">
-            <div class="flex items-center justify-between px-4">
-              <h3 class="font-semibold">Upgrade Progress</h3>
-              <span :if={@upgrade_state == :running} class="dx-muted text-[0.8125rem]">
-                Step {length(@upgrade_progress)} of {@total_upgrade_steps}
-              </span>
+            <h3 class="px-4 font-semibold">Upgrade Progress</h3>
+            <div class="px-4">
+              <StepLeds.row
+                id={"upgrade-progress-leds-#{@downloaded_release.name}"}
+                progress={@upgrade_progress}
+                state={@upgrade_state}
+                total={@total_upgrade_steps}
+              />
             </div>
-            <div class="dx-upload-box">
-              <div
-                id="upgrade-progress-log"
-                phx-hook="AutoScroll"
-                class="dx-mono flex max-h-48 flex-col gap-2 overflow-y-auto text-[0.8125rem]"
-              >
-                <div :for={line <- @upgrade_progress} class="flex items-start gap-2">
-                  <Icons.icon
-                    name="check"
-                    class="dx-ico mt-0.5 size-4 flex-none"
-                    style="color: var(--dx-success-text)"
-                  />
-                  <span class="flex-1">{line}</span>
-                </div>
-                <div
-                  :if={@upgrade_state == :running and @upgrade_progress != []}
-                  class="dx-muted flex items-center gap-2 italic"
-                >
-                  <span class="loading loading-spinner loading-xs"></span> Processing...
-                </div>
-              </div>
-            </div>
-            <div :if={@upgrade_state not in [:success, :error]} class="flex items-center gap-2 px-4">
+            <div
+              :if={@upgrade_state == :running}
+              class="flex items-center gap-2 px-4"
+              aria-live="polite"
+            >
               <span class="loading loading-spinner loading-sm"></span>
-              <span class="dx-muted text-[0.8125rem]">Applying hot upgrade…</span>
+              <span class="text-[0.8125rem]">
+                {StepLeds.current_step(@upgrade_progress, @total_upgrade_steps)}
+              </span>
             </div>
             <div :if={@upgrade_state == :success} class="dx-callout dx-callout-info m-0" role="status">
               <Icons.icon name="check-circle" class="dx-callout-ico" />
-              <span class="dx-callout-text">Hot upgrade completed successfully!</span>
+              <span class="dx-callout-text">{List.last(@upgrade_progress)}</span>
             </div>
-            <.failure :if={@upgrade_state == :error}>Hot upgrade failed!</.failure>
+            <.failure :if={@upgrade_state == :error}>{List.last(@upgrade_progress)}</.failure>
           </div>
 
           <:footer :if={@upgrade_state != :running}>

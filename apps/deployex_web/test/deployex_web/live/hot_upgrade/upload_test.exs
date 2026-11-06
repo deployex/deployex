@@ -375,7 +375,7 @@ defmodule DeployexWeb.HotUpgrade.UploadTest do
 
         assert_receive :upgrade_executed, 1_000
         assert socket.assigns.upgrade_state == :success
-        assert html =~ "Hot upgrade completed successfully!"
+        assert html =~ success_msg
       end
     end
 
@@ -415,7 +415,7 @@ defmodule DeployexWeb.HotUpgrade.UploadTest do
 
         assert_receive :upgrade_executed, 1_000
         assert socket.assigns.upgrade_state == :error
-        assert html =~ "Hot upgrade failed!"
+        assert html =~ error_msg
       end
     end
 
@@ -507,7 +507,7 @@ defmodule DeployexWeb.HotUpgrade.UploadTest do
 
         assert html =~ "Hot Upgrade Progress"
         assert html =~ "Upgrade Progress"
-        assert html =~ "Applying hot upgrade…"
+        assert html =~ "Starting the upgrade"
       end
     end
 
