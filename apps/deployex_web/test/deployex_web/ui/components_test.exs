@@ -9,6 +9,7 @@ defmodule DeployexWeb.UI.ComponentsTest do
   alias DeployexWeb.UI.Meter
   alias DeployexWeb.UI.Shell
   alias DeployexWeb.UI.ShellHelp
+  alias DeployexWeb.UI.StepLeds
   alias DeployexWeb.UI.ThemeSwitch
 
   describe "Meter.meter/1" do
@@ -180,6 +181,63 @@ defmodule DeployexWeb.UI.ComponentsTest do
       assert html =~ ~s(aria-label="Dark mode")
       assert html =~ ~s(phx-hook="ShellState")
       assert html =~ "dx:toggle-theme"
+    end
+  end
+
+  describe "StepLeds.step_states/3" do
+    test "while running, marks received steps done, the next one current, the rest pending" do
+      assert StepLeds.step_states([], :running, 8) == [
+               :current,
+               :pending,
+               :pending,
+               :pending,
+               :pending,
+               :pending,
+               :pending,
+               :pending
+             ]
+
+      assert StepLeds.step_states(["a", "b", "c"], :running, 8) ==
+               [:done, :done, :done, :current, :pending, :pending, :pending, :pending]
+    end
+
+    test "on error, marks the step in flight when it arrived failed, earlier ones done" do
+      assert StepLeds.step_states(["a", "b", "c"], :error, 8) ==
+               [:done, :done, :failed, :pending, :pending, :pending, :pending, :pending]
+    end
+
+    test "on success with every step reported, marks them all done" do
+      progress = for n <- 1..9, do: "step #{n}"
+
+      assert StepLeds.step_states(progress, :success, 8) ==
+               [:done, :done, :done, :done, :done, :done, :done, :done]
+    end
+
+    test "on success with the last step skipped, marks it skipped instead of pending" do
+      progress = for n <- 1..8, do: "step #{n}"
+
+      assert StepLeds.step_states(progress, :success, 8) ==
+               [:done, :done, :done, :done, :done, :done, :done, :skipped]
+    end
+  end
+
+  describe "StepLeds.row/1" do
+    test "renders one LED per step, in the right states" do
+      html =
+        render_component(&StepLeds.row/1,
+          id: "leds",
+          progress: ["a", "b", "c"],
+          state: :running,
+          total: 5
+        )
+
+      assert html =~ ~s(id="leds")
+      assert html =~ ~s(role="list")
+      assert [_, _, _, _, _] = Regex.scan(~r/dx-led /, html)
+      assert html =~ "dx-led-done"
+      assert html =~ "dx-led-current"
+      assert html =~ "dx-led-pending"
+      assert html =~ ~s(aria-label="Step 4: current")
     end
   end
 

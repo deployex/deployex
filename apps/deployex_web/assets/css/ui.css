@@ -382,6 +382,47 @@
     }
 }
 
+/* The hot-upgrade step LEDs: one square per step, read at a glance above the text log */
+.dx-leds {
+    display: flex;
+    gap: 6px;
+}
+
+.dx-led {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1.5px solid var(--dx-muted);
+    background: transparent;
+    flex: none;
+}
+
+.dx-led-done {
+    border-color: var(--dx-success);
+    background: var(--dx-success);
+}
+
+.dx-led-failed {
+    border-color: var(--dx-error);
+    background: var(--dx-error);
+}
+
+.dx-led-current {
+    border-color: var(--dx-hot);
+    background: var(--dx-hot);
+}
+
+.dx-led-skipped {
+    border-color: var(--dx-muted);
+    background: var(--dx-muted);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .dx-led-current {
+        animation: dx-pulse 1.4s ease-in-out infinite;
+    }
+}
+
 .dx-callout {
     display: flex;
     flex-wrap: wrap;

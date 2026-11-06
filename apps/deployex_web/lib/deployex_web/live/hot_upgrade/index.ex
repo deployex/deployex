@@ -11,6 +11,7 @@ defmodule DeployexWeb.HotUpgradeLive do
   alias DeployexWeb.Helper
   alias DeployexWeb.HotUpgrade.Data
   alias DeployexWeb.UI.Icons
+  alias DeployexWeb.UI.StepLeds
   alias DeployexWeb.UI.Tags
   alias Foundation.Common
 
@@ -356,6 +357,14 @@ defmodule DeployexWeb.HotUpgradeLive do
               <span :if={@upgrade_state == :running} class="dx-muted text-[0.8125rem]">
                 Step {length(@upgrade_progress)} of {@total_upgrade_steps}
               </span>
+            </div>
+            <div class="px-4">
+              <StepLeds.row
+                id={"upgrade-progress-leds-#{@downloaded_release.name}"}
+                progress={@upgrade_progress}
+                state={@upgrade_state}
+                total={@total_upgrade_steps}
+              />
             </div>
             <div class="dx-upload-box">
               <div
