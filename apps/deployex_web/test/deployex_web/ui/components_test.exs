@@ -221,8 +221,48 @@ defmodule DeployexWeb.UI.ComponentsTest do
     end
   end
 
+  describe "StepLeds.current_step/2" do
+    test "names the step after every message received so far" do
+      assert StepLeds.current_step([], 8) == "Starting the upgrade"
+      assert StepLeds.current_step(["a", "b", "c"], 8) == "Checking release can be installed"
+    end
+
+    test "falls back once every step has already been announced" do
+      progress = for n <- 1..8, do: "step #{n}"
+
+      assert StepLeds.current_step(progress, 8) == "Finishing up"
+    end
+  end
+
+  describe "StepLeds.step_labels/3" do
+    test "uses the real message for done and failed steps, the static name otherwise" do
+      assert StepLeds.step_labels(["a", "b", "c"], :running, 5) == [
+               {:done, "a"},
+               {:done, "b"},
+               {:done, "c"},
+               {:current, "Checking release can be installed"},
+               {:pending, "Resolving the runtime configuration"}
+             ]
+
+      assert StepLeds.step_labels(["a", "b", "boom"], :error, 5) == [
+               {:done, "a"},
+               {:done, "b"},
+               {:failed, "boom"},
+               {:pending, "Checking release can be installed"},
+               {:pending, "Resolving the runtime configuration"}
+             ]
+    end
+
+    test "names the skipped step distinctly instead of reusing its static name" do
+      progress = for n <- 1..8, do: "step #{n}"
+
+      assert {:skipped, label} = StepLeds.step_labels(progress, :success, 8) |> List.last()
+      assert label =~ "skipped"
+    end
+  end
+
   describe "StepLeds.row/1" do
-    test "renders one LED per step, in the right states" do
+    test "renders one LED per step, each with a tooltip naming it" do
       html =
         render_component(&StepLeds.row/1,
           id: "leds",
@@ -234,10 +274,12 @@ defmodule DeployexWeb.UI.ComponentsTest do
       assert html =~ ~s(id="leds")
       assert html =~ ~s(role="list")
       assert [_, _, _, _, _] = Regex.scan(~r/dx-led /, html)
+      assert [_, _, _, _, _] = Regex.scan(~r/phx-hook="Tip"/, html)
       assert html =~ "dx-led-done"
       assert html =~ "dx-led-current"
       assert html =~ "dx-led-pending"
-      assert html =~ ~s(aria-label="Step 4: current")
+      assert html =~ ~s(aria-label="Step 4: Checking release can be installed")
+      assert html =~ "Checking release can be installed"
     end
   end
 

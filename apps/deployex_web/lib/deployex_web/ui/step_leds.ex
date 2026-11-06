@@ -1,14 +1,27 @@
 defmodule DeployexWeb.UI.StepLeds do
   @moduledoc """
   A row of square LEDs, one per hot-upgrade step, read at a glance next to the
-  text log in DeployexWeb.HotUpgradeLive.
+  current-step line in DeployexWeb.HotUpgradeLive. Each LED carries a tooltip
+  naming its step, so the row stays informative without a growing text log.
   """
   use Phoenix.Component
 
+  @step_names [
+    "Starting the upgrade",
+    "Unpacking release",
+    "Creating relup file",
+    "Checking release can be installed",
+    "Resolving the runtime configuration",
+    "Adding the runtime configuration to the relup",
+    "Installing release",
+    "Making the release permanent"
+  ]
+
   @doc """
-  Renders one square per step, derived from the same assigns that already drive
-  the text log: `progress` (the messages received so far), `state` (`:running`,
-  `:success` or `:error`) and `total` (the step count).
+  Renders one square per step, each with a tooltip naming it. Derived from the
+  same assigns that drive the modal: `progress` (the messages received so
+  far), `state` (`:running`, `:success` or `:error`) and `total` (the step
+  count).
   """
   attr :id, :string, required: true
   attr :progress, :list, required: true
@@ -16,18 +29,58 @@ defmodule DeployexWeb.UI.StepLeds do
   attr :total, :integer, required: true
 
   def row(assigns) do
-    assigns = assign(assigns, :steps, step_states(assigns.progress, assigns.state, assigns.total))
+    assigns =
+      assign(
+        assigns,
+        :items,
+        step_labels(assigns.progress, assigns.state, assigns.total) |> Enum.with_index(1)
+      )
 
     ~H"""
     <div id={@id} class="dx-leds" role="list" aria-label="Upgrade steps">
       <span
-        :for={{step, index} <- Enum.with_index(@steps, 1)}
-        role="listitem"
-        class={["dx-led", "dx-led-#{step}"]}
-        aria-label={"Step #{index}: #{step}"}
-      ></span>
+        :for={{{step, label}, index} <- @items}
+        id={"#{@id}-#{index}"}
+        phx-hook="Tip"
+        class="dx-led-wrap"
+      >
+        <span
+          role="listitem"
+          tabindex="0"
+          class={["dx-led", "dx-led-#{step}"]}
+          aria-label={"Step #{index}: #{label}"}
+        ></span>
+        <span popover="manual" class="dx-tip" aria-hidden="true">{label}</span>
+      </span>
     </div>
     """
+  end
+
+  @doc """
+  The name of the step currently in flight, for the status line that stays
+  next to the LEDs while running, so the user always sees what is happening.
+  """
+  @spec current_step(list(String.t()), pos_integer()) :: String.t()
+  def current_step(progress, total) do
+    index = length(progress) + 1
+
+    if index <= total, do: static_name(index), else: "Finishing up"
+  end
+
+  @doc """
+  One `{state, label}` pair per step. The label is the real message received
+  for a step that already ran or failed, since that carries the exact detail
+  (including the failure reason); every other step - current, pending, or
+  skipped - has no message yet, so it falls back to the step's static name.
+  """
+  @spec step_labels(list(String.t()), :running | :success | :error, pos_integer()) ::
+          list({:pending | :current | :done | :failed | :skipped, String.t()})
+  def step_labels(progress, state, total) do
+    step_states(progress, state, total)
+    |> Enum.with_index(1)
+    |> Enum.map(fn {step_state, index} ->
+      {step_state, label_for(step_state, index, progress)}
+    end)
   end
 
   @doc """
@@ -74,4 +127,15 @@ defmodule DeployexWeb.UI.StepLeds do
       true -> :pending
     end
   end
+
+  defp label_for(:skipped, _index, _progress),
+    do: "Making the release permanent - skipped, done asynchronously"
+
+  defp label_for(step_state, index, progress) when step_state in [:done, :failed] do
+    Enum.at(progress, index - 1) || static_name(index)
+  end
+
+  defp label_for(_step_state, index, _progress), do: static_name(index)
+
+  defp static_name(index), do: Enum.at(@step_names, index - 1, "Step #{index}")
 end

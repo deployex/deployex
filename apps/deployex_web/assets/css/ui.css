@@ -388,6 +388,11 @@
     gap: 6px;
 }
 
+.dx-led-wrap {
+    display: inline-flex;
+    cursor: default;
+}
+
 .dx-led {
     width: 14px;
     height: 14px;
@@ -395,6 +400,11 @@
     border: 1.5px solid var(--dx-muted);
     background: transparent;
     flex: none;
+}
+
+.dx-led:focus-visible {
+    outline: 2px solid var(--dx-hot);
+    outline-offset: 2px;
 }
 
 .dx-led-done {
