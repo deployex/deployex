@@ -44,7 +44,9 @@ defmodule Deployer.Monitor.Application do
 
     {:ok,
      update_non_blocking_state(%Monitor{
-       readiness: service.readiness,
+       # Map.get, since a DynamicSupervisor restart after a relup passes the start argument the
+       # old code built, without a readiness key
+       readiness: Map.get(service, :readiness, %Readiness{}),
        retry_delay_pre_commands: service.retry_delay_pre_commands,
        name: service.name,
        sname: service.sname,

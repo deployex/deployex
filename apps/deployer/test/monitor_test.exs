@@ -85,6 +85,39 @@ defmodule Deployer.MonitorTest do
       refute Process.alive?(pid)
     end
 
+    @tag :capture_log
+    test "init/1 defaults readiness for a start argument built before the readiness upgrade", %{
+      elixir_name: name,
+      elixir_sname: sname,
+      ports: ports
+    } do
+      test_event_ref = make_ref()
+      test_pid_process = self()
+
+      Deployer.StatusMock
+      |> expect(:current_version_map, fn ^sname ->
+        send(test_pid_process, {:handle_ref_event, test_event_ref})
+        %Catalog.Version{}
+      end)
+
+      # A DynamicSupervisor restart after a relup passes the start argument the old code
+      # built, before the readiness field existed
+      old_service =
+        %Service{name: name, sname: sname, language: "elixir", ports: ports}
+        |> Map.drop([:readiness])
+        |> Map.put(:timeout_app_ready, 30_000)
+
+      assert {:ok, pid} = GenServer.start(MonitorApp, old_service, name: String.to_atom(sname))
+
+      assert Process.alive?(pid)
+
+      assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
+
+      assert %{readiness: %Readiness{}} = MonitorApp.state(sname)
+
+      assert :ok = MonitorApp.stop_service(name, sname)
+    end
+
     test "Invalid sname" do
       assert %Deployer.Monitor{} = MonitorApp.state(:any)
     end
