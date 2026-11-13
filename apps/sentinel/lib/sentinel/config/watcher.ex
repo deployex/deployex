@@ -399,6 +399,21 @@ defmodule Sentinel.Config.Watcher do
     end
   end
 
+  # An application loaded by a version without readiness reads as the default
+  defp add_readiness_changes(acc, old_app, new_app, strategy) do
+    old_readiness = Map.get(old_app, :readiness) || %Foundation.Yaml.Readiness{}
+
+    if old_readiness == new_app.readiness do
+      acc
+    else
+      Map.put(acc, :readiness, %{
+        old: old_readiness,
+        new: new_app.readiness,
+        apply_strategy: strategy
+      })
+    end
+  end
+
   defp add_replica_ports_changes(acc, old_app, new_app, strategy) do
     old_replica_ports = Enum.map(old_app.replica_ports, &"#{&1.key}=#{&1.base}") |> Enum.sort()
     new_replica_ports = Enum.map(new_app.replica_ports, &"#{&1.key}=#{&1.base}") |> Enum.sort()
@@ -469,6 +484,7 @@ defmodule Sentinel.Config.Watcher do
     |> add_number_changes(:deploy_schedule_interval_ms, old_app, new_app, :immediate)
     |> add_replica_ports_changes(old_app, new_app, :full_deploy)
     |> add_env_changes(old_app, new_app, :next_deploy)
+    |> add_readiness_changes(old_app, new_app, :next_deploy)
     |> add_monitoring_changes(old_app, new_app, :immediate)
     |> add_certificates_changes(old_app, new_app, :immediate)
   end

@@ -56,6 +56,24 @@ defmodule DeployexWeb.Applications.WatcherTest do
   end
 
   @tag :capture_log
+  test "GET /applications Review pending readiness changes renders the type", %{conn: conn} do
+    Deployer.StatusMock
+    |> expect(:monitoring, fn -> {:ok, FixtureStatus.list()} end)
+    |> expect(:subscribe, fn -> :ok end)
+    |> stub(:history_version_list, fn _name, _options -> FixtureStatus.versions() end)
+
+    {:ok, liveview, _html} = live(conn, ~p"/applications")
+
+    send(liveview.pid, {:watcher_config_new, Node.self(), FixtureWatcher.build_pending_changes()})
+
+    html = liveview |> element("#host-config-review") |> render_click()
+
+    assert html =~ "Readiness"
+    assert html =~ "type: timeout min_ready_ms: 30000"
+    assert html =~ "type: otp min_ready_ms: 60000"
+  end
+
+  @tag :capture_log
   test "GET /applications Review pending changes and click escape button", %{conn: conn} do
     Deployer.StatusMock
     |> expect(:monitoring, fn -> {:ok, FixtureStatus.list()} end)

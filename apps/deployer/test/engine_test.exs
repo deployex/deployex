@@ -492,10 +492,10 @@ defmodule Deployer.EngineTest do
 
       Deployer.MonitorMock
       |> stub(:start_service, fn
-        %{sname: ^sname} ->
+        %{sname: ^sname, readiness: %Foundation.Yaml.Readiness{type: :otp}} ->
           {:error, {:already_started, self()}}
 
-        %{sname: new_sname, ports: ports} ->
+        %{sname: new_sname, ports: ports, readiness: %Foundation.Yaml.Readiness{type: :otp}} ->
           send(test_pid, {:full_deployment, new_sname, ports})
           {:ok, self()}
       end)
@@ -535,7 +535,8 @@ defmodule Deployer.EngineTest do
                    deploy_rollback_timeout_ms: 60_000,
                    deploy_schedule_interval_ms: 50,
                    name: name,
-                   language: "elixir"
+                   language: "elixir",
+                   readiness: %Foundation.Yaml.Readiness{type: :otp}
                  })
 
         assert_receive {:full_deployment, _new_sname, [%{key: "PORT", base: 4000}]}, 1_000
@@ -3273,11 +3274,16 @@ defmodule Deployer.EngineTest do
       end
     end
 
-    test "code_change adds the pending pre-commands field to a state from an older version" do
-      old_state = Map.delete(%Engine.Worker{name: "myelixir"}, :pending_pre_commands)
+    test "code_change adds the new fields to a state from an older version" do
+      old_state =
+        Map.drop(%Engine.Worker{name: "myelixir"}, [:pending_pre_commands, :readiness])
 
-      assert {:ok, %Engine.Worker{name: "myelixir", pending_pre_commands: nil}} =
-               Engine.Worker.code_change("0.10.0", old_state, [])
+      assert {:ok,
+              %Engine.Worker{
+                name: "myelixir",
+                pending_pre_commands: nil,
+                readiness: %Foundation.Yaml.Readiness{type: :timeout}
+              }} = Engine.Worker.code_change("0.10.0", old_state, [])
     end
   end
 

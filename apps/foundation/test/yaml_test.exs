@@ -1032,6 +1032,86 @@ defmodule Foundation.YamlTest do
     end
   end
 
+  describe "readiness" do
+    test "defaults to timeout when the section is absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.readiness == %Yaml.Readiness{type: :timeout, min_ready_ms: 30_000}
+      end
+    end
+
+    test "defaults min_ready_ms and type in a partial section" do
+      for {section, expected} <- [
+            {~s(type: "otp"), %Yaml.Readiness{type: :otp, min_ready_ms: 30_000}},
+            {"min_ready_ms: 5000", %Yaml.Readiness{type: :timeout, min_ready_ms: 5_000}}
+          ] do
+        path = readiness_yaml("elixir", section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+          assert app.readiness == expected
+        end
+      end
+    end
+
+    test "raises on values it does not support" do
+      for {language, section, message} <- [
+            {"elixir", ~s(type: "http"), ~s(readiness type "http" not supported)},
+            {"elixir", "min_ready_ms: -1", "readiness min_ready_ms -1 not supported"},
+            {"elixir", ~s(min_ready_ms: "fast"), ~s(min_ready_ms "fast" not supported)}
+          ] do
+        path = readiness_yaml(language, section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          assert_raise RuntimeError, ~r/#{Regex.escape(message)}/, fn -> Yaml.load() end
+        end
+      end
+    end
+
+    test "gleam accepts otp" do
+      path = readiness_yaml("gleam", ~s(type: "otp"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.language == "gleam"
+        assert app.readiness.type == :otp
+      end
+    end
+  end
+
+  defp readiness_yaml(language, section) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "deployex-readiness-#{System.unique_integer([:positive])}.yaml"
+      )
+
+    content =
+      @yaml_aws_default
+      |> File.read!()
+      |> String.replace(
+        ~s(    language: "elixir"\n),
+        ~s(    language: "#{language}"\n    readiness:\n      #{section}\n),
+        global: false
+      )
+
+    File.write!(path, content)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
   defp agent_api_yaml(section) do
     path =
       Path.join(
