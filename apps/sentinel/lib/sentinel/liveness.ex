@@ -80,6 +80,21 @@ defmodule Sentinel.Liveness do
     {:noreply, state}
   end
 
+  @doc """
+  The current liveness streak of an sname: how many probes it has failed in a row, and whether
+  that streak already crossed its `failure_threshold` (and so already sent its one notification).
+  Returns a fresh `%Data{}`, with no failures, for an sname with no streak and when the server has
+  not started yet, so this is safe to call from the dashboard whether or not liveness is enabled.
+  """
+  @spec state(sname :: String.t()) :: Data.t()
+  def state(sname) do
+    if :ets.whereis(@liveness_data) == :undefined do
+      %Data{}
+    else
+      get_data(sname)
+    end
+  end
+
   ### ==========================================================================
   ### Private Functions
   ### ==========================================================================

@@ -84,7 +84,10 @@ defmodule Deployer.Status.Application do
                                               deploy_rollback_timeout_ms,
                                             deploy_schedule_interval_ms:
                                               deploy_schedule_interval_ms
-                                          } ->
+                                          } = app_config ->
+        readiness = Map.get(app_config, :readiness, %Foundation.Yaml.Readiness{})
+        liveness = Map.get(app_config, :liveness)
+
         children =
           Enum.reduce(deployed_monitored_apps[name] || [], [], fn app_info, acc ->
             # credo:disable-for-lines:1
@@ -139,7 +142,9 @@ defmodule Deployer.Status.Application do
           config: current_config,
           children: children,
           monitoring: monitoring,
-          certificates: certificates
+          certificates: certificates,
+          readiness: readiness,
+          liveness: liveness
         }
       end)
 

@@ -184,6 +184,35 @@ defmodule Sentinel.LivenessTest do
     assert_receive {"liveness_probe_failed", %{action: :restart}}
   end
 
+  @tag :capture_log
+  test "state/1 returns the current streak, and a fresh struct with no streak yet" do
+    sname = Catalog.create_sname("myelixir")
+    %{node: node} = Catalog.node_info(sname)
+
+    Deployer.MonitorMock
+    |> stub(:list, fn -> [sname] end)
+    |> stub(:state, fn ^sname ->
+      %Monitor{
+        status: :running,
+        language: "elixir",
+        name: "myelixir",
+        liveness: %LivenessConfig{type: :otp, failure_threshold: 3, enable_restart: false}
+      }
+    end)
+
+    Foundation.RpcMock
+    |> stub(:call, fn ^node, :init, :get_status, [], 1_000 -> {:badrpc, :nodedown} end)
+
+    assert {:ok, pid} = Liveness.start_link(liveness_check_interval: 10_000)
+
+    assert Liveness.state(sname) == %Liveness.Data{}
+
+    tick(pid)
+    tick(pid)
+
+    assert Liveness.state(sname) == %Liveness.Data{consecutive_failures: 2, notified: false}
+  end
+
   # Fetching the state guarantees handle_info/2 ran to completion before the assertions
   defp tick(pid) do
     send(pid, :liveness_check)
