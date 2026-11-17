@@ -61,16 +61,18 @@ defmodule Foundation.Yaml do
     Provides structure to define when a started application counts as ready
 
     With `:timeout` the OS process only has to stay up for `min_ready_ms`. With `:otp` the
-    node must also answer over distribution with its boot status.
+    node must also answer over distribution with its boot status, unless `function` names an
+    application-defined `Module.function/0` to call instead.
     """
 
     @derive Jason.Encoder
 
-    defstruct type: :otp, min_ready_ms: :timer.seconds(30)
+    defstruct type: :otp, min_ready_ms: :timer.seconds(30), function: nil
 
     @type t :: %__MODULE__{
             type: :timeout | :otp,
-            min_ready_ms: non_neg_integer()
+            min_ready_ms: non_neg_integer(),
+            function: {module(), atom(), 0} | nil
           }
   end
 
@@ -694,9 +696,12 @@ defmodule Foundation.Yaml do
   defp parse_readiness(nil), do: %Readiness{}
 
   defp parse_readiness(%{} = data) do
+    type = parse_readiness_type(data["type"])
+
     %Readiness{
-      type: parse_readiness_type(data["type"]),
-      min_ready_ms: parse_min_ready_ms(data["min_ready_ms"])
+      type: type,
+      min_ready_ms: parse_min_ready_ms(data["min_ready_ms"]),
+      function: parse_readiness_function(type, data["function"])
     }
   end
 
@@ -708,6 +713,37 @@ defmodule Foundation.Yaml do
 
   defp parse_readiness_type(type),
     do: raise("readiness type #{inspect(type)} not supported, expected timeout or otp")
+
+  defp parse_readiness_function(_type, nil), do: nil
+
+  defp parse_readiness_function(:otp, function) when is_binary(function) do
+    case Regex.run(~r/^([A-Z][A-Za-z0-9_.]*)\.([a-z_][A-Za-z0-9_]*[?!]?)\/(\d+)$/, function) do
+      [_, module, name, "0"] ->
+        {Module.concat(String.split(module, ".")), String.to_atom(name), 0}
+
+      [_, _module, _name, arity] ->
+        raise(
+          "readiness function #{inspect(function)} not supported, expected arity 0, got #{arity}"
+        )
+
+      nil ->
+        raise(
+          "readiness function #{inspect(function)} not supported, expected a string in Module.function/0 format"
+        )
+    end
+  end
+
+  defp parse_readiness_function(:otp, function),
+    do:
+      raise(
+        "readiness function #{inspect(function)} not supported, expected a string in Module.function/0 format"
+      )
+
+  defp parse_readiness_function(type, function),
+    do:
+      raise(
+        "readiness function #{inspect(function)} not supported for type #{inspect(type)}, expected otp"
+      )
 
   defp parse_min_ready_ms(nil), do: %Readiness{}.min_ready_ms
   defp parse_min_ready_ms(value) when is_integer(value) and value >= 0, do: value
