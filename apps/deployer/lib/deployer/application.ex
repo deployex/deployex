@@ -19,7 +19,7 @@ defmodule Deployer.Application do
         {Finch, name: ExAws.Request.Finch},
         {Finch,
          name: Deployer.Monitor.Probe.Finch,
-         pools: %{default: [conn_opts: [transport_opts: [verify: :verify_none]]]}},
+         pools: %{default: [conn_opts: [transport_opts: [verify: :verify_none, timeout: 1_000]]]}},
         Deployer.Github.Release,
         Deployer.Github.Artifact
       ] ++ application_servers() ++ self_upgrade_servers() ++ gcp_app_credentials()
