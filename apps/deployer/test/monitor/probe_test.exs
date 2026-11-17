@@ -6,6 +6,7 @@ defmodule Deployer.Monitor.ProbeTest do
   setup :verify_on_exit!
 
   alias Deployer.Monitor.Probe
+  alias Foundation.Yaml.Liveness
   alias Foundation.Yaml.Readiness
 
   @node :"myelixir-abc123@host"
@@ -57,5 +58,37 @@ defmodule Deployer.Monitor.ProbeTest do
 
       refute Probe.ready?(%Readiness{type: :otp}, @node, "gleam")
     end
+  end
+
+  test "otp liveness is alive when the node still answers its boot status" do
+    expect(Foundation.RpcMock, :call, fn @node, :init, :get_status, [], 1_000 ->
+      {:started, :started}
+    end)
+
+    assert Probe.alive?(%Liveness{type: :otp}, @node, "elixir")
+  end
+
+  for status <- [
+        {:starting, :applications_loaded},
+        {:stopping, :started},
+        {:badrpc, :nodedown},
+        {:badrpc, :timeout},
+        {:badrpc, {:EXIT, :undef}}
+      ] do
+    test "otp liveness is not alive when the node answers #{inspect(status)}" do
+      expect(Foundation.RpcMock, :call, fn @node, :init, :get_status, [], 1_000 ->
+        unquote(Macro.escape(status))
+      end)
+
+      refute Probe.alive?(%Liveness{type: :otp}, @node, "elixir")
+    end
+  end
+
+  test "otp liveness on gleam is alive while the node answers from its -eval" do
+    expect(Foundation.RpcMock, :call, fn @node, :init, :get_status, [], 1_000 ->
+      {:starting, :started}
+    end)
+
+    assert Probe.alive?(%Liveness{type: :otp}, @node, "gleam")
   end
 end

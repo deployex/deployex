@@ -796,6 +796,7 @@ defmodule Foundation.YamlTest do
           pre_command_failed
           version_ghosted
           deployment_rollback
+          liveness_probe_failed
         )
 
         assert Enum.sort(webhook.events) == Enum.sort(all_events)
@@ -1104,6 +1105,101 @@ defmodule Foundation.YamlTest do
       |> String.replace(
         ~s(    language: "elixir"\n),
         ~s(    language: "#{language}"\n    readiness:\n      #{section}\n),
+        global: false
+      )
+
+    File.write!(path, content)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
+  describe "liveness" do
+    test "defaults to nil when the section is absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.liveness == nil
+      end
+    end
+
+    test "parses a configured section" do
+      path =
+        liveness_yaml(~s(type: "otp"\n      failure_threshold: 5\n      enable_restart: true))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.liveness == %Yaml.Liveness{
+                 type: :otp,
+                 failure_threshold: 5,
+                 enable_restart: true
+               }
+      end
+    end
+
+    test "defaults type, failure_threshold and enable_restart in a partial section" do
+      for {section, expected} <- [
+            {~s(type: "otp"),
+             %Yaml.Liveness{type: :otp, failure_threshold: 3, enable_restart: false}},
+            {"failure_threshold: 1",
+             %Yaml.Liveness{type: :otp, failure_threshold: 1, enable_restart: false}},
+            {"enable_restart: true",
+             %Yaml.Liveness{type: :otp, failure_threshold: 3, enable_restart: true}}
+          ] do
+        path = liveness_yaml(section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+          assert app.liveness == expected
+        end
+      end
+    end
+
+    test "raises on values it does not support" do
+      for {section, message} <- [
+            {~s(type: "http"), ~s(liveness type "http" not supported, expected otp)},
+            {~s(type: "garbage"), ~s(liveness type "garbage" not supported, expected otp)},
+            {"failure_threshold: 0",
+             "liveness failure_threshold 0 not supported, expected a positive integer"},
+            {"failure_threshold: -1",
+             "liveness failure_threshold -1 not supported, expected a positive integer"},
+            {~s(failure_threshold: "fast"),
+             ~s(liveness failure_threshold "fast" not supported, expected a positive integer)},
+            {~s(enable_restart: "nope"),
+             ~s(liveness enable_restart "nope" not supported, expected true or false)}
+          ] do
+        path = liveness_yaml(section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          assert_raise RuntimeError, ~r/#{Regex.escape(message)}/, fn -> Yaml.load() end
+        end
+      end
+    end
+  end
+
+  defp liveness_yaml(section) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "deployex-liveness-#{System.unique_integer([:positive])}.yaml"
+      )
+
+    content =
+      @yaml_aws_default
+      |> File.read!()
+      |> String.replace(
+        ~s(    language: "elixir"\n),
+        ~s(    language: "elixir"\n    liveness:\n      #{section}\n),
         global: false
       )
 

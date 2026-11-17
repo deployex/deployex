@@ -45,8 +45,9 @@ defmodule Deployer.Monitor.Application do
     {:ok,
      update_non_blocking_state(%Monitor{
        # Map.get, since a DynamicSupervisor restart after a relup passes the start argument the
-       # old code built, without a readiness key
+       # old code built, without a readiness or liveness key
        readiness: Map.get(service, :readiness, %Readiness{}),
+       liveness: Map.get(service, :liveness, nil),
        retry_delay_pre_commands: service.retry_delay_pre_commands,
        name: service.name,
        sname: service.sname,
@@ -336,6 +337,7 @@ defmodule Deployer.Monitor.Application do
      |> Map.put_new(:restarts, [])
      |> Map.put_new_lazy(:started_at, fn -> Common.monotonic_to_utc(state.start_time) end)
      |> Map.put_new_lazy(:readiness, fn -> %Readiness{min_ready_ms: state.timeout_app_ready} end)
+     |> Map.put_new(:liveness, nil)
      |> Map.delete(:timeout_app_ready)}
   end
 

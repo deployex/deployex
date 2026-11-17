@@ -27,6 +27,7 @@ defmodule Foundation.Notifications.Webhook do
             - "pre_command_failed"
             - "version_ghosted"
             - "deployment_rollback"
+            - "liveness_probe_failed"
 
   The `options:` key is accepted but currently unused; it is reserved for
   future extensions such as custom headers or HMAC signing.
@@ -68,6 +69,7 @@ defmodule Foundation.Notifications.Webhook do
   | `pre_command_failed`            | `node`, `sname`, `name`, `command`, `reason`                                                           |
   | `version_ghosted`               | `node`, `sname`, `name`, `version`, `reason`                                                           |
   | `deployment_rollback`           | `node`, `sname`, `name`, `from_version`, `to_version`, `reason`                                        |
+  | `liveness_probe_failed`         | `node`, `sname`, `name`, `consecutive_failures`, `failure_threshold`, `action` (`:restart`/`:no_restart`) |
   """
 
   @behaviour Foundation.Notifications.Adapter

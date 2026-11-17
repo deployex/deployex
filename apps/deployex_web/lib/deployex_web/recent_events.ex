@@ -116,6 +116,11 @@ defmodule DeployexWeb.RecentEvents do
       {:error, "#{short(p[:node])} #{p[:type]} at #{p[:current_percentage]}% of the limit",
        if(p[:action] == :restart, do: "restarted", else: "restart is off")}
 
+  defp describe("liveness_probe_failed", p),
+    do:
+      {:error, "#{p[:sname]} liveness probe failed",
+       if(p[:action] == :restart, do: "restarted", else: "restart is off")}
+
   defp describe("config_changed", p),
     do: {:warning, changes(p[:changes_count]) <> " pending", fields(p[:fields])}
 

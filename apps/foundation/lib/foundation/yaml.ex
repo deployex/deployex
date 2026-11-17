@@ -74,6 +74,28 @@ defmodule Foundation.Yaml do
           }
   end
 
+  defmodule Liveness do
+    @moduledoc """
+    Provides structure to define a liveness probe, run after the application is ready
+
+    Disabled by default, through a `nil` value on `Application.liveness`. With `:otp` the node
+    must answer over distribution with its boot status, the same check readiness performs with no
+    `function` configured. A liveness probe should not check external dependencies, that belongs
+    in readiness, because the BEAM already restarts a crashed process on its own and restarting
+    every replica during a shared dependency outage makes the outage worse.
+    """
+
+    @derive Jason.Encoder
+
+    defstruct type: :otp, failure_threshold: 3, enable_restart: false
+
+    @type t :: %__MODULE__{
+            type: :otp,
+            failure_threshold: pos_integer(),
+            enable_restart: boolean()
+          }
+  end
+
   defmodule Ports do
     @moduledoc """
     Provides structure to define Ports feature
@@ -257,7 +279,8 @@ defmodule Foundation.Yaml do
       :env,
       :monitoring,
       :certificates,
-      readiness: %Foundation.Yaml.Readiness{}
+      readiness: %Foundation.Yaml.Readiness{},
+      liveness: nil
     ]
 
     @type t :: %__MODULE__{
@@ -270,7 +293,8 @@ defmodule Foundation.Yaml do
             env: [String.t()],
             monitoring: [{atom(), Foundation.Yaml.Monitoring.t()}],
             certificates: [Foundation.Yaml.Certificate.t()],
-            readiness: Foundation.Yaml.Readiness.t()
+            readiness: Foundation.Yaml.Readiness.t(),
+            liveness: Foundation.Yaml.Liveness.t() | nil
           }
   end
 
@@ -687,7 +711,8 @@ defmodule Foundation.Yaml do
       env: parse_env(data["env"]),
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),
       certificates: parse_certificates(data["certificates"]),
-      readiness: parse_readiness(data["readiness"])
+      readiness: parse_readiness(data["readiness"]),
+      liveness: parse_liveness(data["liveness"])
     }
   end
 
@@ -717,6 +742,45 @@ defmodule Foundation.Yaml do
       "readiness min_ready_ms #{inspect(value)} not supported, expected a non negative integer"
     )
   end
+
+  defp parse_liveness(nil), do: nil
+
+  defp parse_liveness(%{} = data) do
+    %Liveness{
+      type: parse_liveness_type(data["type"]),
+      failure_threshold: parse_failure_threshold(data["failure_threshold"]),
+      enable_restart: parse_liveness_enable_restart(data["enable_restart"])
+    }
+  end
+
+  defp parse_liveness(value),
+    do: raise("liveness #{inspect(value)} not supported, expected a section with type")
+
+  # NOTE: the http type is not implemented yet, it depends on the readiness http probe (#345)
+  defp parse_liveness_type(type) when type in [nil, "otp"], do: :otp
+
+  defp parse_liveness_type(type),
+    do: raise("liveness type #{inspect(type)} not supported, expected otp")
+
+  defp parse_failure_threshold(nil), do: %Liveness{}.failure_threshold
+  defp parse_failure_threshold(value) when is_integer(value) and value > 0, do: value
+
+  defp parse_failure_threshold(value),
+    do:
+      raise(
+        "liveness failure_threshold #{inspect(value)} not supported, expected a positive integer"
+      )
+
+  # NOTE: enable_restart is a boolean, || would promote an explicit false to the default. Unlike
+  #       monitoring, liveness defaults to false: the BEAM already restarts a crashed process on
+  #       its own, and restarting every replica during a shared dependency outage makes it worse
+  defp parse_liveness_enable_restart(nil), do: false
+
+  defp parse_liveness_enable_restart(enable_restart) when is_boolean(enable_restart),
+    do: enable_restart
+
+  defp parse_liveness_enable_restart(value),
+    do: raise("liveness enable_restart #{inspect(value)} not supported, expected true or false")
 
   defp parse_ports(nil), do: []
 
@@ -861,6 +925,7 @@ defmodule Foundation.Yaml do
     pre_command_failed
     version_ghosted
     deployment_rollback
+    liveness_probe_failed
   )
 
   defp parse_notification_events(events) do

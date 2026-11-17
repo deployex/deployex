@@ -2,6 +2,7 @@ defmodule Deployer.Monitor.Service do
   @moduledoc """
   Structure to handle the monitor service structure
   """
+  alias Foundation.Yaml.Liveness
   alias Foundation.Yaml.Readiness
 
   @type t :: %__MODULE__{
@@ -11,6 +12,7 @@ defmodule Deployer.Monitor.Service do
           ports: list(),
           env: list(),
           readiness: Readiness.t(),
+          liveness: Liveness.t() | nil,
           retry_delay_pre_commands: non_neg_integer()
         }
 
@@ -22,5 +24,6 @@ defmodule Deployer.Monitor.Service do
             ports: [],
             env: [],
             readiness: %Readiness{},
+            liveness: nil,
             retry_delay_pre_commands: :timer.seconds(1)
 end

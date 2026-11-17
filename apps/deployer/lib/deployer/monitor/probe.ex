@@ -11,9 +11,14 @@ defmodule Deployer.Monitor.Probe do
   A Gleam application boots from `-eval`, and `gleam@@main:run/1` blocks there until the
   application ends, so a healthy node answers `{:starting, :started}` for its whole life. The check
   then only says that the node is up and answering, not that `main` finished its own setup.
+
+  `alive?/3` runs the same `:otp` check for a liveness probe, after the application is already
+  ready. Liveness is a separate, optional configuration, so it has its own entry point rather than
+  sharing `ready?/3`'s clauses.
   """
 
   alias Foundation.Rpc
+  alias Foundation.Yaml.Liveness
   alias Foundation.Yaml.Readiness
 
   @rpc_timeout 1_000
@@ -30,6 +35,14 @@ defmodule Deployer.Monitor.Probe do
   def ready?(%Readiness{type: :timeout}, _node, _language), do: true
 
   def ready?(%Readiness{type: :otp}, node, language),
+    do: booted?(language, Rpc.call(node, :init, :get_status, [], @rpc_timeout))
+
+  @doc """
+  Return true when the application running on the node still answers its liveness probe.
+  """
+  @spec alive?(liveness :: Liveness.t(), node :: node(), language :: String.t() | nil) ::
+          boolean()
+  def alive?(%Liveness{type: :otp}, node, language),
     do: booted?(language, Rpc.call(node, :init, :get_status, [], @rpc_timeout))
 
   ### ==========================================================================
