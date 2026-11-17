@@ -1071,7 +1071,11 @@ defmodule Foundation.YamlTest do
              ~s(readiness scheme "ftp" not supported)},
             {"elixir", ~s(type: "http"\n      path: "/ready"),
              "readiness http requires port_key"},
-            {"elixir", ~s(type: "http"\n      port_key: "PORT"), "readiness http requires path"}
+            {"elixir", ~s(type: "http"\n      port_key: "PORT"), "readiness http requires path"},
+            {"elixir", ~s(type: "http"\n      port_key: "PORT"\n      path: "ready"),
+             ~s(readiness http requires path starting with /, got "ready")},
+            {"elixir", ~s(type: "http"\n      port_key: "NOT_A_PORT"\n      path: "/ready"),
+             ~s(readiness port_key "NOT_A_PORT" is not a key in replica_ports)}
           ] do
         path = readiness_yaml(language, section)
 

@@ -62,8 +62,8 @@ defmodule Foundation.Yaml do
 
     With `:timeout` the OS process only has to stay up for `min_ready_ms`. With `:otp` the
     node must also answer over distribution with its boot status. With `:http` a request to
-    `scheme://127.0.0.1:<port>/path` must answer with a 2xx status, where the port is looked up
-    from the instance's ports by `port_key`.
+    `scheme://127.0.0.1:<port><path>` must answer with a 2xx status, where the port is looked up
+    from the instance's ports by `port_key`, and `path` is validated to start with `/`.
     """
 
     @derive Jason.Encoder
@@ -696,9 +696,21 @@ defmodule Foundation.Yaml do
       env: parse_env(data["env"]),
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),
       certificates: parse_certificates(data["certificates"]),
-      readiness: parse_readiness(data["readiness"])
+      readiness: data["readiness"] |> parse_readiness() |> check_readiness_port(data)
     }
   end
+
+  # An http readiness probe against a port_key missing from replica_ports never passes, and the
+  # only trace is a generic "not ready yet" debug line, so this is checked once at load
+  defp check_readiness_port(%Readiness{type: :http, port_key: port_key} = readiness, data) do
+    if Enum.any?(parse_ports(data["replica_ports"]), &(&1.key == port_key)) do
+      readiness
+    else
+      raise("readiness port_key #{inspect(port_key)} is not a key in replica_ports")
+    end
+  end
+
+  defp check_readiness_port(readiness, _data), do: readiness
 
   defp parse_readiness(nil), do: %Readiness{}
 
@@ -738,10 +750,10 @@ defmodule Foundation.Yaml do
 
   defp parse_readiness_port_key(_type, port_key), do: port_key
 
-  defp parse_readiness_path(:http, path) when is_binary(path) and path != "", do: path
+  defp parse_readiness_path(:http, "/" <> _rest = path), do: path
 
   defp parse_readiness_path(:http, path),
-    do: raise("readiness http requires path, got #{inspect(path)}")
+    do: raise("readiness http requires path starting with /, got #{inspect(path)}")
 
   defp parse_readiness_path(_type, path), do: path
 

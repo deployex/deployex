@@ -12,7 +12,7 @@ defmodule Deployer.Monitor.Probe do
   application ends, so a healthy node answers `{:starting, :started}` for its whole life. The check
   then only says that the node is up and answering, not that `main` finished its own setup.
 
-  The `:http` check requests `<scheme>://127.0.0.1:<port>/<path>` on the instance and expects a
+  The `:http` check requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a
   2xx response, with the port looked up from the instance's ports by `port_key`. An instance
   whose ports do not have that key is not ready.
   """
