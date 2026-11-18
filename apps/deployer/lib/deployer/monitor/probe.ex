@@ -16,12 +16,19 @@ defmodule Deployer.Monitor.Probe do
   With `function` configured, the check calls that `Module.function/0` on the node instead and
   is ready only when it returns `true`. An exception, a missing function, or a timeout each
   count as not ready, since the node already caught or did not answer them.
+
+  The `:http` check requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a
+  2xx response, with the port looked up from the instance's ports by `port_key`. An instance
+  whose ports do not have that key is not ready.
   """
 
+  alias Deployer.Monitor.Probe.Http
   alias Foundation.Rpc
+  alias Foundation.Yaml.Ports
   alias Foundation.Yaml.Readiness
 
   @rpc_timeout 1_000
+  @http_timeout 1_000
 
   ### ==========================================================================
   ### Public APIs
@@ -30,15 +37,22 @@ defmodule Deployer.Monitor.Probe do
   @doc """
   Return true when the application running on the node is ready.
   """
-  @spec ready?(readiness :: Readiness.t(), node :: node(), language :: String.t() | nil) ::
-          boolean()
-  def ready?(%Readiness{type: :timeout}, _node, _language), do: true
+  @spec ready?(
+          readiness :: Readiness.t(),
+          node :: node(),
+          language :: String.t() | nil,
+          ports :: [Ports.t()]
+        ) :: boolean()
+  def ready?(%Readiness{type: :timeout}, _node, _language, _ports), do: true
 
-  def ready?(%Readiness{type: :otp, function: nil}, node, language),
+  def ready?(%Readiness{type: :otp, function: nil}, node, language, _ports),
     do: booted?(language, Rpc.call(node, :init, :get_status, [], @rpc_timeout))
 
-  def ready?(%Readiness{type: :otp, function: {module, function, 0}}, node, _language),
+  def ready?(%Readiness{type: :otp, function: {module, function, 0}}, node, _language, _ports),
     do: Rpc.call(node, module, function, [], @rpc_timeout) == true
+
+  def ready?(%Readiness{type: :http} = readiness, _node, _language, ports),
+    do: http_ready?(readiness, ports)
 
   ### ==========================================================================
   ### Private functions
@@ -46,4 +60,21 @@ defmodule Deployer.Monitor.Probe do
   defp booted?(_language, {:started, :started}), do: true
   defp booted?("gleam", {:starting, :started}), do: true
   defp booted?(_language, _status), do: false
+
+  defp http_ready?(%Readiness{port_key: port_key} = readiness, ports) do
+    case find_port(ports, port_key) do
+      nil -> false
+      port -> request_ready?(readiness, port)
+    end
+  end
+
+  defp request_ready?(%Readiness{scheme: scheme, path: path}, port) do
+    case Http.get("#{scheme}://127.0.0.1:#{port}#{path}", @http_timeout) do
+      {:ok, status} when status in 200..299 -> true
+      _ -> false
+    end
+  end
+
+  defp find_port(ports, key),
+    do: Enum.find_value(ports, fn port -> port.key == key && port.base end)
 end

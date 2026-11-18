@@ -62,17 +62,27 @@ defmodule Foundation.Yaml do
 
     With `:timeout` the OS process only has to stay up for `min_ready_ms`. With `:otp` the
     node must also answer over distribution with its boot status, unless `function` names an
-    application-defined `Module.function/0` to call instead.
+    application-defined `Module.function/0` to call instead. With `:http` a request to
+    `scheme://127.0.0.1:<port><path>` must answer with a 2xx status, where the port is looked up
+    from the instance's ports by `port_key`, and `path` is validated to start with `/`.
     """
 
     @derive Jason.Encoder
 
-    defstruct type: :otp, min_ready_ms: :timer.seconds(30), function: nil
+    defstruct type: :otp,
+              min_ready_ms: :timer.seconds(30),
+              function: nil,
+              scheme: "http",
+              port_key: nil,
+              path: nil
 
     @type t :: %__MODULE__{
-            type: :timeout | :otp,
+            type: :timeout | :otp | :http,
             min_ready_ms: non_neg_integer(),
-            function: {module(), atom(), 0} | nil
+            function: {module(), atom(), 0} | nil,
+            scheme: String.t(),
+            port_key: String.t() | nil,
+            path: String.t() | nil
           }
   end
 
@@ -689,9 +699,21 @@ defmodule Foundation.Yaml do
       env: parse_env(data["env"]),
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),
       certificates: parse_certificates(data["certificates"]),
-      readiness: parse_readiness(data["readiness"])
+      readiness: data["readiness"] |> parse_readiness() |> check_readiness_port(data)
     }
   end
+
+  # An http readiness probe against a port_key missing from replica_ports never passes, and the
+  # only trace is a generic "not ready yet" debug line, so this is checked once at load
+  defp check_readiness_port(%Readiness{type: :http, port_key: port_key} = readiness, data) do
+    if Enum.any?(parse_ports(data["replica_ports"]), &(&1.key == port_key)) do
+      readiness
+    else
+      raise("readiness port_key #{inspect(port_key)} is not a key in replica_ports")
+    end
+  end
+
+  defp check_readiness_port(readiness, _data), do: readiness
 
   defp parse_readiness(nil), do: %Readiness{}
 
@@ -701,7 +723,10 @@ defmodule Foundation.Yaml do
     %Readiness{
       type: type,
       min_ready_ms: parse_min_ready_ms(data["min_ready_ms"]),
-      function: parse_readiness_function(type, data["function"])
+      function: parse_readiness_function(type, data["function"]),
+      scheme: parse_readiness_scheme(data["scheme"]),
+      port_key: parse_readiness_port_key(type, data["port_key"]),
+      path: parse_readiness_path(type, data["path"])
     }
   end
 
@@ -710,9 +735,31 @@ defmodule Foundation.Yaml do
 
   defp parse_readiness_type(type) when type in [nil, "otp"], do: :otp
   defp parse_readiness_type("timeout"), do: :timeout
+  defp parse_readiness_type("http"), do: :http
 
   defp parse_readiness_type(type),
-    do: raise("readiness type #{inspect(type)} not supported, expected timeout or otp")
+    do: raise("readiness type #{inspect(type)} not supported, expected timeout, otp or http")
+
+  defp parse_readiness_scheme(nil), do: %Readiness{}.scheme
+  defp parse_readiness_scheme(scheme) when scheme in ["http", "https"], do: scheme
+
+  defp parse_readiness_scheme(scheme),
+    do: raise("readiness scheme #{inspect(scheme)} not supported, expected http or https")
+
+  defp parse_readiness_port_key(:http, port_key) when is_binary(port_key) and port_key != "",
+    do: port_key
+
+  defp parse_readiness_port_key(:http, port_key),
+    do: raise("readiness http requires port_key, got #{inspect(port_key)}")
+
+  defp parse_readiness_port_key(_type, port_key), do: port_key
+
+  defp parse_readiness_path(:http, "/" <> _rest = path), do: path
+
+  defp parse_readiness_path(:http, path),
+    do: raise("readiness http requires path starting with /, got #{inspect(path)}")
+
+  defp parse_readiness_path(_type, path), do: path
 
   defp parse_readiness_function(_type, nil), do: nil
 
