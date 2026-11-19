@@ -617,17 +617,15 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
   } do
     root = ~c"/tmp/deployex/varlib/service/#{app_name}/1/current"
 
+    # do_make_relup's only erlang-specific behavior left is the .rel rename below -
     # rebar3_jellyfish_plugin writes the .appup straight into lib/<app>-<vsn>/ebin/ at
-    # build time, and release_handler:unpack_release/1 carries it from the tarball into
-    # current_path as-is, so it's already there by the time make_relup runs - there is
-    # no priv/appup copy step left to exercise, unlike the old rebar3_appup_plugin flow.
-    current_lib_ebin_path = "#{current_path}/lib/#{app_name}-#{to_version}/ebin"
+    # build time, and release_handler:unpack_release/1 carries it into current_path
+    # as-is, so there is no priv/appup copy step left here to exercise or seed a
+    # fixture file for, unlike the old rebar3_appup_plugin flow.
     current_releases_path = "#{current_path}/releases"
 
-    File.mkdir_p!(current_lib_ebin_path)
     File.mkdir_p!(current_releases_path)
 
-    File.write("#{current_lib_ebin_path}/#{app_name}.appup", @valid_appup_file)
     File.write("#{current_releases_path}/#{app_name}.rel", @release_file)
 
     Foundation.RpcMock
@@ -650,7 +648,6 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                to_version: to_version
              })
 
-    assert File.exists?("#{current_lib_ebin_path}/#{app_name}.appup")
     assert File.exists?("#{current_releases_path}/#{app_name}-#{to_version}.rel")
     refute File.exists?("#{current_releases_path}/#{app_name}.rel")
   end
