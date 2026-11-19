@@ -27,7 +27,7 @@ Upon deployment, the following dashboard becomes available, providing easy acces
 - Supports hot code reloading for:
   - Elixir application (and libraries) using the [Jellyfish][jyf] library.
   - Elixir umbrella applications (and libraries) using the [Jellyfish][jyf] library.
-  - Erlang application using the [rebar3_appup_plugin](https://github.com/lrascao/rebar3_appup_plugin) plugin.
+  - Erlang application, umbrella application, and libraries using the [rebar3_jellyfish_plugin][r3jyf] plugin.
   - DeployEx (and libraries) itself (Isn't that awesome?)
 - Supports the following cloud providers (with terraform files):
   - Amazon Web Services (AWS)
@@ -360,4 +360,5 @@ Copyright (c) 2024-2026, Thiago Esteves.
 DeployEx source code is licensed under the [MIT License](LICENSE.md).
 
 [jyf]: https://github.com/deployex/jellyfish
+[r3jyf]: https://github.com/deployex/rebar3_jellyfish_plugin
 [owb]: https://github.com/deployex/observer_web
