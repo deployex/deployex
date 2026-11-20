@@ -699,7 +699,11 @@ defmodule Foundation.Yaml do
       env: parse_env(data["env"]),
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),
       certificates: parse_certificates(data["certificates"]),
-      readiness: data["readiness"] |> parse_readiness() |> check_readiness_port(data)
+      readiness:
+        data["readiness"]
+        |> parse_readiness()
+        |> check_readiness_port(data)
+        |> check_readiness_function(data["language"] || @default_language)
     }
   end
 
@@ -714,6 +718,18 @@ defmodule Foundation.Yaml do
   end
 
   defp check_readiness_port(readiness, _data), do: readiness
+
+  # The Module.function/0 string parses as an Elixir module path, which an Erlang or Gleam
+  # node has no code for, so this is checked once at load instead of ghosting the version
+  # after deploy_rollback_timeout_ms on every readiness probe
+  defp check_readiness_function(%Readiness{function: {_, _, _}}, language)
+       when language != "elixir",
+       do:
+         raise(
+           "readiness function not supported for language #{inspect(language)}, expected elixir"
+         )
+
+  defp check_readiness_function(readiness, _language), do: readiness
 
   defp parse_readiness(nil), do: %Readiness{}
 
@@ -764,7 +780,10 @@ defmodule Foundation.Yaml do
   defp parse_readiness_function(_type, nil), do: nil
 
   defp parse_readiness_function(:otp, function) when is_binary(function) do
-    case Regex.run(~r/^([A-Z][A-Za-z0-9_.]*)\.([a-z_][A-Za-z0-9_]*[?!]?)\/(\d+)$/, function) do
+    case Regex.run(
+           ~r/^((?:[A-Z][A-Za-z0-9_]*\.)*[A-Z][A-Za-z0-9_]*)\.([a-z_][A-Za-z0-9_]*[?!]?)\/(\d+)$/,
+           function
+         ) do
       [_, module, name, "0"] ->
         {Module.concat(String.split(module, ".")), String.to_atom(name), 0}
 
