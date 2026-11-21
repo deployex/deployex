@@ -34,8 +34,22 @@ vi rel/env.sh.eex
 #!/bin/sh
 # Set a default Erlang cookie value if not provided by ENV VAR.
 # This default is temporary; update it using AWS secrets and config provider.
-[ -z ${RELEASE_COOKIE} ] && export RELEASE_COOKIE="cookie"
-export RELEASE_DISTRIBUTION=sname
+#
+# Note: use if/fi here, not `[ cond ] && action`. When the guard is
+# skipped (the var is already set), that one-liner's exit status is the
+# condition's own failure, not 0 - and this file is sourced under `set
+# -e`, so if that one-liner were the last line, it would silently abort
+# the boot. if/fi always returns 0 when no branch runs.
+if [ -z "${RELEASE_COOKIE}" ]; then
+  export RELEASE_COOKIE="cookie"
+fi
+
+# Default to shortnames, but don't clobber a caller that already set
+# this (e.g. a CI hot-upgrade check sets its own RELEASE_DISTRIBUTION
+# for an ephemeral node, which an unconditional override here breaks).
+if [ -z "${RELEASE_DISTRIBUTION}" ]; then
+  export RELEASE_DISTRIBUTION=sname
+fi
 
 # save the file :wq
 ```
@@ -319,7 +333,12 @@ cd myphoenixapp
 vi rel/env.sh.eex
 # Add the following line
 #!/bin/sh
-export ELIXIR_ERL_OPTIONS="-proto_dist inet_tls -ssl_dist_optfile /tmp/inet_tls.conf"
+# Only set this when the cert config from step 3 actually exists, so
+# the release can still boot standalone (e.g. local testing, CI) before
+# mTLS is set up or outside of this guide's exact manual workflow.
+if [ -f /tmp/inet_tls.conf ]; then
+  export ELIXIR_ERL_OPTIONS="-proto_dist inet_tls -ssl_dist_optfile /tmp/inet_tls.conf"
+fi
 # save the file :q
 ```
 
