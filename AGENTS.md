@@ -359,7 +359,7 @@ One extra case, independent of the seven checks above: if the release fixes a bu
 Check whether the bug being fixed would fire during that upgrade, and if it would, say so under `### Backwards incompatible changes` with what it does and that a full deployment avoids it.
 See the `0.9.11` section for an example.
 
-The reasoning behind each check, and how to verify a built package, is in `guides/docs/hot-upgrades/README.md`.
+The reasoning behind each check is in [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades), and how to verify a built package against DeployEx specifically is in `guides/docs/hot-upgrades/README.md`.
 
 ---
 
