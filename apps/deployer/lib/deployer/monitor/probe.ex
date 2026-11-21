@@ -12,6 +12,10 @@ defmodule Deployer.Monitor.Probe do
   application ends, so a healthy node answers `{:starting, :started}` for its whole life. The check
   then only says that the node is up and answering, not that `main` finished its own setup.
 
+  `alive?/3` runs the same `:otp` check for a liveness probe, after the application is already
+  ready. Liveness is a separate, optional configuration, so it has its own entry point rather than
+  sharing `ready?/3`'s clauses.
+
   The `:http` check requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a
   2xx response, with the port looked up from the instance's ports by `port_key`. An instance
   whose ports do not have that key is not ready.
@@ -19,6 +23,7 @@ defmodule Deployer.Monitor.Probe do
 
   alias Deployer.Monitor.Probe.Http
   alias Foundation.Rpc
+  alias Foundation.Yaml.Liveness
   alias Foundation.Yaml.Ports
   alias Foundation.Yaml.Readiness
 
@@ -45,6 +50,14 @@ defmodule Deployer.Monitor.Probe do
 
   def ready?(%Readiness{type: :http} = readiness, _node, _language, ports),
     do: http_ready?(readiness, ports)
+
+  @doc """
+  Return true when the application running on the node still answers its liveness probe.
+  """
+  @spec alive?(liveness :: Liveness.t(), node :: node(), language :: String.t() | nil) ::
+          boolean()
+  def alive?(%Liveness{type: :otp}, node, language),
+    do: booted?(language, Rpc.call(node, :init, :get_status, [], @rpc_timeout))
 
   ### ==========================================================================
   ### Private functions

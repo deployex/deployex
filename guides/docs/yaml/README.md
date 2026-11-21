@@ -218,6 +218,12 @@ applications:
       # scheme: "https"                # http only, optional (default: http)
       # port_key: "PORT"               # http only, required, must be a key in replica_ports
       # path: "/ready"                 # http only, required, must start with /
+
+    # Liveness Configuration (optional, disabled by default)
+    liveness:
+      type: "otp"                      # otp only for now (default: otp)
+      failure_threshold: 3             # Consecutive failed probes before reporting a hung application (default: 3)
+      enable_restart: false            # Restart the application once failure_threshold is reached (default: false)
     
     # Port Configuration (optional)
     replica_ports:                     # Each replica gets: base + replica_index
@@ -378,6 +384,8 @@ If the secret is missing when the `auth` section is applied, DeployEx logs a war
 - `env` - Environment variables
 - `readiness` - When a started application counts as ready, which is when the previous version stops. Applied on the next deployment. See [Application Readiness](#application-readiness)
 
+`liveness` is not on this list yet: a change to it only takes effect after DeployEx itself restarts, it is not picked up by the runtime upgrade watcher. See [Application Liveness](#application-liveness).
+
 #### Application Readiness
 
 The rollback window closes and the previous version stops when the new instance counts as ready.
@@ -386,6 +394,16 @@ The rollback window closes and the previous version stops when the new instance 
 - `timeout` - The OS process stays up for `min_ready_ms`. This does not check the application, so one that stays up but never serves still replaces the previous version.
 - `otp` (default) - The OS process stays up for `min_ready_ms`, and the node reports over OTP distribution that its boot script finished. This requires no change to the application, but it does not check that the application is serving requests or can reach its dependencies. A Gleam application boots from `-eval`, after the boot script, so for Gleam this only checks that the node is up and answering, not that `main` finished its own setup.
 - `http` - The OS process stays up for `min_ready_ms`, and DeployEx requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a 2xx response. `port` comes from `replica_ports`, selected by `port_key`, which is validated to be one of its keys when the YAML loads. `path` must start with `/` and is also validated at load. With `scheme: "https"` the probe does not verify the certificate, because it connects by IP address and the certificate is issued for the application's domain. Redirects are not followed and count as a failure, so an application that redirects HTTP to HTTPS must use `https` or exclude the probe path from the redirect. The endpoint should check that the application can serve requests, including reachability of dependencies such as a database or cache.
+
+#### Application Liveness
+
+Liveness runs after the application is already ready, and is disabled when the `liveness` section is left out. It does not gate a deployment, readiness already did that: it reports, and optionally recovers, an application that stops answering after it was promoted.
+
+- `otp` (default and, for now, the only type) - Runs the same boot-status check readiness performs with no custom function, polled on an interval after the application is ready. `http` is planned, once the HTTP readiness probe lands.
+- `failure_threshold` - Consecutive failed probes before DeployEx reports the application as hung, through a `liveness_probe_failed` notification. A probe that recovers before reaching the threshold is not reported.
+- `enable_restart` - Whether DeployEx restarts the application once `failure_threshold` is reached. Off by default: the BEAM already restarts a crashed process on its own, and restarting every replica during a shared dependency outage would make the outage worse.
+
+A liveness probe should never check an external dependency, such as a database or a cache. A dependency outage would then fail every replica's probe at once, and restarting all of them cannot fix an outage that is not theirs. Dependency checks belong in readiness instead, where a version that cannot reach its dependencies at boot is ghosted rather than replacing a version that could.
 
 #### Application Certificates
 

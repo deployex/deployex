@@ -38,6 +38,7 @@ defmodule Deployer.Engine.Worker do
           deploy_rollback_timeout_ms: non_neg_integer(),
           deploy_schedule_interval_ms: non_neg_integer(),
           readiness: Foundation.Yaml.Readiness.t(),
+          liveness: Foundation.Yaml.Liveness.t() | nil,
           pending_pre_commands: map() | nil
         }
 
@@ -54,6 +55,7 @@ defmodule Deployer.Engine.Worker do
             deploy_rollback_timeout_ms: 0,
             deploy_schedule_interval_ms: 0,
             readiness: %Foundation.Yaml.Readiness{},
+            liveness: nil,
             pending_pre_commands: nil
 
   @dialyzer {:nowarn_function, initialize_version: 1}
@@ -85,6 +87,7 @@ defmodule Deployer.Engine.Worker do
       state
       |> Map.put_new(:pending_pre_commands, nil)
       |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
+      |> Map.put_new(:liveness, nil)
 
     # Subscribe before reading, in this order. A change made in between then arrives as a
     # message instead of being lost in the gap. Reading here is also what makes a restarted
@@ -534,12 +537,13 @@ defmodule Deployer.Engine.Worker do
 
   defp schedule_new_deployment(timeout), do: Process.send_after(self(), :schedule, timeout)
 
-  # An older version built the state without pending_pre_commands or readiness, or deployments
-  # without a field
+  # An older version built the state without pending_pre_commands, readiness or liveness, or
+  # deployments without a field
   defp upgrade_state(state) do
     state
     |> Map.put_new(:pending_pre_commands, nil)
     |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
+    |> Map.put_new(:liveness, nil)
     |> Map.update!(
       :deployments,
       &Map.new(&1, fn {i, deployment} -> {i, upgrade_deployment(deployment)} end)
@@ -759,7 +763,8 @@ defmodule Deployer.Engine.Worker do
           language: language,
           ports: ports,
           env: env,
-          readiness: state.readiness
+          readiness: state.readiness,
+          liveness: state.liveness
         })
 
       # A monitor that already runs the app does not report it running again, so a rollback
@@ -832,7 +837,8 @@ defmodule Deployer.Engine.Worker do
       language: state.language,
       ports: ports,
       env: state.env,
-      readiness: state.readiness
+      readiness: state.readiness,
+      liveness: state.liveness
     })
   end
 
@@ -1360,7 +1366,8 @@ defmodule Deployer.Engine.Worker do
         language: language,
         ports: available_ports,
         env: env,
-        readiness: state.readiness
+        readiness: state.readiness,
+        liveness: state.liveness
       })
     end)
 
