@@ -9,6 +9,8 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
   alias DeployexWeb.HostTime
   alias DeployexWeb.UI.Tags
   alias Foundation.Certificates.PublicKey
+  alias Foundation.Yaml.Liveness
+  alias Foundation.Yaml.Readiness
   alias Sentinel.Watchdog
   alias Sentinel.Watchdog.Data
 
@@ -148,7 +150,10 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
            ] =
              View.apps([app(children, %{config: config})], %{}, @now)
 
-    assert text == "1.1.0 failed and is ghosted. 1.0.0 keeps running, so the app is up."
+    assert text ==
+             "1.1.0 failed and is ghosted. It did not stay running within the rollback timeout. " <>
+               "1.0.0 keeps running, so the app is up."
+
     assert %{tone: :warning, title: "1.1.0 failed and is ghosted"} = row.alert
     # It needs attention, and nothing is blocked
     assert View.attention([row]) == %{count: 1, blocking: false}
@@ -156,6 +161,76 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
     # A version ghosted before the last deploy is history, not an alert
     old = %{config | last_ghosted_at: ~U[2026-10-28 13:00:00Z]}
     assert [%{alert: nil}] = View.apps([app(children, %{config: old})], %{}, @now)
+  end
+
+  test "a ghosted version names its readiness type as the reason, generic for the default" do
+    config = %{last_ghosted_version: "1.1.0", last_ghosted_at: ~U[2026-10-28 15:00:00Z]}
+    children = [child(%{deployed_at: ~U[2026-10-28 14:00:00Z]})]
+
+    assert [%{alert: %{detail: detail}}] =
+             View.apps(
+               [app(children, %{config: config, readiness: %Readiness{type: :otp}})],
+               %{},
+               @now
+             )
+
+    assert detail ==
+             "It did not pass its otp readiness probe within the rollback timeout. " <>
+               "1.0.0 keeps running, so the app is up."
+
+    assert [%{alert: %{detail: timeout_detail}}] =
+             View.apps(
+               [app(children, %{config: config, readiness: %Readiness{type: :timeout}})],
+               %{},
+               @now
+             )
+
+    assert timeout_detail ==
+             "It did not stay running within the rollback timeout. " <>
+               "1.0.0 keeps running, so the app is up."
+  end
+
+  test "an instance waiting on its readiness probe shows the type, the default timeout shows none" do
+    assert [%{instances: [%{status: %{text: "starting · otp readiness"}}]}] =
+             View.apps(
+               [app([child(%{status: :starting})], %{readiness: %Readiness{type: :otp}})],
+               %{},
+               @now
+             )
+
+    assert [%{instances: [%{status: %{text: "starting"}}]}] =
+             View.apps(
+               [app([child(%{status: :starting})], %{readiness: %Readiness{type: :timeout}})],
+               %{},
+               @now
+             )
+
+    # No readiness configured at all, like DeployEx, shows the plain status too
+    assert [%{instances: [%{status: %{text: "starting"}}]}] =
+             View.apps([app([child(%{status: :starting})])], %{}, @now)
+
+    # Running or running pre_commands never show a probe, whatever the readiness type
+    assert [%{instances: [%{status: %{text: "running"}}]}] =
+             View.apps(
+               [app([child(%{})], %{readiness: %Readiness{type: :otp}})],
+               %{},
+               @now
+             )
+  end
+
+  test "a running instance with liveness configured shows its latest result, nil without one" do
+    assert [%{instances: [%{liveness: nil}]}] = View.apps([app([child(%{})])], %{}, @now)
+
+    assert [%{instances: [%{liveness: %{tone: :success, text: "liveness probe passing"}}]}] =
+             View.apps([app([child(%{})], %{liveness: %Liveness{}})], %{}, @now)
+
+    # Not running yet: no liveness result to show, even with one configured
+    assert [%{instances: [%{liveness: nil}]}] =
+             View.apps(
+               [app([child(%{status: :starting})], %{liveness: %Liveness{}})],
+               %{},
+               @now
+             )
   end
 
   test "the notes list the TLS expiry, the limits near the end and the crashes" do

@@ -7,6 +7,8 @@ defmodule DeployexWeb.ApplicationsLive.View do
   alias DeployexWeb.HostTime
   alias DeployexWeb.RecentEvents
   alias Foundation.Certificates.PublicKey
+  alias Foundation.Yaml.Liveness
+  alias Foundation.Yaml.Readiness
 
   # Only DeployEx has the host memory, its watchdog restarts the app that uses the most of it
   @limit_types [
@@ -94,7 +96,17 @@ defmodule DeployexWeb.ApplicationsLive.View do
 
   defp app(status, usage, now) do
     instances =
-      Enum.map(status.children, &instance(&1, status.language, Map.get(usage, &1.node, %{}), now))
+      Enum.map(
+        status.children,
+        &instance(
+          &1,
+          status.language,
+          Map.get(usage, &1.node, %{}),
+          now,
+          status.readiness,
+          status.liveness
+        )
+      )
 
     running = Enum.count(status.children, &running?/1)
     total = max(status.replicas, length(status.children))
@@ -142,9 +154,10 @@ defmodule DeployexWeb.ApplicationsLive.View do
     }
   end
 
-  defp instance(child, language, usage, now) do
+  defp instance(child, language, usage, now, readiness, liveness) do
     limits = limits(usage)
     warnings = Enum.flat_map(limits, & &1.warning)
+    probe = probe_state(child.status, readiness)
 
     child.resources
     |> resources()
@@ -152,9 +165,10 @@ defmodule DeployexWeb.ApplicationsLive.View do
       sname: child.sname,
       node: child.node && to_string(child.node),
       version: child.version,
-      status: instance_status(child.status),
+      status: instance_status(child.status, probe),
       running: running?(child),
       otp: child.otp,
+      liveness: liveness_badge(child.status, child.sname, liveness),
       restarts: restarts([child], now),
       ports: Enum.map(List.wrap(child.ports), &Map.take(&1, [:key, :base])),
       urls: List.wrap(child.urls),
@@ -168,6 +182,29 @@ defmodule DeployexWeb.ApplicationsLive.View do
       age: age(child.deployed_at, now)
     })
   end
+
+  # The readiness type while an instance waits on its probe, nil once running or with the default
+  # timeout type, which has no probe of its own to report
+  defp probe_state(:starting, %Readiness{type: type}) when type != :timeout, do: %{type: type}
+  defp probe_state(_status, _readiness), do: nil
+
+  # The latest liveness result of a running instance, nil with no liveness configured. A liveness
+  # probe only runs while the monitor reports :running, so this mirrors `Sentinel.Liveness`'s own
+  # gating rather than showing a result for an instance it never probed
+  defp liveness_badge(:running, sname, %Liveness{}) do
+    case Sentinel.Liveness.state(sname) do
+      %{notified: true, consecutive_failures: n} ->
+        %{tone: :error, icon: "warning", text: "liveness probe failed #{n} times in a row"}
+
+      %{consecutive_failures: n} when n > 0 ->
+        %{tone: :warning, icon: "warning", text: "liveness probe failing, #{n} in a row"}
+
+      _data ->
+        %{tone: :success, icon: "check-circle", text: "liveness probe passing"}
+    end
+  end
+
+  defp liveness_badge(_status, _sname, _liveness), do: nil
 
   # The CPU and memory of an instance, the values for the app's sums and the texts
   defp resources(nil),
@@ -248,6 +285,16 @@ defmodule DeployexWeb.ApplicationsLive.View do
 
   defp ghosted(_status, _instances), do: nil
 
+  # Why the version never became ready within deploy_rollback_timeout_ms, so the ghosted version
+  # explains its cause rather than only naming the deadline
+  defp ghost_reason(%Readiness{type: :timeout}),
+    do: "It did not stay running within the rollback timeout."
+
+  defp ghost_reason(%Readiness{type: type}),
+    do: "It did not pass its #{type} readiness probe within the rollback timeout."
+
+  defp ghost_reason(_readiness), do: "It did not stay running within the rollback timeout."
+
   defp deploy(_status, %{at: at}, _now) do
     %{type: :ghosted, label: "ghosted", when: at && HostTime.format(at, "%H:%M")}
   end
@@ -272,6 +319,8 @@ defmodule DeployexWeb.ApplicationsLive.View do
 
   # A title, a line on what it means for the app, and a tone: red when nothing runs, amber when it still runs
   defp alert(status, %{version: version}, running) do
+    reason = ghost_reason(status.readiness)
+
     detail =
       if running == 0,
         do: "No earlier version runs on this host, so the app is down.",
@@ -283,8 +332,8 @@ defmodule DeployexWeb.ApplicationsLive.View do
       tone: if(running == 0, do: :error, else: :warning),
       version: version,
       title: "#{version} failed and is ghosted",
-      detail: detail,
-      text: "#{version} failed and is ghosted. #{detail}"
+      detail: "#{reason} #{detail}",
+      text: "#{version} failed and is ghosted. #{reason} #{detail}"
     }
   end
 
@@ -516,10 +565,14 @@ defmodule DeployexWeb.ApplicationsLive.View do
     end
   end
 
-  defp instance_status(:running), do: %{text: "running", tone: :success}
-  defp instance_status(:starting), do: %{text: "starting", tone: :warning}
-  defp instance_status(:pre_commands), do: %{text: "pre_commands", tone: :warning}
-  defp instance_status(_status), do: %{text: "stopped", tone: :error}
+  defp instance_status(:running, _probe), do: %{text: "running", tone: :success}
+
+  defp instance_status(:starting, %{type: type}),
+    do: %{text: "starting · #{type} readiness", tone: :warning}
+
+  defp instance_status(:starting, nil), do: %{text: "starting", tone: :warning}
+  defp instance_status(:pre_commands, _probe), do: %{text: "pre_commands", tone: :warning}
+  defp instance_status(_status, _probe), do: %{text: "stopped", tone: :error}
 
   defp sub(status) do
     child = Enum.find(status.children, &running?/1) || List.first(status.children)
