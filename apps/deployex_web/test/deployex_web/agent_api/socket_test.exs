@@ -49,13 +49,14 @@ defmodule DeployexWeb.AgentApi.SocketTest do
       assert [{:websocket, _opts}] = Plug.Test.sent_upgrades(conn)
     end
 
-    # Phoenix sends the 403, then its auth_token step raises on the sent conn
+    # Phoenix halts the plug pipeline once check_origin sends the 403, so no
+    # later step (this app's own auth_token check included) touches the conn.
     test "refuses the upgrade from a page of another site", %{conn: conn} do
-      assert_raise Plug.Conn.AlreadySentError, fn ->
+      conn =
         conn |> put_req_header("origin", "https://other.example.org") |> upgrade(@token_protocol)
-      end
 
-      assert_received {_ref, {403, _headers, _body}}
+      assert conn.status == 403
+      assert Plug.Test.sent_upgrades(conn) == []
     end
 
     test "refuses the upgrade with a wrong token", %{conn: conn} do
