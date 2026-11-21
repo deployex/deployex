@@ -412,7 +412,8 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                         from_version: from_version,
                         to_version: to_version
                       })
-           end) =~ "HOT UPGRADE version NOT DETECTED, full deployment required, result"
+           end) =~
+             "HOT UPGRADE version NOT DETECTED, full deployment required, reason: :not_found"
   end
 
   @tag :capture_log
@@ -425,17 +426,19 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
     to_version: to_version,
     var_path: var_path
   } do
+    # rebar3_jellyfish_plugin writes both files straight into lib/<app>-<vsn>/ebin/ at
+    # build time (via a relx overlay), so unlike the old rebar3_appup_plugin workflow
+    # there is no priv/appup staging step for this test to simulate.
     new_lib_ebin_path = "#{new_path}/lib/#{app_name}-#{to_version}/ebin"
-    new_lib_priv_path = "#{new_path}/lib/#{app_name}-#{to_version}/priv/appup"
     new_releases_path = "#{new_path}/releases"
     current_releases_path = "#{current_path}/releases/#{to_version}"
 
     File.mkdir_p!(new_lib_ebin_path)
-    File.mkdir_p!(new_lib_priv_path)
     File.mkdir_p!(new_releases_path)
     File.mkdir_p!(current_releases_path)
 
-    File.write("#{new_lib_priv_path}/#{app_name}.appup", @valid_appup_file)
+    File.write("#{new_lib_ebin_path}/#{app_name}.appup", @valid_appup_file)
+    File.write("#{new_lib_ebin_path}/jellyfish.json", @valid_jellyfish_file)
     File.write("#{new_releases_path}/#{app_name}.rel", @release_file)
     File.write("#{var_path}/#{app_name}-#{to_version}.tar.gz", "")
 
@@ -457,7 +460,8 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
              assert File.exists?("#{new_releases_path}/#{app_name}-#{to_version}.rel")
              refute File.exists?("#{new_releases_path}/#{app_name}.rel")
              assert File.exists?("#{current_releases_path}/#{app_name}.tar.gz")
-           end) =~ "HOT UPGRADE version DETECTED, from: #{from_version} to: #{to_version}"
+           end) =~
+             "HOT UPGRADE version DETECTED - [%Deployer.HotUpgrade.Jellyfish{name: \"testapp\", type: \"project\", from: \"0.1.0\", to: \"0.2.0\"}]"
   end
 
   @tag :capture_log
@@ -613,15 +617,15 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
   } do
     root = ~c"/tmp/deployex/varlib/service/#{app_name}/1/current"
 
-    new_lib_priv_path = "#{new_path}/lib/#{app_name}-#{to_version}/priv/appup"
-    current_lib_ebin_path = "#{current_path}/lib/#{app_name}-#{to_version}/ebin"
+    # do_make_relup's only erlang-specific behavior left is the .rel rename below -
+    # rebar3_jellyfish_plugin writes the .appup straight into lib/<app>-<vsn>/ebin/ at
+    # build time, and release_handler:unpack_release/1 carries it into current_path
+    # as-is, so there is no priv/appup copy step left here to exercise or seed a
+    # fixture file for, unlike the old rebar3_appup_plugin flow.
     current_releases_path = "#{current_path}/releases"
 
-    File.mkdir_p!(new_lib_priv_path)
-    File.mkdir_p!(current_lib_ebin_path)
     File.mkdir_p!(current_releases_path)
 
-    File.write("#{new_lib_priv_path}/#{app_name}.appup", @valid_appup_file)
     File.write("#{current_releases_path}/#{app_name}.rel", @release_file)
 
     Foundation.RpcMock
@@ -644,7 +648,6 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                to_version: to_version
              })
 
-    assert File.exists?("#{current_lib_ebin_path}/#{app_name}.appup")
     assert File.exists?("#{current_releases_path}/#{app_name}-#{to_version}.rel")
     refute File.exists?("#{current_releases_path}/#{app_name}.rel")
   end
