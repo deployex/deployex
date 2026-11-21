@@ -17,8 +17,10 @@ defmodule DeployexWeb.Endpoint do
 
   # Serve at "/" the static files from "priv/static" directory.
   #
-  # You should set gzip to true if you are running phx.digest
-  # when deploying your static files in production.
+  # Assets are intentionally not digested (see config/prod.exs): a hot
+  # upgrade overwrites priv/static in place on the running node, so
+  # content-hashed filenames would 404 for any tab that loaded the page
+  # before the upgrade. Stable filenames keep already-open sessions working.
   plug Plug.Static,
     at: "/",
     from: :deployex_web,
