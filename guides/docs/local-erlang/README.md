@@ -47,12 +47,16 @@ Add the modules `inets` and `ssl` in the `apps/myerlangapp/src/myerlangapp.erl` 
 ...
 ```
 
-### Add required plugin for hot upgrades
+### Modify rebar.config
+
+Open the file `rebar.config` and apply the following configurations:
+
+#### Add required plugin for hot upgrades
 
 Integrate the [rebar3_jellyfish_plugin](https://github.com/deployex/rebar3_jellyfish_plugin) adding the following to `rebar.config`:
 ```erlang
 {project_plugins, [
-    {rebar3_jellyfish_plugin, "0.1.0"}
+    {rebar3_jellyfish_plugin, "0.1.1"}
 ]}.
 
 {provider_hooks, [
@@ -60,9 +64,24 @@ Integrate the [rebar3_jellyfish_plugin](https://github.com/deployex/rebar3_jelly
 ]}.
 ```
 
-### Modify profile
+#### relx
 
-Change the `prod` profile at `rebar.config`. This is a sensible default for anything meant to be deployed, independent of hot upgrades:
+Make sure you have added: 
+ 1. `runtime_tools` to the release so DeployEx can have access to tracing via Observer Web:
+ 2. `sasl` to allow access to release_handler for hotupgrades
+```erlang
+    {release, {myerlangapp, "0.1.0"}, [
+        myerlangapp,
+        sasl,
+        runtime_tools
+    ]},
+    ...
+```
+
+#### profiles
+
+Modify/Add the profiles to prepare the release:
+
 ```erlang
 {profiles, [
     %% prod is the default mode when prod
@@ -70,8 +89,7 @@ Change the `prod` profile at `rebar.config`. This is a sensible default for anyt
     %% to be explicitly included like this
     {prod, [
         {relx, [
-            {dev_mode, false},
-            {include_erts, true},
+            {mode, dev},
 
             %% use minimal mode to exclude ERTS
             %% {mode, minimal}
@@ -85,15 +103,7 @@ Change the `prod` profile at `rebar.config`. This is a sensible default for anyt
 ]}.
 ```
 
-Also, make sure you have added the `runtime_tools` to the release so DeployEx can have access to tracing via Observer Web:
-```erlang
-    {release, {myerlangapp, "0.1.0"}, [
-        myerlangapp,
-        sasl,
-        runtime_tools
-    ]},
-    ...
-```
+
 
 ### Add gen_server for testing
 
@@ -180,8 +190,8 @@ rebar3 as prod tar
 Pack the release and move it to the distributed folder and updated the version:
 ```bash
 export app_name=myerlangapp
-cp _build/prod/rel/${app_name}/${app_name}-0.1.0.tar.gz /tmp/deployex/bucket/dist/${app_name}
-echo "{\"version\":\"0.1.0\",\"pre_commands\": [],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
+cp _build/prod/rel/${app_name}/${app_name}-0.2.4.tar.gz /Users/testeves/Workspace/private/deployex/tmp/deployex/bucket/dist/${app_name}
+echo "{\"version\":\"0.2.4\",\"pre_commands\": [],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
 ```
 
 ## 4. Running DeployEx and deploy the app
