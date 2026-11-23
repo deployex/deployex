@@ -81,6 +81,9 @@ A version deployed before this field existed shows as `not set`.
  * Only an application that the running node has loaded gets the key. One that the new release adds has no environment to compare yet, and starts with the new code anyway.
  * The key is also set for Erlang and Gleam applications, as a binary.
  * It is only set by a hot upgrade. After a full deployment the key is absent until the next hot upgrade.
+ * A release that does not ask, hot-upgraded over one that did, still gets the callback once. The key the earlier upgrade set is gone when the environment is rebuilt, so `config_change/3` is called with `:deployex_config_change` in `removed`. Look for the key in `changed` and `new`, as the Phoenix example below does, to react only to an upgrade that asked.
+ * DeployEx logs which applications got the key, and logs a warning when a release asked and none did, which is the case when the release name is not an application of the node and no `jellyfish.json` of this version names one.
+ * The callback runs inside `release_handler:install_release/2`, with the new code already running and before the release is made permanent, so the upgrade waits for it. Keep it short and hand anything slow to another process.
  * A callback that fails does not fail the upgrade. One that raises, exits or returns an error leaves the release installed and made permanent, and OTP does not log it, so have the callback report its own failures.
 
 #### Phoenix applications

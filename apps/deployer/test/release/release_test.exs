@@ -32,7 +32,7 @@ defmodule Deployer.ReleaseTest do
           {%{"version" => "1.0.0", "hash" => "local", "hot_upgrade_config_change" => true}, true},
           {%{"version" => "1.0.0", "hash" => "local", "hot_upgrade_config_change" => false},
            false},
-          # A release that does not say leaves it to the application configuration
+          # A release that does not say is not asking
           {%{"version" => "1.0.0", "hash" => "local"}, nil},
           # Anything but true or false reads as unset
           {%{"version" => "1.0.0", "hash" => "local", "hot_upgrade_config_change" => "yes"}, nil}

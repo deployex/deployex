@@ -992,6 +992,12 @@ defmodule Deployer.HotUpgrade.Application do
 
   Nothing is added unless `config_change` is set on the upgrade data, which the engine does
   for a release whose `current.json` has `hot_upgrade_config_change` set to `true`.
+
+  The marker does not outlive the next hot upgrade: `change_appl_data/3` rebuilds the
+  environment without it. So a release that does not ask, installed over one that did, still
+  gets `config_change/3` called once, with the key in `removed`.
+
+  The applications that got the marker are logged, and so is a request that marked none.
   """
   @spec add_config_change_marker(Execute.t(), runtime_config()) :: runtime_config()
   def add_config_change_marker(%Execute{name: name} = data, runtime_config)
@@ -1141,9 +1147,14 @@ defmodule Deployer.HotUpgrade.Application do
 
     case Rpc.call(node, :application, :loaded_applications, [], @rpc_timeout) do
       loaded when is_list(loaded) ->
-        for {application, _description, _vsn} <- loaded,
-            Atom.to_string(application) in names,
-            do: application
+        applications =
+          for {application, _description, _vsn} <- loaded,
+              Atom.to_string(application) in names,
+              do: application
+
+        log_config_change_applications(node, names, applications)
+
+        applications
 
       reason ->
         Logger.warning(
@@ -1153,6 +1164,20 @@ defmodule Deployer.HotUpgrade.Application do
 
         []
     end
+  end
+
+  # The version record only says what the release asked for, so a request that marked nothing
+  # is reported here: the release name is not an application of the node, or no jellyfish.json
+  # of this version names one
+  defp log_config_change_applications(node, names, []) do
+    Logger.warning(
+      "config_change/3 was requested but none of #{inspect(names)} is loaded on #{node}, " <>
+        "it is not forced for this upgrade"
+    )
+  end
+
+  defp log_config_change_applications(node, _names, applications) do
+    Logger.info("config_change/3 is forced on #{node} for: #{inspect(applications)}")
   end
 
   # unpack_release/1 has already put the new libraries, and their jellyfish.json, under the

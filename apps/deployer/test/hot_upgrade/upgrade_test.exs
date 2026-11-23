@@ -1166,6 +1166,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
              ) == runtime_config
     end
 
+    @tag :capture_log
     test "marks the application named after the release when it ships no jellyfish.json", %{
       node: node,
       current_path: current_path
@@ -1186,6 +1187,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                [testapp: [deployex_config_change: "0.2.0"]]
     end
 
+    @tag :capture_log
     test "keeps the configuration the application already resolved", %{
       node: node,
       current_path: current_path
@@ -1212,6 +1214,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       assert marked[:logger] == [level: :info]
     end
 
+    @tag :capture_log
     test "marks every project application of an umbrella, for this version only", %{
       node: node,
       current_path: current_path
@@ -1269,7 +1272,14 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
         config_change: true
       }
 
-      assert UpgradeApp.add_config_change_marker(data, []) == []
+      log =
+        capture_log(fn ->
+          assert UpgradeApp.add_config_change_marker(data, []) == []
+        end)
+
+      # A request that marks nothing is reported, the version record still says requested
+      assert log =~ "config_change/3 was requested but none of"
+      assert log =~ "an_application_no_node_has_loaded"
 
       # The name was only compared, it never became an atom
       assert_raise ArgumentError, fn ->
