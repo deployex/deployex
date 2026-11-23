@@ -386,11 +386,48 @@ An application that needs 1Password credentials of its own gets them as fields o
 ### What to expect for an application
 
 - **The secrets are read at every start**: a full deployment, a restart from the dashboard and a restart after a crash. A value changed in 1Password reaches the application at its next start.
-- **A hot upgrade does not read them again.** The application keeps running with the environment it was started with, so a secret that a new version needs has to be in the item before the instance last started, or the release has to be deployed fully.
+- **A hot upgrade reads them again.** The application keeps its OS process, so DeployEx puts the secrets in the environment of the running node before it resolves the configuration of the new version: a changed value and a new secret are set, and a secret that left the item is removed. What the new `runtime.exs` reads is then what the item holds now.
+- **A name the YAML sets is left alone on a hot upgrade.** The `env` and the ports of the application, and `PATH`, win over a secret with the same name at a start, so a hot upgrade neither sets nor removes them.
+- **A hot upgrade changes the configuration, not what already used it.** The application gets the keys that changed in `config_change/3`. A value read on each use is the new one from then on. A value a process took when it started, such as the password of a database pool, stays until that process restarts, which the application does from `config_change/3` or a restart from the dashboard does.
+- **A hot upgrade goes on when the secrets cannot be refreshed.** The node keeps the secrets it has and DeployEx logs a warning. A release that needs a secret the node does not have then fails to resolve its configuration and is not installed.
 - **An application is not started without its secrets.** When the item cannot be read at the first start of an instance, DeployEx logs why and tries again, as it does for a failing pre-command.
 - **A restart does not depend on 1Password being reachable.** When the item cannot be read at a later start, the instance starts with the secrets of its previous start and DeployEx logs a warning. They are kept in memory, and not across a restart of DeployEx.
 - **The pre-commands get the same secrets**, so a migration can reach the database.
 - **The values are not written anywhere.** They are passed in the environment of the process, not on its command line, and they are not in the logs, the dashboard or the Agent API. The dashboard shows only the adapter and the path.
+
+### An application that reads its own secrets
+
+The `secrets` section is not the only way for an application to get fresh secrets on a hot upgrade.
+An application whose release has a [Config Provider](https://hexdocs.pm/elixir/Config.Provider.html) that reads its secrets itself, from 1Password, AWS or anywhere else, needs nothing from DeployEx for it:
+
+```elixir
+releases: [
+  myphoenixapp: [
+    config_providers: [{Myphoenixapp.SecretsProvider, "myphoenixapp-prod-secrets"}]
+  ]
+]
+```
+
+DeployEx runs the Config Providers of the application again on every hot upgrade, on the running node, and applies what they return, see [What happens to configuration during a hot-upgrade](/guides/docs/hot-upgrades/README.md#what-happens-to-configuration-during-a-hot-upgrade).
+A provider that reads the secret store returns what it holds at that moment, and the application gets the keys that changed in `config_change/3`.
+
+How the two compare:
+
+| | `secrets` section | Config Provider of the application |
+|---|---|---|
+| Who reads the secret store | DeployEx | The application, with its own credentials |
+| Where the values end up | The environment of the OS process, then the configuration through `runtime.exs` | The configuration of the application, never its environment |
+| On a start | Read by DeployEx before the application starts. A restart falls back to the secrets of the previous start | Read by the application while it boots. A store that cannot be reached stops the boot |
+| On a hot upgrade | Read again and set on the running node | Read again by the provider |
+| When the store cannot be reached on a hot upgrade | The upgrade goes on with the secrets the node has | The provider fails, and the release is not installed |
+
+Three things to know about a provider on a hot upgrade:
+
+ * It runs on the node as it is, in the version that is being replaced. A fix to the provider itself only takes effect after a full deployment.
+ * It runs in a system that is already started. A provider that starts a process under a fixed name, such as an HTTP client pool, has to tolerate that process already being there.
+ * It changes the configuration, not what already used it, as with the `secrets` section.
+
+Both can be used by the same application: the provider runs after the environment is set, so it can read from it.
 
 ## Running behind a TLS-terminating proxy
 

@@ -10,6 +10,7 @@ defmodule Deployer.Monitor.Application do
   alias Deployer.Status
   alias Foundation.Catalog
   alias Foundation.Common
+  alias Foundation.Rpc
   alias Foundation.Yaml.Readiness
   alias Host.Commander
 
@@ -89,6 +90,10 @@ defmodule Deployer.Monitor.Application do
 
   def handle_call({:restart, _restart}, _from, state) when is_nil(state.current_pid) do
     {:reply, {:error, :application_is_not_running}, state}
+  end
+
+  def handle_call(:refresh_secrets, _from, state) do
+    {:reply, refresh_secrets_on_node(state), state}
   end
 
   # A worker of the previous version, during a relup, still calls and installs whatever the reply
@@ -386,6 +391,30 @@ defmodule Deployer.Monitor.Application do
     |> GenServer.cast({:cancel_pre_commands, ref})
   end
 
+  # Reading the secret store can take much longer than the 5 seconds of a default call: three
+  # requests to a Connect server, or the op command, and then the calls to the node. A caller
+  # that gave up early would run the upgrade while the node is still being updated
+  @refresh_secrets_call_timeout 120_000
+
+  @impl true
+  def refresh_secrets(sname), do: refresh_secrets(sname, @refresh_secrets_call_timeout)
+
+  @doc """
+  `refresh_secrets/1` with the time the monitor is given to answer, which a test shortens.
+  """
+  @spec refresh_secrets(String.t(), timeout()) :: :ok | {:error, any()}
+  def refresh_secrets(sname, timeout) do
+    sname
+    |> String.to_existing_atom()
+    |> GenServer.call(:refresh_secrets, timeout)
+  rescue
+    # No monitor was ever started under that name
+    ArgumentError -> {:error, {:secrets, :monitor_not_answering}}
+  catch
+    # The reason of an exit holds the call, never a secret, and says nothing more useful
+    :exit, _reason -> {:error, {:secrets, :monitor_not_answering}}
+  end
+
   @impl true
   defdelegate start_service(service), to: Monitor.Supervisor
 
@@ -674,6 +703,105 @@ defmodule Deployer.Monitor.Application do
         {:ok, kept.()}
     end
   end
+
+  @refresh_secrets_timeout 15_000
+
+  # An application without secrets has nothing to refresh
+  defp refresh_secrets_on_node(state) do
+    if Map.get(state, :secrets) do
+      # What the node was last given, read before secret_env/1 replaces it
+      previous = kept_secret_env()
+
+      case secret_env(state) do
+        {:ok, env} ->
+          {result, on_node} = put_secret_env_on_node(state, env, previous || [])
+          # What the node holds now is what the next refresh compares with
+          keep_secret_env(if(result == :ok, do: on_node, else: previous && on_node))
+          result
+
+        {:error, _reason} = error ->
+          keep_secret_env(previous)
+          error
+      end
+    else
+      :ok
+    end
+  end
+
+  # The environment of the running node is set from inside it, with functions of Erlang, so
+  # it works for an Erlang or a Gleam node too, which has no Elixir. A secret that left the
+  # secret store is removed, so the new version does not read a value that no longer exists.
+  #
+  # It answers with what the node holds afterwards. When the secrets were set and the ones
+  # that left could not be removed, those are still on the node and stay in that list, so
+  # the next refresh removes them
+  defp put_secret_env_on_node(%{sname: sname} = state, env, previous) do
+    %{node: node} = Catalog.node_info(sname)
+    reserved = reserved_names(state)
+    refresh = Enum.reject(env, fn {name, _value} -> name in reserved end)
+    left = Enum.reject(previous, fn {name, _value} -> List.keymember?(env, name, 0) end)
+    removed = for {name, _value} <- left, name not in reserved, do: name
+
+    with :ok <- put_env_on_node(node, refresh),
+         :ok <- unset_env_on_node(node, removed) do
+      {:ok, env}
+    else
+      {:error, :not_set} -> {{:error, {:secrets, :node_not_updated}}, previous}
+      {:error, :not_removed} -> {{:error, {:secrets, :node_not_updated}}, env ++ left}
+    end
+  end
+
+  # The result of a failed call can hold its arguments, which are the secrets, so it is not
+  # passed on
+  defp put_env_on_node(_node, []), do: :ok
+
+  defp put_env_on_node(node, env) do
+    {names, values} = env |> Enum.map(&charlists/1) |> Enum.unzip()
+
+    case Rpc.call(
+           node,
+           :lists,
+           :zipwith,
+           [&:os.putenv/2, names, values],
+           @refresh_secrets_timeout
+         ) do
+      set when is_list(set) -> :ok
+      _failed -> {:error, :not_set}
+    end
+  end
+
+  defp unset_env_on_node(_node, []), do: :ok
+
+  defp unset_env_on_node(node, names) do
+    names = Enum.map(names, &String.to_charlist/1)
+
+    case Rpc.call(node, :lists, :foreach, [&:os.unsetenv/1, names], @refresh_secrets_timeout) do
+      :ok -> :ok
+      _failed -> {:error, :not_removed}
+    end
+  end
+
+  defp charlists({name, value}), do: {String.to_charlist(name), String.to_charlist(value)}
+
+  # What the run script of the application exports after the secrets are in its environment:
+  # the env and the ports of the YAML, and PATH. At a start those win over a secret with the
+  # same name, so a refresh neither sets nor removes them
+  defp reserved_names(state) do
+    yaml_env = for entry <- Map.get(state, :env) || [], do: entry |> String.split("=") |> hd()
+    ports = for port <- Map.get(state, :ports) || [], do: to_string(port.key)
+
+    ["PATH" | yaml_env ++ ports]
+  end
+
+  defp kept_secret_env do
+    case Process.get(@secret_env_key) do
+      kept when is_function(kept, 0) -> kept.()
+      _nothing_kept -> nil
+    end
+  end
+
+  defp keep_secret_env(nil), do: Process.delete(@secret_env_key)
+  defp keep_secret_env(env), do: Process.put(@secret_env_key, fn -> env end)
 
   defp build_export_command([]), do: ""
 

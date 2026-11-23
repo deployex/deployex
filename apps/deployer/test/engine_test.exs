@@ -1691,7 +1691,17 @@ defmodule Deployer.EngineTest do
         :ok
       end)
 
+      secrets = %Foundation.Yaml.Secrets{
+        adapter: Foundation.ConfigProvider.Secrets.OnePasswordConnect,
+        path: "vaults/production/items/myelixir"
+      }
+
       Deployer.MonitorMock
+      # The application has secrets, so its node is given them again before the upgrade
+      |> expect(:refresh_secrets, 1, fn _sname ->
+        Process.put(:secrets_refreshed, true)
+        :ok
+      end)
       |> expect(:start_service, 1, fn _service ->
         {:ok, self()}
       end)
@@ -1738,6 +1748,7 @@ defmodule Deployer.EngineTest do
                                   to_version: ^to_version,
                                   config_change: true
                                 } ->
+        send(pid, {:executed_after_refresh, Process.get(:secrets_refreshed)})
         :ok
       end)
 
@@ -1748,11 +1759,13 @@ defmodule Deployer.EngineTest do
                    deploy_rollback_timeout_ms: 1_000,
                    deploy_schedule_interval_ms: 100,
                    name: name,
-                   language: language
+                   language: language,
+                   secrets: secrets
                  })
 
         assert_receive {:handle_ref_event, ^ref}, 1_000
         assert_receive {:stored_config_change, true}
+        assert_receive {:executed_after_refresh, true}
 
         # The record of a hot upgrade names the version it came from, which is what finds
         # the relup that was kept for it
@@ -1777,7 +1790,14 @@ defmodule Deployer.EngineTest do
       |> expect(:update, 2, fn _sname -> :ok end)
       |> expect(:set_current_version_map, 2, fn _sname, _release, _attrs -> :ok end)
 
+      secrets = %Foundation.Yaml.Secrets{
+        adapter: Foundation.ConfigProvider.Secrets.OnePasswordConnect,
+        path: "vaults/production/items/myelixir"
+      }
+
       Deployer.MonitorMock
+      # The secrets could not be refreshed, the upgrade goes on with the ones the node has
+      |> expect(:refresh_secrets, 1, fn _sname -> {:error, {:secrets, :node_not_updated}} end)
       |> expect(:start_service, 2, fn _service ->
         # First time: initialization
         # Second time: new deployment, after hotupgrade fails
@@ -1833,7 +1853,8 @@ defmodule Deployer.EngineTest do
                             deploy_rollback_timeout_ms: 1_000,
                             deploy_schedule_interval_ms: 200,
                             name: name,
-                            language: language
+                            language: language,
+                            secrets: secrets
                           })
 
                  assert_receive {:handle_ref_event, ^ref}, 1_000

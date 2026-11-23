@@ -538,6 +538,22 @@ defmodule Deployer.Engine.Worker do
 
   defp schedule_new_deployment(timeout), do: Process.send_after(self(), :schedule, timeout)
 
+  # A hot upgrade keeps the OS process of the application, so the secrets the new version
+  # reads are put in the environment of the running node before its configuration is
+  # resolved. When that fails the upgrade goes on with the secrets the node already has: a
+  # release that needs a new one then fails to resolve its configuration and is not installed
+  defp refresh_secrets(state, sname) do
+    with %{} <- Map.get(state, :secrets),
+         {:error, reason} <- Monitor.refresh_secrets(sname) do
+      Logger.warning(
+        "Could not refresh the secrets of sname: #{sname} for its hot upgrade, it keeps " <>
+          "the ones it has, reason: #{inspect(reason)}"
+      )
+    end
+
+    :ok
+  end
+
   # Only a release that asks for it in current.json gets config_change/3 forced. A release map
   # built by a version without the field does not ask
   defp config_change?(release), do: Map.get(release, :hot_upgrade_config_change) == true
@@ -1411,6 +1427,8 @@ defmodule Deployer.Engine.Worker do
           to_version: release.version,
           config_change: config_change?(release)
         }
+
+        refresh_secrets(state, sname)
 
         case HotUpgrade.execute(upgrade_data) do
           :ok ->
