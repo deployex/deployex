@@ -4561,6 +4561,11 @@ defmodule Deployer.EngineTest do
       FixtureFiles.create_bin_files(sname)
       version = "1.2.3"
 
+      secrets = %Foundation.Yaml.Secrets{
+        adapter: Foundation.ConfigProvider.Secrets.OnePasswordConnect,
+        path: "vaults/production/items/myelixir"
+      }
+
       Deployer.StatusMock
       |> expect(:list_installed_apps, fn _name -> [sname] end)
       |> expect(:current_version, 2, fn _sname -> version end)
@@ -4569,7 +4574,8 @@ defmodule Deployer.EngineTest do
       end)
 
       Deployer.MonitorMock
-      |> expect(:start_service, 1, fn %{sname: ^sname} ->
+      # The secrets setting of the application goes to the monitor that starts it
+      |> expect(:start_service, 1, fn %{sname: ^sname, secrets: ^secrets} ->
         send(pid, {:handle_ref_event, ref})
         {:ok, self()}
       end)
@@ -4584,7 +4590,8 @@ defmodule Deployer.EngineTest do
                    deploy_rollback_timeout_ms: 1_000,
                    deploy_schedule_interval_ms: 100,
                    name: name,
-                   language: language
+                   language: language,
+                   secrets: secrets
                  })
 
         assert_receive {:handle_ref_event, ^ref}, 1_000
@@ -4606,6 +4613,10 @@ defmodule Deployer.EngineTest do
 
         Engine.Worker.updated_state_values(name, %{env: ["any=abc"]})
         assert %Deployer.Engine.Worker{env: ["any=abc"]} = :sys.get_state(module_name)
+
+        # A changed secrets setting is used by the next deployment
+        Engine.Worker.updated_state_values(name, %{secrets: nil})
+        assert %Deployer.Engine.Worker{secrets: nil} = :sys.get_state(module_name)
       end
     end
 

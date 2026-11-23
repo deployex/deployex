@@ -1269,6 +1269,63 @@ defmodule Sentinel.Config.WatcherTest do
       end
     end
 
+    test "detects modified application secrets" do
+      test_pid = self()
+      ref = make_ref()
+
+      secrets = %Foundation.Yaml.Secrets{
+        adapter: Foundation.ConfigProvider.Secrets.OnePasswordConnect,
+        path: "vaults/production/items/my_new_app"
+      }
+
+      # An application loaded by a version without the field reads as having no secrets
+      old_applications = [Map.delete(@default_application, :secrets)]
+      new_applications = [Map.merge(@default_application, %{secrets: secrets})]
+
+      with_mocks([
+        {Upgradable, [],
+         [
+           from_app_env: fn ->
+             Map.merge(@default_upgradable, %{
+               applications: old_applications
+             })
+           end,
+           from_yaml: fn _config ->
+             Map.merge(@default_upgradable, %{
+               applications: new_applications
+             })
+           end
+         ]},
+        {Yaml, [],
+         [
+           load: fn %Yaml{config_checksum: "current_checksum"} ->
+             send(test_pid, {:handle_ref_event, ref})
+             {:ok, %Yaml{}}
+           end
+         ]}
+      ]) do
+        log =
+          capture_log(fn ->
+            {:ok, _pid} = Watcher.start_link(name: :test_changes, check_interval_ms: 10)
+
+            assert_receive {:handle_ref_event, ^ref}, 1_000
+
+            state = :sys.get_state(:test_changes)
+
+            assert state.pending_config.applications != []
+          end)
+
+        {:ok, changes} = Watcher.get_pending_changes(:test_changes)
+
+        assert changes.summary.applications.details["my_new_app"].status == :modified
+
+        assert changes.summary.applications.details["my_new_app"].changes.secrets ==
+                 %{old: nil, new: secrets, apply_strategy: :next_deploy}
+
+        assert log =~ "Detected 1 change(s) in upgradable fields: [:applications]"
+      end
+    end
+
     test "detects modified application deploy_schedule_interval_ms" do
       test_pid = self()
       ref = make_ref()

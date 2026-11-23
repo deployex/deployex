@@ -32,6 +32,12 @@ defmodule Sentinel.Config.Changes do
           apply_strategy: apply_strategy()
         }
 
+  @type secrets_change :: %{
+          old: Foundation.Yaml.Secrets.t() | nil,
+          new: Foundation.Yaml.Secrets.t() | nil,
+          apply_strategy: apply_strategy()
+        }
+
   @type app_diff :: %{
           optional(:language) => string_change(),
           optional(:replicas) => numeric_change(),
@@ -40,6 +46,7 @@ defmodule Sentinel.Config.Changes do
           optional(:replica_ports) => list_change(),
           optional(:env) => list_change(),
           optional(:readiness) => readiness_change(),
+          optional(:secrets) => secrets_change(),
           optional(:monitoring) => list_change(),
           optional(:certificates) => certificate_change()
         }

@@ -47,6 +47,8 @@ defmodule Deployer.Monitor.Application do
        # Map.get, since a DynamicSupervisor restart after a relup passes the start argument the
        # old code built, without a readiness key
        readiness: Map.get(service, :readiness, %Readiness{}),
+       # Map.get for the same reason, a start argument without a secrets key
+       secrets: Map.get(service, :secrets),
        retry_delay_pre_commands: service.retry_delay_pre_commands,
        name: service.name,
        sname: service.sname,
@@ -330,6 +332,7 @@ defmodule Deployer.Monitor.Application do
     {:ok,
      state
      |> Map.put_new(:pre_commands_run, nil)
+     |> Map.put_new(:secrets, nil)
      |> Map.put_new(:reported_pre_commands, [])
      |> Map.put_new(:last_crash_at, nil)
      |> Map.put_new(:watchdog_restart_count, 0)
@@ -446,15 +449,17 @@ defmodule Deployer.Monitor.Application do
     end
 
     with true <- File.exists?(app_exec),
+         {:ok, secret_env} <- secret_env(state),
          :ok <- notify_new_deploy.(),
          :ok <- Logger.info(" # Identified executable: #{app_exec}"),
-         :ok <- execute_pre_commands(state, version_map.pre_commands, :current) do
+         :ok <- execute_pre_commands(state, version_map.pre_commands, :current, secret_env) do
       Logger.info(" # Starting application")
 
       {:ok, pid, os_pid} =
         Commander.run_link(
           run_app_bin(state, app_exec, "start"),
           [
+            {:env, os_env(secret_env)},
             {:stdout, Catalog.stdout_path(sname) |> to_charlist, [:append, {:mode, 0o600}]},
             {:stderr, Catalog.stderr_path(sname) |> to_charlist, [:append, {:mode, 0o600}]}
           ]
@@ -475,6 +480,18 @@ defmodule Deployer.Monitor.Application do
       false ->
         trigger_run_service(sname, retry_delay_pre_commands)
         Logger.error("Version: #{version} set but no #{app_exec}")
+        state
+
+      # Starting without its secrets would only crash the application, so it waits and tries
+      # again. The reason names the item, never a value
+      {:error, {:secrets, reason}} ->
+        trigger_run_service(sname, retry_delay_pre_commands)
+
+        Logger.error(
+          "Could not read the secrets of sname: #{sname}, not starting version: #{version}, " <>
+            "reason: #{inspect(reason)}"
+        )
+
         state
 
       {:error, :pre_commands, command} ->
@@ -606,6 +623,56 @@ defmodule Deployer.Monitor.Application do
 
   defp ports_to_env(ports), do: Enum.map(ports, fn port -> "#{port.key}=#{port.base}" end)
 
+  # The credentials DeployEx itself reads 1Password with. A monitored application starts as a
+  # child of DeployEx and would inherit them
+  @onepassword_env ~w(OP_CONNECT_HOST OP_CONNECT_TOKEN OP_SERVICE_ACCOUNT_TOKEN)
+
+  # The environment handed to the OS process, on top of what run_app_bin/3 exports. The
+  # secrets go this way and not through the command, which is visible in the process list.
+  # A secret is set after the unset of the same name, so an application that has its own
+  # 1Password credentials among its secrets keeps them
+  defp os_env(secret_env) do
+    Enum.map(@onepassword_env, &{&1, false}) ++ secret_env
+  end
+
+  # The secrets of the application, read again at every start, so a value changed in the
+  # secret store reaches the application at its next restart. They are kept out of the state,
+  # which is mirrored in a table that other processes read
+  @secret_env_key {__MODULE__, :secret_env}
+
+  defp secret_env(state) do
+    case Map.get(state, :secrets) do
+      nil ->
+        {:ok, []}
+
+      %{adapter: adapter, path: path} ->
+        case adapter.application_env(path) do
+          {:ok, env} ->
+            Process.put(@secret_env_key, env)
+            {:ok, env}
+
+          {:error, reason} ->
+            cached_secret_env(state, reason)
+        end
+    end
+  end
+
+  # A restart after a crash must not depend on the secret store being reachable right then
+  defp cached_secret_env(%{sname: sname}, reason) do
+    case Process.get(@secret_env_key) do
+      nil ->
+        {:error, {:secrets, reason}}
+
+      env ->
+        Logger.warning(
+          "Could not read the secrets of sname: #{sname}, using the ones from its last " <>
+            "start, reason: #{inspect(reason)}"
+        )
+
+        {:ok, env}
+    end
+  end
+
   defp build_export_command([]), do: ""
 
   # Quote each value, so spaces and shell characters reach the monitored app as written
@@ -622,12 +689,17 @@ defmodule Deployer.Monitor.Application do
     end
   end
 
-  defp execute_pre_commands(_state, pre_commands, _bin_service) when pre_commands == [], do: :ok
+  defp execute_pre_commands(state, pre_commands, bin_service, secret_env \\ [])
+
+  defp execute_pre_commands(_state, pre_commands, _bin_service, _secret_env)
+       when pre_commands == [],
+       do: :ok
 
   defp execute_pre_commands(
          %{sname: sname, status: status} = state,
          pre_commands,
-         bin_service
+         bin_service,
+         secret_env
        ) do
     migration_exec = Catalog.bin_path(sname, bin_service)
 
@@ -640,6 +712,7 @@ defmodule Deployer.Monitor.Application do
 
       Commander.run(run_app_bin(state, migration_exec, pre_command), [
         :sync,
+        {:env, os_env(secret_env)},
         {:stdout, Catalog.stdout_path(sname) |> to_charlist, [:append, {:mode, 0o600}]},
         {:stderr, Catalog.stderr_path(sname) |> to_charlist, [:append, {:mode, 0o600}]}
       ])
@@ -680,16 +753,19 @@ defmodule Deployer.Monitor.Application do
   defp run_next_pre_command(%Monitor{sname: sname} = state, %{remaining: [command | rest]} = run) do
     Logger.info(" # Executing: #{command}")
 
-    state
-    |> run_app_bin(Catalog.bin_path(sname, run.bin_service), command)
-    |> Commander.run([
-      :monitor,
-      # Its own process group, so a stop also ends the BEAM that `bin/app eval` starts
-      {:group, 0},
-      :kill_group,
-      {:stdout, Catalog.stdout_path(sname) |> to_charlist, [:append, {:mode, 0o600}]},
-      {:stderr, Catalog.stderr_path(sname) |> to_charlist, [:append, {:mode, 0o600}]}
-    ])
+    with {:ok, secret_env} <- secret_env(state) do
+      state
+      |> run_app_bin(Catalog.bin_path(sname, run.bin_service), command)
+      |> Commander.run([
+        :monitor,
+        # Its own process group, so a stop also ends the BEAM that `bin/app eval` starts
+        {:group, 0},
+        :kill_group,
+        {:env, os_env(secret_env)},
+        {:stdout, Catalog.stdout_path(sname) |> to_charlist, [:append, {:mode, 0o600}]},
+        {:stderr, Catalog.stderr_path(sname) |> to_charlist, [:append, {:mode, 0o600}]}
+      ])
+    end
     |> case do
       {:ok, exec_pid, os_pid} ->
         run = %{run | remaining: rest, command: command, exec_pid: exec_pid, os_pid: os_pid}

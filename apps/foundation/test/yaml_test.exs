@@ -1032,6 +1032,100 @@ defmodule Foundation.YamlTest do
     end
   end
 
+  describe "1Password secrets" do
+    test "the secrets of DeployEx can come from a Connect server or from the op CLI" do
+      for {name, adapter} <- [
+            {"1password-connect", Foundation.ConfigProvider.Secrets.OnePasswordConnect},
+            {"1password-cli", Foundation.ConfigProvider.Secrets.OnePasswordCli}
+          ] do
+        path =
+          replace_in_default_yaml(
+            ~s(secrets_adapter: "aws"),
+            ~s(secrets_adapter: "#{name}")
+          )
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          {:ok, config} = Yaml.load()
+
+          assert config.secrets_adapter == adapter
+        end
+      end
+    end
+
+    test "an application has no secrets unless the section is set" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.secrets == nil
+      end
+    end
+
+    test "parses the secrets of an application" do
+      for {name, adapter} <- [
+            {"1password-connect", Foundation.ConfigProvider.Secrets.OnePasswordConnect},
+            {"1password-cli", Foundation.ConfigProvider.Secrets.OnePasswordCli}
+          ] do
+        path =
+          application_secrets_yaml(
+            ~s(adapter: "#{name}"\n      path: "vaults/production/items/myphoenixapp")
+          )
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+          assert app.secrets == %Yaml.Secrets{
+                   adapter: adapter,
+                   path: "vaults/production/items/myphoenixapp"
+                 }
+        end
+      end
+    end
+
+    test "rejects application secrets that could never be read" do
+      for {section, message} <- [
+            {~s(adapter: "aws"\n      path: "vaults/production/items/myphoenixapp"),
+             ~s(application secrets adapter "aws" not supported, expected 1password-connect or 1password-cli)},
+            {~s(path: "vaults/production/items/myphoenixapp"),
+             "application secrets adapter nil not supported, expected 1password-connect or 1password-cli"},
+            {~s(adapter: "1password-cli"\n      path: "production/myphoenixapp"),
+             ~s(1Password path "production/myphoenixapp" not supported, expected vaults/<vault>/items/<item>)},
+            {~s(adapter: "1password-cli"),
+             "1Password path nil not supported, expected vaults/<vault>/items/<item>"}
+          ] do
+        path = application_secrets_yaml(section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          assert_raise RuntimeError, message, fn -> Yaml.load() end
+        end
+      end
+    end
+
+    test "rejects application secrets that are not a section" do
+      path =
+        replace_in_default_yaml(
+          ~s(    language: "elixir"\n),
+          ~s(    language: "elixir"\n    secrets: "1password-cli"\n)
+        )
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(application secrets "1password-cli" not supported, expected adapter and path),
+                     fn -> Yaml.load() end
+      end
+    end
+  end
+
   describe "readiness" do
     test "defaults to otp when the section is absent" do
       with_mocks([
@@ -1155,6 +1249,29 @@ defmodule Foundation.YamlTest do
     File.write!(path, content)
     on_exit(fn -> File.rm(path) end)
     path
+  end
+
+  # The default file with one replacement, the first match only
+  defp replace_in_default_yaml(pattern, replacement) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "deployex-secrets-#{System.unique_integer([:positive])}.yaml"
+      )
+
+    content = File.read!(@yaml_aws_default)
+    assert content =~ pattern
+
+    File.write!(path, String.replace(content, pattern, replacement, global: false))
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
+  defp application_secrets_yaml(section) do
+    replace_in_default_yaml(
+      ~s(    language: "elixir"\n),
+      ~s(    language: "elixir"\n    secrets:\n      #{section}\n)
+    )
   end
 
   defp agent_api_yaml(section) do

@@ -38,6 +38,7 @@ defmodule Deployer.Engine.Worker do
           deploy_rollback_timeout_ms: non_neg_integer(),
           deploy_schedule_interval_ms: non_neg_integer(),
           readiness: Foundation.Yaml.Readiness.t(),
+          secrets: Foundation.Yaml.Secrets.t() | nil,
           pending_pre_commands: map() | nil
         }
 
@@ -54,6 +55,7 @@ defmodule Deployer.Engine.Worker do
             deploy_rollback_timeout_ms: 0,
             deploy_schedule_interval_ms: 0,
             readiness: %Foundation.Yaml.Readiness{},
+            secrets: nil,
             pending_pre_commands: nil
 
   @dialyzer {:nowarn_function, initialize_version: 1}
@@ -85,6 +87,7 @@ defmodule Deployer.Engine.Worker do
       state
       |> Map.put_new(:pending_pre_commands, nil)
       |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
+      |> Map.put_new(:secrets, nil)
 
     # Subscribe before reading, in this order. A change made in between then arrives as a
     # message instead of being lost in the gap. Reading here is also what makes a restarted
@@ -498,6 +501,7 @@ defmodule Deployer.Engine.Worker do
   - deploy_rollback_timeout_ms
   - deploy_schedule_interval_ms
   - readiness
+  - secrets
   - replica_ports
   - replicas
 
@@ -538,12 +542,13 @@ defmodule Deployer.Engine.Worker do
   # built by a version without the field does not ask
   defp config_change?(release), do: Map.get(release, :hot_upgrade_config_change) == true
 
-  # An older version built the state without pending_pre_commands or readiness, or deployments
-  # without a field
+  # An older version built the state without pending_pre_commands, readiness or secrets, or
+  # deployments without a field
   defp upgrade_state(state) do
     state
     |> Map.put_new(:pending_pre_commands, nil)
     |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
+    |> Map.put_new(:secrets, nil)
     |> Map.update!(
       :deployments,
       &Map.new(&1, fn {i, deployment} -> {i, upgrade_deployment(deployment)} end)
@@ -763,7 +768,8 @@ defmodule Deployer.Engine.Worker do
           language: language,
           ports: ports,
           env: env,
-          readiness: state.readiness
+          readiness: state.readiness,
+          secrets: state.secrets
         })
 
       # A monitor that already runs the app does not report it running again, so a rollback
@@ -836,7 +842,8 @@ defmodule Deployer.Engine.Worker do
       language: state.language,
       ports: ports,
       env: state.env,
-      readiness: state.readiness
+      readiness: state.readiness,
+      secrets: state.secrets
     })
   end
 
@@ -1364,7 +1371,8 @@ defmodule Deployer.Engine.Worker do
         language: language,
         ports: available_ports,
         env: env,
-        readiness: state.readiness
+        readiness: state.readiness,
+        secrets: state.secrets
       })
     end)
 
