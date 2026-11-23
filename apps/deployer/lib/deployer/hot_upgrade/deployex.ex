@@ -97,7 +97,10 @@ defmodule Deployer.HotUpgrade.Deployex do
             node: Node.self(),
             make_permanent_async: make_permanent_async,
             sync_execution: sync_execution,
-            after_async_make_permanent: {__MODULE__, :add_hot_upgrade_version, [to_version]}
+            after_async_make_permanent: {__MODULE__, :add_hot_upgrade_version, [to_version]},
+            # DeployexWeb serves digested assets, and its endpoint only reloads the manifest
+            # from config_change/3, so every self-upgrade has to call it
+            config_change: true
           },
           Map.from_struct(check)
         )

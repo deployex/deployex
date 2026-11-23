@@ -207,6 +207,11 @@ To hot-upgrade DeployEx itself:
 1. Check the [GitHub hot-upgrade workflow](/.github/workflows/hot_upgrade.yaml) for release creation
 2. Review the Changelog to verify your current version supports upgrading to the target version
 
+The DeployEx dashboard serves digested assets, as it recommends for [Phoenix applications](#phoenix-applications), and follows the same two rules.
+DeployEx always forces `config_change/3` on itself during a self-upgrade, so the dashboard links to the new files as soon as the upgrade is installed, with nothing to set.
+The hot-upgrade workflow builds the current and the target version in the same checkout, so its release file ships the digested files of both and a dashboard page that was already open keeps working.
+A release file built from a clean checkout has only its own, so use the one that workflow produces for a hot upgrade.
+
 Then choose one of the following methods:
 
 ### Method 1: Installer Script

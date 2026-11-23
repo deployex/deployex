@@ -28,6 +28,9 @@ deployex_web-*.tar
 # Ignore assets that are produced by build tools.
 /priv/static/assets/
 
+# Ignore digested assets cache.
+/priv/static/cache_manifest.json
+
 # In case you use Node.js/npm, you want to ignore these.
 npm-debug.log
 /assets/node_modules/
@@ -38,3 +41,22 @@ npm-debug.log
 
 # Ignore appup files
 /rel/appups
+
+# Ignore digested files after release
+/priv/static/favicon-*
+/priv/static/robots-*
+/priv/static/*.txt.gz
+/priv/static/images/elixir-*
+!/priv/static/images/elixir-dark.ico
+!/priv/static/images/elixir-dark.png
+/priv/static/images/erlang-*
+!/priv/static/images/erlang-dark.ico
+/priv/static/images/gleam-*
+/priv/static/images/phoenix-*
+/priv/static/images/unknown-*
+/priv/static/images/linux-*
+/priv/static/images/gleam-*
+/priv/static/images/logo-*
+/priv/static/images/windows-*
+/priv/static/images/mac-*
+/priv/static/images/*.svg.gz
