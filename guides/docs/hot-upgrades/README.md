@@ -85,39 +85,36 @@ A version deployed before this field existed shows as `not set`.
 
 #### Phoenix applications
 
-A Phoenix application needs no code change to benefit from this, only the field in `current.json`.
-The `config_change/3` that `mix phx.new` generates calls `MyAppWeb.Endpoint.config_change/2`, and that function reloads the static manifest every time it is called (checked with Phoenix 1.8):
+**Static assets do not need this, as long as they are not digested.**
+The setup the guides recommend for a hot-upgraded Phoenix application leaves `cache_static_manifest` out of `config/prod.exs`, see [Local-Elixir](/guides/docs/local-elixir/README.md).
+Asset file names then stay the same from one release to the next, and a hot upgrade serves the new files under them as soon as it is installed, with nothing for the application to reload.
+A browser that revalidates the file gets the new one, since its `ETag` changed.
+This is also what keeps pages that are already open working: the file names they loaded still exist.
+
+What the callback is for in that setup is the pages that are already open.
+They keep the assets they loaded, and nothing tells them a new version is running:
+`Phoenix.LiveView.static_changed?/1` compares against the digest manifest, so without one it never reports a change, and a hot upgrade does not disconnect anyone for it to run anyway.
+Broadcast from the callback and let the LiveViews that subscribed decide what to show:
 
 ```elixir
 @impl true
-def config_change(changed, _new, removed) do
+def config_change(changed, new, removed) do
   MyAppWeb.Endpoint.config_change(changed, removed)
+
+  if Keyword.has_key?(changed ++ new, :deployex_config_change) do
+    Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", :hot_upgraded)
+  end
+
   :ok
 end
 ```
 
-That removes the main obstacle to hot-upgrading a release that changes `priv/static`, described in [Phoenix and LiveView pitfalls](https://github.com/deployex/beam-hotupgrades#phoenix-and-liveview-pitfalls).
-`phx.digest` output is cached in memory when the endpoint starts, so without the callback pages rendered after the upgrade keep linking to the old digested file names.
-With it, the next page rendered links to the new ones.
-
-Two things remain yours to handle:
-
- * **Pages that are already open keep the assets they loaded.** `Phoenix.LiveView.static_changed?/1` only reports a change when a LiveView connects, and a hot upgrade does not disconnect anyone. To tell open pages, broadcast from the callback and let the LiveViews that subscribed decide what to show:
-
-   ```elixir
-   @impl true
-   def config_change(changed, new, removed) do
-     MyAppWeb.Endpoint.config_change(changed, removed)
-
-     if Keyword.has_key?(changed ++ new, :deployex_config_change) do
-       Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", :hot_upgraded)
-     end
-
-     :ok
-   end
-   ```
-
- * **An open page may still request an old digested file.** It is only served if the new release contains it. `phx.digest` keeps the files of previous runs it finds in `priv/static`, and a build that starts from a clean checkout has none, so decide in the release pipeline whether to carry them over.
+**An application that keeps digested assets needs it for the manifest.**
+`phx.digest` output is cached in memory when the endpoint starts, so pages rendered after a hot upgrade keep linking to the old digested file names, see [Phoenix and LiveView pitfalls](https://github.com/deployex/beam-hotupgrades#phoenix-and-liveview-pitfalls).
+The `config_change/3` that `mix phx.new` generates calls `MyAppWeb.Endpoint.config_change/2`, and that function reloads the manifest every time it is called (checked with Phoenix 1.8), so with `hot_upgrade_config_change` set the next page rendered links to the new files.
+That fixes the manifest and nothing else.
+A page that is already open may still request an old digested file, and it is only served if the new release contains it: `phx.digest` keeps the files of previous runs it finds in `priv/static`, and a build that starts from a clean checkout has none.
+Stable file names avoid that problem, which is why they are the recommendation.
 
 ## The steps DeployEx runs over RPC on the running node
 
