@@ -36,8 +36,14 @@ defmodule DeployexWeb.Applications.VersionsTest do
     |> stub(:subscribe, fn -> :ok end)
     |> stub(:history_version_list, fn @name, [] ->
       [
-        version("1.4.2", :hot_upgrade, ~N[2026-10-28 12:14:00]),
-        version("1.4.1", :full_deployment, ~N[2026-10-25 09:02:00])
+        %{
+          version("1.4.2", :hot_upgrade, ~N[2026-10-28 12:14:00])
+          | hot_upgrade_config_change: true
+        },
+        # A record written by a version without the field
+        "1.4.1"
+        |> version(:full_deployment, ~N[2026-10-25 09:02:00])
+        |> Map.delete(:hot_upgrade_config_change)
       ]
     end)
     |> stub(:set_mode, fn @name, mode, version ->
@@ -71,6 +77,10 @@ defmodule DeployexWeb.Applications.VersionsTest do
     assert html =~ HostTime.format(~U[2026-10-28 12:14:00Z], "%Y-%m-%d %H:%M")
     assert html =~ "Deployed, host time #{HostTime.zone()}"
     assert html =~ "Hot upgrade"
+    # What each release asked for in current.json
+    assert html =~ "config_change"
+    assert [_asked] = Regex.scan(~r/>\s*requested\s*</, html)
+    assert [_unset] = Regex.scan(~r/>\s*not set\s*</, html)
     assert html =~ HostTime.format(~U[2026-10-25 09:02:00Z], "%Y-%m-%d %H:%M")
     assert [_current] = Regex.scan(~r/>current</, html)
     assert html =~ "This host keeps the releases of the last 2 versions."

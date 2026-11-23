@@ -267,7 +267,7 @@ defmodule Foundation.Yaml do
       :monitoring,
       :certificates,
       readiness: %Foundation.Yaml.Readiness{},
-      hot_upgrade_config_change: true
+      hot_upgrade_config_change: false
     ]
 
     @type t :: %__MODULE__{

@@ -1273,9 +1273,9 @@ defmodule Sentinel.Config.WatcherTest do
       test_pid = self()
       ref = make_ref()
 
-      # An application loaded by a version without the field reads as the default, true
+      # An application loaded by a version without the field reads as the default, false
       old_applications = [Map.delete(@default_application, :hot_upgrade_config_change)]
-      new_applications = [Map.merge(@default_application, %{hot_upgrade_config_change: false})]
+      new_applications = [Map.merge(@default_application, %{hot_upgrade_config_change: true})]
 
       with_mocks([
         {Upgradable, [],
@@ -1315,7 +1315,7 @@ defmodule Sentinel.Config.WatcherTest do
         assert changes.summary.applications.details["my_new_app"].status == :modified
 
         assert changes.summary.applications.details["my_new_app"].changes.hot_upgrade_config_change ==
-                 %{old: true, new: false, apply_strategy: :next_deploy}
+                 %{old: false, new: true, apply_strategy: :next_deploy}
 
         assert log =~ "Detected 1 change(s) in upgradable fields: [:applications]"
       end

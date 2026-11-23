@@ -229,6 +229,14 @@ defmodule Foundation.Common do
     ...> %Catalog.Config{mode: :automatic, manual_version: "v1"} = Common.cast_schema_fields(%{manual_version: "v1"}, %Catalog.Config{}, atoms: [:mode])
     ...> %Catalog.Config{mode: :automatic, manual_version: nil} = Common.cast_schema_fields(nil, %Catalog.Config{}, atoms: [:mode])
     ...> %Catalog.Config{mode: :automatic, manual_version: nil} = Common.cast_schema_fields(nil, %Catalog.Config{})
+
+  A `false` in the data is kept, it does not fall back to the default of the structure
+
+    iex> alias Foundation.Catalog
+    iex> alias Foundation.Common
+    ...> %Catalog.Version{hot_upgrade_config_change: false} = Common.cast_schema_fields(%{"hot_upgrade_config_change" => false}, %Catalog.Version{})
+    ...> %Catalog.Version{hot_upgrade_config_change: false} = Common.cast_schema_fields(%{hot_upgrade_config_change: false}, %Catalog.Version{})
+    ...> %Catalog.Version{hot_upgrade_config_change: nil} = Common.cast_schema_fields(%{}, %Catalog.Version{})
   """
   @spec cast_schema_fields(data :: map(), struct :: struct(), attrs :: Keyword.t()) :: struct()
   def cast_schema_fields(data, struct, attrs \\ [])
@@ -243,7 +251,12 @@ defmodule Foundation.Common do
 
     struct_keys
     |> Enum.reduce(struct, fn key, acc ->
-      value = Map.get(data, key) || Map.get(data, key |> to_string(), nil)
+      # A false value is a value, only a missing or nil one falls back to the string key
+      value =
+        case Map.get(data, key) do
+          nil -> Map.get(data, to_string(key))
+          value -> value
+        end
 
       value =
         if key in atoms and value != nil do
@@ -252,7 +265,7 @@ defmodule Foundation.Common do
           value
         end
 
-      if value, do: acc |> Map.put(key, value), else: acc
+      if is_nil(value), do: acc, else: Map.put(acc, key, value)
     end)
   end
 

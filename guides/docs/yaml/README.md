@@ -210,7 +210,7 @@ applications:
     # Deployment Configuration (optional with defaults)
     deploy_rollback_timeout_ms: 600000 # Max deployment time before rollback, and max time for hot upgrade pre-commands to start and to run (default: 600000)
     deploy_schedule_interval_ms: 5000  # Check for new deployments interval (default: 5000)
-    hot_upgrade_config_change: true    # Call config_change/3 on the application after every hot upgrade (default: true)
+    hot_upgrade_config_change: false   # Call config_change/3 after a hot upgrade when current.json does not say (default: false)
 
     # Readiness Configuration (optional with defaults)
     readiness:
@@ -375,7 +375,7 @@ If the secret is missing when the `auth` section is applied, DeployEx logs a war
 - `replicas` - Number of application instances
 - `deploy_rollback_timeout_ms` - Deployment rollback timeout. A hot upgrade also gives its pre-commands this long to start, and this long to run once they start
 - `deploy_schedule_interval_ms` - Deployment check interval
-- `hot_upgrade_config_change` - Whether a hot upgrade sets `:deployex_config_change` in the application environment, so that `config_change/3` runs even when no configuration changed. Applied on the next hot upgrade. See [Telling the application that it was hot-upgraded](/guides/docs/hot-upgrades/README.md#telling-the-application-that-it-was-hot-upgraded)
+- `hot_upgrade_config_change` - Whether a hot upgrade makes `config_change/3` run on the application even when no configuration changed, for a release whose `current.json` does not say. A release that sets the key of the same name in `current.json` decides for itself. Applied on the next hot upgrade. See [Telling the application that it was hot-upgraded](/guides/docs/hot-upgrades/README.md#telling-the-application-that-it-was-hot-upgraded)
 - `replica_ports` - Port configuration for replicas
 - `env` - Environment variables
 - `readiness` - When a started application counts as ready, which is when the previous version stops. Applied on the next deployment. See [Application Readiness](#application-readiness)

@@ -59,7 +59,7 @@ defmodule Deployer.Status do
             replicas: 0,
             deploy_rollback_timeout_ms: 0,
             deploy_schedule_interval_ms: 0,
-            hot_upgrade_config_change: true,
+            hot_upgrade_config_change: false,
             otp: :not_connected,
             tls: nil,
             last_deployment: :full_deployment,

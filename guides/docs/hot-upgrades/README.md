@@ -24,7 +24,7 @@ What that means in practice:
 
  * **Changed or removed keys are applied.** The environment is deleted and rebuilt, not merged, so a key you delete in the new version is really gone after the upgrade.
  * **A changed `runtime.exs` is applied.** DeployEx reads the new version's file, which `unpack_release/1` has already written to disk, so the values the application ends up with are the ones the new file resolves. The one condition is that it runs on the node as it is now: it is evaluated by the code the running node has loaded, so it must not rely on modules, functions or language features that only arrive with the new release. A `runtime.exs` that reads environment variables, files or secrets is fine. One that calls into a module the new version introduces is not, and that is the case to deploy fully.
- * **`config_change/3` runs on every hot upgrade.** OTP only calls it for an application whose environment changed, so DeployEx sets one key of its own, see [Telling the application that it was hot-upgraded](#telling-the-application-that-it-was-hot-upgraded).
+ * **`config_change/3` can be made to run on every hot upgrade.** OTP only calls it for an application whose environment changed, so a release can ask DeployEx to set one key of its own, see [Telling the application that it was hot-upgraded](#telling-the-application-that-it-was-hot-upgraded).
  * **A changed Config Provider is NOT applied.** Provider modules run on the node in its current version, before the new code is installed, so the old implementation is what resolves the configuration. A fix to a provider only takes effect once a full deployment has made it the running version.
 
 ### Telling the application that it was hot-upgraded
@@ -33,7 +33,8 @@ A hot upgrade replaces code without restarting anything, so nothing in the appli
 OTP has a callback for this, `config_change/3` on the application callback module, but `release_handler` only calls it for an application whose environment is different after the upgrade.
 A release that changes code and no configuration never triggers it.
 
-DeployEx therefore sets one key in the environment of the monitored application, as part of the configuration its relup hook applies:
+A release can ask DeployEx to trigger it.
+DeployEx then sets one key in the environment of the monitored application, as part of the configuration its relup hook applies:
 
 ```elixir
 deployex_config_change: "1.1.0"   # the version being installed
@@ -51,15 +52,40 @@ def config_change(changed, new, removed) do
 end
 ```
 
+#### Turning it on
+
+It is off unless something asks for it, since it runs application code during the upgrade.
+
+The release asks for it in `current.json`, next to its version:
+
+```json
+{
+  "version": "1.1.0",
+  "hash": "9cad9cd3581c69fdd02ff60765e1c7dd4599d84a",
+  "pre_commands": [],
+  "hot_upgrade_config_change": true
+}
+```
+
+ * `true` sets the key for this release, `false` does not, whatever the host is configured with.
+ * A release that leaves the field out follows `hot_upgrade_config_change` of the application in the [YAML configuration](/guides/docs/yaml/README.md), which is `false` by default. Set it to `true` there to turn it on for every release that does not say.
+ * Anything other than `true` or `false` reads as the field being left out.
+
+What each release asked for is stored with the version it deployed.
+The Versions page of the application shows it in the `config_change` column as `requested`, `declined` or `not set`, and `GET /v1/apps/:name/versions` of the [Agent API](/guides/docs/agent-api/README.md) returns it as `hot_upgrade_config_change`, `null` when the release did not say.
+A version deployed before this field existed shows as `not set`.
+
+#### What to expect from it
+
  * The key is added to every application of the release that a `jellyfish.json` describes as `type: "project"`, which covers each application of an umbrella. A release without those files gets it on the application named after it.
  * Only an application that the running node has loaded gets the key. One that the new release adds has no environment to compare yet, and starts with the new code anyway.
  * The key is also set for Erlang and Gleam applications, as a binary.
  * It is only set by a hot upgrade. After a full deployment the key is absent until the next hot upgrade.
- * It is on by default. Set `hot_upgrade_config_change: false` on the application in the [YAML configuration](/guides/docs/yaml/README.md) to turn it off, for instance when the callback does work that should only follow a real configuration change.
+ * A callback that fails does not fail the upgrade. One that raises, exits or returns an error leaves the release installed and made permanent, and OTP does not log it, so have the callback report its own failures.
 
 #### Phoenix applications
 
-A Phoenix application needs no change to benefit from this.
+A Phoenix application needs no code change to benefit from this, only the field in `current.json`.
 The `config_change/3` that `mix phx.new` generates calls `MyAppWeb.Endpoint.config_change/2`, and that function reloads the static manifest every time it is called (checked with Phoenix 1.8):
 
 ```elixir

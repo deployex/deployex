@@ -136,7 +136,7 @@ defmodule Deployer.Status.Application do
           deploy_rollback_timeout_ms: deploy_rollback_timeout_ms,
           deploy_schedule_interval_ms: deploy_schedule_interval_ms,
           # An application loaded by a version without the field reads as the default
-          hot_upgrade_config_change: Map.get(application, :hot_upgrade_config_change, true),
+          hot_upgrade_config_change: Map.get(application, :hot_upgrade_config_change, false),
           status: :running,
           config: current_config,
           children: children,
@@ -199,6 +199,8 @@ defmodule Deployer.Status.Application do
       version: release.version,
       hash: release.hash,
       pre_commands: release.pre_commands,
+      # A release map built by a version without the field
+      hot_upgrade_config_change: Map.get(release, :hot_upgrade_config_change),
       sname: sname,
       name: name,
       deployment: Keyword.get(attrs, :deployment),

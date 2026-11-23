@@ -62,11 +62,12 @@ defmodule Deployer.HotUpgrade.Application do
        written to disk. It is evaluated by the code the running node has loaded, so it must not
        depend on modules or language features that only arrive with the new release.
 
-     * `config_change/3` is called even when no configuration changed. `release_handler` only
-       calls it for an application whose environment differs after the relup has run, so the
-       hook also sets `:deployex_config_change` to the version being installed (see
-       `add_config_change_marker/2`). It is the one place a monitored application can react to
-       having been hot upgraded, for instance to reload what it cached at boot.
+     * `config_change/3` can be called even when no configuration changed. `release_handler`
+       only calls it for an application whose environment differs after the relup has run, so
+       for a release that asks for it the hook also sets `:deployex_config_change` to the
+       version being installed (see `add_config_change_marker/2`). It is the one place a
+       monitored application can react to having been hot upgraded, for instance to reload
+       what it cached at boot.
 
      * A changed Config Provider is NOT picked up. The provider modules execute over RPC on the
        running node, which is still on the old version - `install_release/2` has not run yet.
@@ -989,8 +990,9 @@ defmodule Deployer.HotUpgrade.Application do
   loaded on the node: the atoms are taken from `application:loaded_applications/0` there, so
   none is created from a name read in a file.
 
-  Nothing is added unless `config_change` is set on the upgrade data, which the engine takes
-  from `hot_upgrade_config_change` in the YAML configuration of the application.
+  Nothing is added unless `config_change` is set on the upgrade data. The engine takes it from
+  `hot_upgrade_config_change` in the `current.json` of the release, and from the key of the
+  same name in the YAML configuration of the application when the release does not say.
   """
   @spec add_config_change_marker(Execute.t(), runtime_config()) :: runtime_config()
   def add_config_change_marker(%Execute{name: name} = data, runtime_config)

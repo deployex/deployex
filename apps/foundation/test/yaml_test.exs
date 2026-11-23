@@ -1033,27 +1033,27 @@ defmodule Foundation.YamlTest do
   end
 
   describe "hot_upgrade_config_change" do
-    test "defaults to true when the key is absent or empty" do
+    test "defaults to false when the key is absent or empty" do
       for path <- [@yaml_aws_default, application_yaml("hot_upgrade_config_change:")] do
         with_mocks([
           {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
         ]) do
           {:ok, %{applications: [app | _rest]}} = Yaml.load()
 
-          assert app.hot_upgrade_config_change == true
+          assert app.hot_upgrade_config_change == false
         end
       end
     end
 
-    test "parses false" do
-      path = application_yaml("hot_upgrade_config_change: false")
+    test "parses true" do
+      path = application_yaml("hot_upgrade_config_change: true")
 
       with_mocks([
         {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
       ]) do
         {:ok, %{applications: [app | _rest]}} = Yaml.load()
 
-        assert app.hot_upgrade_config_change == false
+        assert app.hot_upgrade_config_change == true
       end
     end
 

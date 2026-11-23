@@ -450,12 +450,12 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
 
     assert line ==
              "2 replicas · rollback timeout 10 minutes · checks every 5 seconds · " <>
-               "config_change on hot upgrade · automatic"
+               "config_change on hot upgrade when the release asks · automatic"
 
-    off = %{status | hot_upgrade_config_change: false}
+    on = %{status | hot_upgrade_config_change: true}
 
-    assert [%{config_line: line}] = View.apps([off], %{}, @now)
-    assert line =~ "checks every 5 seconds · no config_change on hot upgrade · automatic"
+    assert [%{config_line: line}] = View.apps([on], %{}, @now)
+    assert line =~ "checks every 5 seconds · config_change on hot upgrade · automatic"
 
     assert certificate == %{
              domains: "myapp.com, www.myapp.com",

@@ -474,11 +474,12 @@ defmodule DeployexWeb.ApplicationsLive.View do
     |> Enum.join(" · ")
   end
 
-  # A status built by a version without the field reads as the default
+  # The default for a release that does not say in current.json. A status built by a version
+  # without the field reads as off
   defp config_change(status) do
-    if Map.get(status, :hot_upgrade_config_change, true),
+    if Map.get(status, :hot_upgrade_config_change, false),
       do: "config_change on hot upgrade",
-      else: "no config_change on hot upgrade"
+      else: "config_change on hot upgrade when the release asks"
   end
 
   defp mode(%{mode: :manual, manual_version: %{version: version}}),

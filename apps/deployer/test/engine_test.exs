@@ -1675,13 +1675,15 @@ defmodule Deployer.EngineTest do
         end
       end)
       |> expect(:update, 1, fn _sname -> :ok end)
-      |> expect(:set_current_version_map, 2, fn _sname, _release, _attrs ->
+      |> expect(:set_current_version_map, 2, fn _sname, release, _attrs ->
         # 0 -> 1.0.0
         # 1 -> 2.0.0
         called = Process.get("set_current_version_map", 0)
         Process.put("set_current_version_map", called + 1)
 
         if called > 0 do
+          # What the release asked for is what the version record is given to store
+          send(pid, {:stored_config_change, release.hot_upgrade_config_change})
           send(pid, {:handle_ref_event, ref})
         end
 
@@ -1706,7 +1708,12 @@ defmodule Deployer.EngineTest do
         Process.put("download_version_map", called + 1)
 
         if called > 0 do
-          %{version: to_version, hash: "local", pre_commands: ["eval Migrate.run"]}
+          %{
+            version: to_version,
+            hash: "local",
+            pre_commands: ["eval Migrate.run"],
+            hot_upgrade_config_change: true
+          }
         else
           %{version: from_version, hash: "local", pre_commands: []}
         end
@@ -1724,7 +1731,7 @@ defmodule Deployer.EngineTest do
                               } = check ->
         {:ok, %{check | deploy: :hot_upgrade}}
       end)
-      # hot_upgrade_config_change defaults to true
+      # The release asks for it in current.json, the application configuration is off by default
       |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{
                                   from_version: ^from_version,
                                   to_version: ^to_version,
@@ -1744,6 +1751,7 @@ defmodule Deployer.EngineTest do
                  })
 
         assert_receive {:handle_ref_event, ^ref}, 1_000
+        assert_receive {:stored_config_change, true}
       end
     end
 
@@ -1784,7 +1792,13 @@ defmodule Deployer.EngineTest do
 
       Deployer.ReleaseMock
       |> stub(:download_version_map, fn _app_name ->
-        %{version: to_version, hash: "local", pre_commands: ["eval Migrate.run"]}
+        # The release declines config_change, which wins over the application configuration
+        %{
+          version: to_version,
+          hash: "local",
+          pre_commands: ["eval Migrate.run"],
+          hot_upgrade_config_change: false
+        }
       end)
       |> stub(:download_release, fn _app_name, ^to_version, _download_path ->
         :ok
@@ -1815,7 +1829,7 @@ defmodule Deployer.EngineTest do
                             deploy_schedule_interval_ms: 200,
                             name: name,
                             language: language,
-                            hot_upgrade_config_change: false
+                            hot_upgrade_config_change: true
                           })
 
                  assert_receive {:handle_ref_event, ^ref}, 1_000
@@ -1864,7 +1878,11 @@ defmodule Deployer.EngineTest do
       end)
       # the release claimed it could hot upgrade and then failed before install_release,
       # so the node is still running from_version and there is nothing to recover from
-      |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{to_version: ^to_version} ->
+      # The release does not say, so the application configuration decides
+      |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{
+                                  to_version: ^to_version,
+                                  config_change: true
+                                } ->
         {:error, {:not_installed, :make_relup}}
       end)
 
@@ -1882,7 +1900,8 @@ defmodule Deployer.EngineTest do
                        deploy_rollback_timeout_ms: 1_000,
                        deploy_schedule_interval_ms: 100,
                        name: name,
-                       language: language
+                       language: language,
+                       hot_upgrade_config_change: true
                      })
 
             assert_receive {:handle_ref_event, ^ref}, 1_000
@@ -3857,7 +3876,13 @@ defmodule Deployer.EngineTest do
       Deployer.HotUpgradeMock
       |> stub(:prepare_new_path, fn _name, _language, _to_version, _new_path -> :ok end)
       |> expect(:check, 1, fn check -> {:ok, %{check | deploy: :hot_upgrade}} end)
-      |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{to_version: ^to_version} -> :ok end)
+      # Neither the release nor the application configuration asks for config_change
+      |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{
+                                  to_version: ^to_version,
+                                  config_change: false
+                                } ->
+        :ok
+      end)
 
       subscribe_to_deployment_complete()
 
@@ -4584,12 +4609,12 @@ defmodule Deployer.EngineTest do
         Engine.Worker.updated_state_values(name, %{env: ["any=abc"]})
         assert %Deployer.Engine.Worker{env: ["any=abc"]} = :sys.get_state(module_name)
 
-        assert %Deployer.Engine.Worker{hot_upgrade_config_change: true} =
+        assert %Deployer.Engine.Worker{hot_upgrade_config_change: false} =
                  :sys.get_state(module_name)
 
-        Engine.Worker.updated_state_values(name, %{hot_upgrade_config_change: false})
+        Engine.Worker.updated_state_values(name, %{hot_upgrade_config_change: true})
 
-        assert %Deployer.Engine.Worker{hot_upgrade_config_change: false} =
+        assert %Deployer.Engine.Worker{hot_upgrade_config_change: true} =
                  :sys.get_state(module_name)
       end
     end
