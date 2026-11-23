@@ -362,18 +362,23 @@ For an application they are the names of the environment variables it reads, suc
 
 These are the variable names the 1Password tools use, and they are read from the environment of DeployEx.
 They cannot come from the secrets adapter, which is what they give access to.
-On a host installed with `deployex.sh`, a systemd drop-in that only root can read keeps them out of the unit file the installer rewrites:
+On a host installed with `deployex.sh`, give them to the service with a systemd drop-in that points to a file only root can read:
 
 ```bash
 sudo install -d -m 0700 /etc/systemd/system/deployex.service.d
-sudo install -m 0600 /dev/null /etc/systemd/system/deployex.service.d/onepassword.conf
-sudoedit /etc/systemd/system/deployex.service.d/onepassword.conf
-# [Service]
-# Environment=OP_CONNECT_HOST=http://connect.internal:8080
-# Environment=OP_CONNECT_TOKEN=...
+sudo install -m 0600 /dev/null /etc/systemd/system/deployex.service.d/onepassword.env
+sudoedit /etc/systemd/system/deployex.service.d/onepassword.env
+# OP_CONNECT_HOST=http://connect.internal:8080
+# OP_CONNECT_TOKEN=...
+printf '[Service]\nEnvironmentFile=/etc/systemd/system/deployex.service.d/onepassword.env\n' |
+  sudo tee /etc/systemd/system/deployex.service.d/onepassword.conf
 sudo systemctl daemon-reload
 sudo systemctl restart deployex.service
 ```
+
+- **Use `EnvironmentFile=`, not `Environment=`.** systemd shows the `Environment=` lines of a unit to every user of the host, with `systemctl show`, whatever the mode of the file they are written in. Of an `EnvironmentFile=` it shows only the path.
+- **`deployex.sh --install` and `--update` keep the drop-in**, they only rewrite the unit file. `--uninstall` removes the whole `deployex.service.d` directory, the credentials with it.
+- **`deployex.sh` warns when they are missing.** On `--install` and `--update`, when the YAML uses a 1Password adapter and the service is not given the variables that adapter needs, or `op` is not installed for `1password-cli`, it prints a warning before it starts the service. It reads the names of the variables, never their values.
 
 A monitored application starts as a child of DeployEx, so DeployEx removes these three variables from the environment of every application it starts.
 An application that needs 1Password credentials of its own gets them as fields of its item.
