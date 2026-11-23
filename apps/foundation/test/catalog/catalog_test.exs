@@ -57,7 +57,7 @@ defmodule Foundation.CatalogTest do
     end
 
     test "a version that is not a plain file name is neither written nor read", %{name: name} do
-      for version <- ["../../etc/passwd", "1.0.0/..", "..", "", "1.0 0", nil] do
+      for version <- ["../../etc/passwd", "1.0.0/..", "..", "", "1.0 0", "1.1.0\n", nil] do
         assert Catalog.add_relup(name, relup("1.0.0", version)) == {:error, :invalid_relup_name}
         assert Catalog.add_relup(name, relup(version, "1.1.0")) == {:error, :invalid_relup_name}
         assert Catalog.relup(name, "1.0.0", version) == nil
@@ -65,6 +65,30 @@ defmodule Foundation.CatalogTest do
       end
 
       assert Catalog.relup("../#{name}", "1.0.0", "1.1.0") == nil
+    end
+
+    test "a kept file that cannot be read back reads as no relup", %{name: name} do
+      assert :ok = Catalog.add_relup(name, relup("1.0.0", "1.1.0"))
+
+      path =
+        Path.join([
+          Application.fetch_env!(:foundation, :var_path),
+          "storage",
+          name,
+          "deployex",
+          "relup",
+          "1.0.0_to_1.1.0.relup"
+        ])
+
+      # What a write that was cut short leaves
+      File.write!(path, "not a term")
+
+      assert Catalog.relup(name, "1.0.0", "1.1.0") == nil
+
+      # Nothing but the relups is left in the directory, a write goes through a file of its own
+      assert :ok = Catalog.add_relup(name, relup("1.0.0", "1.1.0"))
+      assert File.ls!(Path.dirname(path)) == ["1.0.0_to_1.1.0.relup"]
+      assert Catalog.relup(name, "1.0.0", "1.1.0") == relup("1.0.0", "1.1.0")
     end
 
     test "add_relup/2 keeps the newest 20 relups of an application", %{name: name} do

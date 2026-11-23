@@ -67,14 +67,12 @@ defmodule Deployer.HotUpgrade.Relup do
            }) do
       :ok
     else
-      reason ->
-        Logger.warning(
-          "Could not keep the relup of #{name} #{from_version} -> #{to_version}, " <>
-            "reason: #{inspect(reason)}"
-        )
-
-        :ok
+      reason -> not_kept(name, from_version, to_version, reason)
     end
+  rescue
+    # This runs in the middle of an upgrade, which a record of it must never stop
+    error ->
+      not_kept(name, to_string(data.from_version), to_string(data.to_version), error)
   end
 
   def save(_data), do: :ok
@@ -129,6 +127,15 @@ defmodule Deployer.HotUpgrade.Relup do
   ### ==========================================================================
   ### Private functions
   ### ==========================================================================
+
+  defp not_kept(name, from_version, to_version, reason) do
+    Logger.warning(
+      "Could not keep the relup of #{name} #{from_version} -> #{to_version}, " <>
+        "reason: #{inspect(reason)}"
+    )
+
+    :ok
+  end
 
   defp count({:load_object_code, {app, vsn, modules}}, acc) do
     %{

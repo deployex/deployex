@@ -125,6 +125,17 @@ defmodule Deployer.HotUpgrade.RelupTest do
 
     assert Catalog.relup(name, "0.1.0", "0.2.0") == nil
 
+    # An instruction that is not shaped as the summary expects raises while it is counted
+    write_relup!(
+      relup_path,
+      {~c"0.2.0", [{~c"0.1.0", [], [{:code_change, :up, [:not_a_tuple]}]}], []}
+    )
+
+    assert capture_log(fn -> assert :ok = Relup.save(data) end) =~
+             "Could not keep the relup of myelixir 0.1.0 -> 0.2.0"
+
+    assert Catalog.relup(name, "0.1.0", "0.2.0") == nil
+
     # Upgrade data without the application or its path has nothing to read
     assert :ok = Relup.save(%Execute{})
   end

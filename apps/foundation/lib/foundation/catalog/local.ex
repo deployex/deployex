@@ -320,9 +320,12 @@ defmodule Foundation.Catalog.Local do
 
   @impl true
   def add_relup(name, %{from_version: from_version, to_version: to_version} = relup) do
+    # Written beside the file and then renamed, so a write that is cut short never leaves
+    # half a relup under the name that is read
     with {:ok, file} <- relup_file(name, from_version, to_version),
          :ok <- File.mkdir_p(Path.dirname(file)),
-         :ok <- File.write(file, :erlang.term_to_binary(relup)) do
+         :ok <- File.write("#{file}.tmp", :erlang.term_to_binary(relup)),
+         :ok <- File.rename("#{file}.tmp", file) do
       prune_relups(name)
     end
   end
@@ -335,6 +338,10 @@ defmodule Foundation.Catalog.Local do
     else
       _no_relup -> nil
     end
+  rescue
+    # A file that is not a term, which reads as no relup rather than failing the page or the
+    # request that asked for it
+    ArgumentError -> nil
   end
 
   # The versions end up in a file name, and reach here from a request too
@@ -348,7 +355,8 @@ defmodule Foundation.Catalog.Local do
 
   defp file_name_part?(value) when is_binary(value),
     do:
-      Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9._+-]*$/, value) and not String.contains?(value, "..")
+      Regex.match?(~r/\A[A-Za-z0-9][A-Za-z0-9._+-]*\z/, value) and
+        not String.contains?(value, "..")
 
   defp file_name_part?(_value), do: false
 
