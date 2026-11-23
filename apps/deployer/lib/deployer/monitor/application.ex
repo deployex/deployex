@@ -397,10 +397,16 @@ defmodule Deployer.Monitor.Application do
   @refresh_secrets_call_timeout 120_000
 
   @impl true
-  def refresh_secrets(sname) do
+  def refresh_secrets(sname), do: refresh_secrets(sname, @refresh_secrets_call_timeout)
+
+  @doc """
+  `refresh_secrets/1` with the time the monitor is given to answer, which a test shortens.
+  """
+  @spec refresh_secrets(String.t(), timeout()) :: :ok | {:error, any()}
+  def refresh_secrets(sname, timeout) do
     sname
     |> String.to_existing_atom()
-    |> GenServer.call(:refresh_secrets, @refresh_secrets_call_timeout)
+    |> GenServer.call(:refresh_secrets, timeout)
   rescue
     # No monitor was ever started under that name
     ArgumentError -> {:error, {:secrets, :monitor_not_answering}}

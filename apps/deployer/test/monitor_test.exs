@@ -2468,7 +2468,7 @@ defmodule Deployer.MonitorTest do
     end
 
     @tag :capture_log
-    test "refresh_secrets/1 waits for a secret store that takes longer than a default call",
+    test "refresh_secrets/2 gives the monitor the time it is told, not that of a default call",
          context do
       test_pid = self()
       start_with_secrets(context, [{"DATABASE_URL", @secret_value}])
@@ -2478,11 +2478,16 @@ defmodule Deployer.MonitorTest do
 
       Foundation.ConfigProvider.SecretsMock
       |> stub(:application_env, fn _path ->
-        Process.sleep(5_500)
+        Process.sleep(300)
         {:ok, now}
       end)
 
-      # The caller gets the answer, it does not go on while the node is still being updated
+      # Too little time for this read: the caller is told, it does not take it for done.
+      # A default call would have waited and answered :ok
+      assert MonitorApp.refresh_secrets(context.elixir_sname, 50) ==
+               {:error, {:secrets, :monitor_not_answering}}
+
+      # The time refresh_secrets/1 gives is far more than a secret store takes
       assert :ok = MonitorApp.refresh_secrets(context.elixir_sname)
       assert_received {:put_env, ^now}
 
