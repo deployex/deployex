@@ -6,6 +6,7 @@ defmodule DeployexWeb.AgentApi.Apps do
   pre_commands are never included.
   """
 
+  alias Deployer.HotUpgrade.Relup
   alias Deployer.Status
   alias Foundation.Catalog
 
@@ -81,6 +82,12 @@ defmodule DeployexWeb.AgentApi.Apps do
                    %{name: application, version: version}
                  end)
            },
+           # The steps the node ran, in order, each with what it means. A relup kept before
+           # the steps were has none
+           steps:
+             Enum.map(Map.get(relup, :steps, []), fn step ->
+               step |> Map.delete(:key) |> Map.put(:meaning, Relup.explain(step))
+             end),
            relup: relup.text
          }}
     end

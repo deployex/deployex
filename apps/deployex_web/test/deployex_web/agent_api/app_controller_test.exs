@@ -157,6 +157,11 @@ defmodule DeployexWeb.AgentApi.AppControllerTest do
           restart_emulator: false,
           instructions: 7
         },
+        steps:
+          Deployer.HotUpgrade.Relup.steps([
+            :point_of_no_return,
+            {:load, {TestApp.Worker, :brutal_purge, :brutal_purge}}
+          ]),
         text: "{\"4.5.6\",[{\"4.5.5\",[],[point_of_no_return]}],[]}.\n",
         inserted_at: ~N[2026-11-23 10:00:00]
       }
@@ -193,8 +198,26 @@ defmodule DeployexWeb.AgentApi.AppControllerTest do
                  "restart_emulator" => false,
                  "instructions" => 7
                },
+               "steps" => [
+                 %{
+                   "instruction" => "point_of_no_return",
+                   "targets" => [],
+                   "first" => 1,
+                   "last" => 1,
+                   "meaning" => "Everything before this only prepared" <> _
+                 },
+                 %{
+                   "instruction" => "load",
+                   "targets" => ["TestApp.Worker"],
+                   "options" => ["brutal_purge", "brutal_purge"],
+                   "meaning" => "Makes the new version of the module the current one" <> _
+                 } = load
+               ],
                "relup" => "{\"4.5.6\"" <> _script
              } = conn |> get("/v1/apps/test_app/relups/4.5.5/4.5.6") |> json_response(200)
+
+      # The key that picks the description is not part of the answer
+      refute Map.has_key?(load, "key")
     end
 
     test "returns 404 for an upgrade that has no relup, or a version that is not one", %{

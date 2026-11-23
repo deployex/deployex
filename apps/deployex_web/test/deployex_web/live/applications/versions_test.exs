@@ -107,6 +107,18 @@ defmodule DeployexWeb.Applications.VersionsTest do
           restart_emulator: false,
           instructions: 31
         },
+        steps:
+          Deployer.HotUpgrade.Relup.steps([
+            {:apply, {:erl_eval, :exprs, [[{:atom, 0, :ok}], []]}},
+            {:load_object_code,
+             {:myphoenixapp, ~c"1.4.2", [Myphoenixapp.Worker, MyphoenixappWeb]}},
+            :point_of_no_return,
+            {:suspend, [Myphoenixapp.Worker]},
+            {:load, {Myphoenixapp.Worker, :brutal_purge, :soft_purge}},
+            {:load, {MyphoenixappWeb, :brutal_purge, :soft_purge}},
+            {:code_change, :up, [{Myphoenixapp.Worker, []}]},
+            {:resume, [Myphoenixapp.Worker]}
+          ]),
         text: "{\"1.4.2\",[{\"1.4.1\",[],[point_of_no_return]}],[]}.\n",
         inserted_at: ~N[2026-10-28 12:14:00]
       })
@@ -139,9 +151,37 @@ defmodule DeployexWeb.Applications.VersionsTest do
     assert html =~ "Applies the runtime configuration"
     assert html =~ "31 instructions in all"
     refute html =~ "Restarts the VM"
+
+    # The steps the node ran, in order, each with what it means
+    steps = view |> element("#relup-steps") |> render()
+
+    assert [_one, _two, _three, _four, _five, _six, _seven] = Regex.scan(~r/<li/, steps)
+    assert steps =~ "Added by DeployEx"
+    assert steps =~ "point_of_no_return"
+    assert steps =~ "From here on a failure cannot be undone"
+    assert steps =~ "Pauses the processes that run these modules"
+    # The load of each module is one step, with its purge options and what they mean
+    assert steps =~ "5–6"
+    assert steps =~ "Myphoenixapp.Worker, MyphoenixappWeb"
+    assert steps =~ "After it (soft_purge): the replaced code is purged once no process runs it"
+    assert steps =~ "Lets the paused processes run again"
+    assert steps |> :binary.match("suspend") < steps |> :binary.match("resume")
+
+    # The file itself is one click away, with a button that copies it
+    refute has_element?(view, "#relup-text")
+    html = view |> element("#relup-view-original") |> render_click()
+    assert html =~ "The relup as DeployEx installed it"
     assert view |> element("#relup-text") |> render() =~ "point_of_no_return"
+    assert has_element?(view, "#relup-copy")
+    refute has_element?(view, "#relup-steps")
+
+    assert view |> element("#relup-view-steps") |> render_click() =~ "Outcome"
 
     refute view |> element("#relup-close") |> render_click() =~ "Relup ·"
+
+    # The link of an open relup closes it too
+    assert view |> element(~s(button[phx-click="relup"])) |> render_click() =~ "Relup ·"
+    refute view |> element(~s(button[phx-click="relup"])) |> render_click() =~ "Relup ·"
   end
 
   @tag :capture_log

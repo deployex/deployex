@@ -14,12 +14,21 @@
     outline-offset: 2px;
 }
 
-.dx-app a.dx-link {
+.dx-app a.dx-link,
+.dx-app button.dx-link {
     color: var(--dx-primary-text);
 }
 
-.dx-app a.dx-link:hover {
+.dx-app a.dx-link:hover,
+.dx-app button.dx-link:hover {
     color: var(--dx-base-content);
+}
+
+/* A button that reads as a link, for an action that opens something in the page */
+.dx-app button.dx-link {
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
 }
 
 .dx-card {
