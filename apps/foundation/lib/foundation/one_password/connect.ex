@@ -57,15 +57,25 @@ defmodule Foundation.OnePassword.Connect do
 
   # The config provider runs before any application is started, and the monitor calls this
   # a few times a day at most, so the connection pool only lives for the call
+  #
+  # The pool has one name, and the monitors of two instances that start together read at the
+  # same time, so the second would fail to start it. They take turns, on this node only
   defp with_client(fun) do
     {:ok, _} = Application.ensure_all_started(:finch)
-    {:ok, sup} = Supervisor.start_link([{Finch, name: @finch}], strategy: :one_for_one)
 
-    try do
-      fun.()
-    after
-      Supervisor.stop(sup, :normal)
-    end
+    :global.trans(
+      {@finch, self()},
+      fn ->
+        {:ok, sup} = Supervisor.start_link([{Finch, name: @finch}], strategy: :one_for_one)
+
+        try do
+          fun.()
+        after
+          Supervisor.stop(sup, :normal)
+        end
+      end,
+      [node()]
+    )
   end
 
   # A vault is matched by name first, a name can look like an ID. The names are compared

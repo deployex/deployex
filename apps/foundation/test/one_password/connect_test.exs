@@ -220,4 +220,27 @@ defmodule Foundation.OnePassword.ConnectTest do
 
     refute_received {:request, _path, _headers}
   end
+
+  # The real pool and supervisor, against a port nothing listens on
+  test "fetch/1 can be called by several processes at the same time" do
+    previous = Map.new(~w(OP_CONNECT_HOST OP_CONNECT_TOKEN), &{&1, System.get_env(&1)})
+
+    on_exit(fn ->
+      Enum.each(previous, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
+    end)
+
+    System.put_env("OP_CONNECT_HOST", "http://127.0.0.1:1")
+    System.put_env("OP_CONNECT_TOKEN", "connect-token")
+
+    results =
+      1..20
+      |> Task.async_stream(fn _n -> Connect.fetch(@path) end, max_concurrency: 20)
+      |> Enum.to_list()
+
+    assert length(results) == 20
+    assert Enum.all?(results, &match?({:ok, {:error, {:request_failed, _reason}}}, &1))
+  end
 end

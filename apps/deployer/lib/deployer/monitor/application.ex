@@ -637,7 +637,9 @@ defmodule Deployer.Monitor.Application do
 
   # The secrets of the application, read again at every start, so a value changed in the
   # secret store reaches the application at its next restart. They are kept out of the state,
-  # which is mirrored in a table that other processes read
+  # which is mirrored in a table that other processes read. The process dictionary is read
+  # too, the process page of the dashboard prints it, so what is kept there is a function
+  # that returns them, which prints as a function
   @secret_env_key {__MODULE__, :secret_env}
 
   defp secret_env(state) do
@@ -648,7 +650,7 @@ defmodule Deployer.Monitor.Application do
       %{adapter: adapter, path: path} ->
         case adapter.application_env(path) do
           {:ok, env} ->
-            Process.put(@secret_env_key, env)
+            Process.put(@secret_env_key, fn -> env end)
             {:ok, env}
 
           {:error, reason} ->
@@ -663,13 +665,13 @@ defmodule Deployer.Monitor.Application do
       nil ->
         {:error, {:secrets, reason}}
 
-      env ->
+      kept when is_function(kept, 0) ->
         Logger.warning(
           "Could not read the secrets of sname: #{sname}, using the ones from its last " <>
             "start, reason: #{inspect(reason)}"
         )
 
-        {:ok, env}
+        {:ok, kept.()}
     end
   end
 

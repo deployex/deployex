@@ -2035,7 +2035,7 @@ defmodule Deployer.MonitorTest do
       |> stub(:run, fn _command, _options -> {:ok, test_pid} end)
       |> stub(:stop, fn _pid -> :ok end)
 
-      assert {:ok, _pid} = MonitorApp.start_service(secrets_service(context))
+      assert {:ok, monitor} = MonitorApp.start_service(secrets_service(context))
 
       assert_receive {:started, command, options}, 1_000
 
@@ -2055,6 +2055,12 @@ defmodule Deployer.MonitorTest do
       # that other processes read
       refute command =~ "top-secret-password"
       refute inspect(MonitorApp.state(context.elixir_sname)) =~ "top-secret-password"
+
+      # They are kept for the next restart in the process dictionary of the monitor, which
+      # the process page of the dashboard prints, so not as a term that prints its values
+      {:dictionary, dictionary} = Process.info(monitor, :dictionary)
+      assert Enum.any?(dictionary, &match?({{MonitorApp, :secret_env}, _kept}, &1))
+      refute inspect(dictionary, limit: :infinity) =~ "top-secret-password"
 
       assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
     end
