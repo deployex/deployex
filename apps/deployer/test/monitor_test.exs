@@ -2220,5 +2220,179 @@ defmodule Deployer.MonitorTest do
 
       assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
     end
+
+    # What the node of the application is told, in the order it is told
+    defp stub_node(test_pid, reply \\ :ok) do
+      Foundation.RpcMock
+      |> stub(:call, fn
+        _node, System, :put_env, [env], _timeout ->
+          send(test_pid, {:put_env, env})
+          reply
+
+        _node, System, :delete_env, [name], _timeout ->
+          send(test_pid, {:delete_env, name})
+          reply
+      end)
+    end
+
+    defp start_with_secrets(context, env) do
+      test_pid = self()
+      FixtureFiles.create_bin_files(context.elixir_sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn _sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path -> {:ok, env} end)
+
+      Host.CommanderMock
+      |> stub(:run_link, fn _command, _options ->
+        send(test_pid, :started)
+        {:ok, test_pid, 123_456}
+      end)
+      |> stub(:run, fn _command, _options -> {:ok, test_pid} end)
+      |> stub(:stop, fn _pid -> :ok end)
+
+      assert {:ok, monitor} = MonitorApp.start_service(secrets_service(context))
+      assert_receive :started, 1_000
+      monitor
+    end
+
+    @tag :capture_log
+    test "refresh_secrets/1 gives the running node the secrets as they are now", context do
+      test_pid = self()
+      start_with_secrets(context, [{"DATABASE_URL", @secret_value}, {"OLD_TOKEN", "old"}])
+      stub_node(test_pid)
+
+      # One value changed, one secret is new and one left the secret store
+      now = [{"DATABASE_URL", "ecto://user:rotated-password@db/app"}, {"NEW_TOKEN", "new"}]
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path -> {:ok, now} end)
+
+      assert :ok = MonitorApp.refresh_secrets(context.elixir_sname)
+
+      assert_received {:put_env, ^now}
+      assert_received {:delete_env, "OLD_TOKEN"}
+      refute_received {:delete_env, _name}
+
+      # Nothing left since the last refresh, so nothing is removed again
+      assert :ok = MonitorApp.refresh_secrets(context.elixir_sname)
+
+      assert_received {:put_env, ^now}
+      refute_received {:delete_env, _name}
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    @tag :capture_log
+    test "refresh_secrets/1 does nothing for an application without secrets", context do
+      test_pid = self()
+      FixtureFiles.create_bin_files(context.elixir_sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn _sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      Host.CommanderMock
+      |> stub(:run_link, fn _command, _options ->
+        send(test_pid, :started)
+        {:ok, test_pid, 123_456}
+      end)
+      |> stub(:run, fn _command, _options -> {:ok, test_pid} end)
+      |> stub(:stop, fn _pid -> :ok end)
+
+      # Neither the secret store nor the node is asked anything
+      Foundation.RpcMock
+      |> stub(:call, fn _node, _module, _function, _args, _timeout ->
+        flunk("no rpc call expected")
+      end)
+
+      assert {:ok, _pid} = MonitorApp.start_service(%{secrets_service(context) | secrets: nil})
+      assert_receive :started, 1_000
+
+      assert :ok = MonitorApp.refresh_secrets(context.elixir_sname)
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    test "refresh_secrets/1 keeps what the node has when the secrets cannot be read", context do
+      test_pid = self()
+      started_with = [{"DATABASE_URL", @secret_value}]
+      start_with_secrets(context, started_with)
+      stub_node(test_pid)
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path -> {:error, {:request_failed, :econnrefused}} end)
+
+      log =
+        capture_log(fn ->
+          assert :ok = MonitorApp.refresh_secrets(context.elixir_sname)
+        end)
+
+      # The ones from its start are what it is given again, and nothing is removed
+      assert_received {:put_env, ^started_with}
+      refute_received {:delete_env, _name}
+      assert log =~ "using the ones from its last start"
+      refute log =~ "top-secret-password"
+
+      capture_log(fn ->
+        assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+      end)
+    end
+
+    @tag :capture_log
+    test "refresh_secrets/1 returns an error when there are no secrets to give", context do
+      test_pid = self()
+
+      # No version is set, so the application never started and nothing was read
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn _sname ->
+        send(test_pid, :no_version)
+        %Catalog.Version{}
+      end)
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path -> {:error, {:http_status, 401, "/v1/vaults"}} end)
+
+      assert {:ok, _pid} = MonitorApp.start_service(secrets_service(context))
+      assert_receive :no_version, 1_000
+
+      assert MonitorApp.refresh_secrets(context.elixir_sname) ==
+               {:error, {:secrets, {:http_status, 401, "/v1/vaults"}}}
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    @tag :capture_log
+    test "refresh_secrets/1 does not return what a node that could not be updated answered",
+         context do
+      test_pid = self()
+      start_with_secrets(context, [{"DATABASE_URL", @secret_value}, {"OLD_TOKEN", "old"}])
+
+      now = [{"DATABASE_URL", "ecto://user:rotated-password@db/app"}]
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path -> {:ok, now} end)
+
+      # The answer of a failed call can hold its arguments
+      stub_node(test_pid, {:badrpc, {:EXIT, {:undef, [{System, :put_env, [now], []}]}}})
+
+      assert MonitorApp.refresh_secrets(context.elixir_sname) ==
+               {:error, {:secrets, :node_not_updated}}
+
+      assert_received {:put_env, ^now}
+      assert_received {:delete_env, "OLD_TOKEN"}
+
+      # The node still has what it was started with, so the secret that left is removed by
+      # the refresh that reaches it
+      stub_node(test_pid)
+
+      assert :ok = MonitorApp.refresh_secrets(context.elixir_sname)
+
+      assert_received {:put_env, ^now}
+      assert_received {:delete_env, "OLD_TOKEN"}
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
   end
 end

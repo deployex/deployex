@@ -10,6 +10,7 @@ defmodule Deployer.Monitor.Application do
   alias Deployer.Status
   alias Foundation.Catalog
   alias Foundation.Common
+  alias Foundation.Rpc
   alias Foundation.Yaml.Readiness
   alias Host.Commander
 
@@ -94,6 +95,10 @@ defmodule Deployer.Monitor.Application do
   # A worker of the previous version, during a relup, still calls and installs whatever the reply
   # says. The commands run here the old blocking way, and a failure stops the monitor and its app,
   # as the old MatchError did, so that hot upgrade fails instead of installing
+  def handle_call(:refresh_secrets, _from, state) do
+    {:reply, refresh_secrets_on_node(state), state}
+  end
+
   def handle_call({:run_pre_commands, pre_commands, app_bin_service}, _from, state) do
     case execute_pre_commands(state, pre_commands, app_bin_service) do
       :ok ->
@@ -387,6 +392,13 @@ defmodule Deployer.Monitor.Application do
   end
 
   @impl true
+  def refresh_secrets(sname) do
+    sname
+    |> String.to_existing_atom()
+    |> Common.call_gen_server(:refresh_secrets)
+  end
+
+  @impl true
   defdelegate start_service(service), to: Monitor.Supervisor
 
   @impl true
@@ -674,6 +686,54 @@ defmodule Deployer.Monitor.Application do
         {:ok, kept.()}
     end
   end
+
+  @refresh_secrets_timeout 15_000
+
+  # An application without secrets has nothing to refresh
+  defp refresh_secrets_on_node(state) do
+    if Map.get(state, :secrets) do
+      # What the node was last given, read before secret_env/1 replaces it
+      previous = kept_secret_env()
+
+      with {:ok, env} <- secret_env(state),
+           :ok <- put_secret_env_on_node(state, env, previous || []) do
+        :ok
+      else
+        {:error, _reason} = error ->
+          # The node still has what it had, so that is what the next refresh compares with
+          keep_secret_env(previous)
+          error
+      end
+    else
+      :ok
+    end
+  end
+
+  # The environment of the running node is set from inside it. A secret that left the secret
+  # store is removed, so the new version does not read a value that no longer exists
+  defp put_secret_env_on_node(%{sname: sname}, env, previous) do
+    %{node: node} = Catalog.node_info(sname)
+    removed = for {name, _value} <- previous, not List.keymember?(env, name, 0), do: name
+
+    results =
+      [Rpc.call(node, System, :put_env, [env], @refresh_secrets_timeout)] ++
+        Enum.map(removed, &Rpc.call(node, System, :delete_env, [&1], @refresh_secrets_timeout))
+
+    # The result of a failed call can hold its arguments, which are the secrets
+    if Enum.all?(results, &(&1 == :ok)),
+      do: :ok,
+      else: {:error, {:secrets, :node_not_updated}}
+  end
+
+  defp kept_secret_env do
+    case Process.get(@secret_env_key) do
+      kept when is_function(kept, 0) -> kept.()
+      _nothing_kept -> nil
+    end
+  end
+
+  defp keep_secret_env(nil), do: Process.delete(@secret_env_key)
+  defp keep_secret_env(env), do: Process.put(@secret_env_key, fn -> env end)
 
   defp build_export_command([]), do: ""
 

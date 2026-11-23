@@ -386,7 +386,9 @@ An application that needs 1Password credentials of its own gets them as fields o
 ### What to expect for an application
 
 - **The secrets are read at every start**: a full deployment, a restart from the dashboard and a restart after a crash. A value changed in 1Password reaches the application at its next start.
-- **A hot upgrade does not read them again.** The application keeps running with the environment it was started with, so a secret that a new version needs has to be in the item before the instance last started, or the release has to be deployed fully.
+- **A hot upgrade reads them again.** The application keeps its OS process, so DeployEx puts the secrets in the environment of the running node before it resolves the configuration of the new version: a changed value and a new secret are set, and a secret that left the item is removed. What the new `runtime.exs` reads is then what the item holds now.
+- **A hot upgrade changes the configuration, not what already used it.** The application gets the keys that changed in `config_change/3`. A value read on each use is the new one from then on. A value a process took when it started, such as the password of a database pool, stays until that process restarts, which the application does from `config_change/3` or a restart from the dashboard does.
+- **A hot upgrade goes on when the secrets cannot be refreshed.** The node keeps the secrets it has and DeployEx logs a warning. A release that needs a secret the node does not have then fails to resolve its configuration and is not installed.
 - **An application is not started without its secrets.** When the item cannot be read at the first start of an instance, DeployEx logs why and tries again, as it does for a failing pre-command.
 - **A restart does not depend on 1Password being reachable.** When the item cannot be read at a later start, the instance starts with the secrets of its previous start and DeployEx logs a warning. They are kept in memory, and not across a restart of DeployEx.
 - **The pre-commands get the same secrets**, so a migration can reach the database.
