@@ -94,7 +94,7 @@ A hot upgrade restarts nothing, so everything the application worked out when it
 | What stays as it was | Why | What to do |
 |---|---|---|
 | The version the application reports | A value read at boot, such as an environment variable or `runtime.exs`, still holds the old one. `runtime.exs` is of no help either, it is evaluated before the new code is installed | Read `Application.spec(:my_app, :vsn)` when the callback runs. The value of `:deployex_config_change` is the same version |
-| The version on traces (OpenTelemetry) | The SDK reads its resource once, when it starts, and keeps it in the state of its processes | Replace the resource in those processes, or restart the `:opentelemetry` application, see [The version on traces and logs](#the-version-on-traces-and-logs) |
+| The version on traces (OpenTelemetry) | The SDK reads its resource once, when it starts, and keeps it in the state of its processes | Replace the resource in those processes, see [The version on traces and logs](#the-version-on-traces-and-logs) |
 | The version on log lines | Whatever copied the version into the logs at boot, a logger filter, the metadata or the formatter options, still holds the copy | Give it the new version, for a filter with `:logger.set_handler_config/3` |
 | The static asset manifest (Phoenix, digested assets) | The endpoint reads it when it starts | `MyAppWeb.Endpoint.config_change/2`, see [Phoenix applications](#phoenix-applications) |
 | Pages that are already open (Phoenix) | A hot upgrade disconnects no one | Broadcast, and let the pages that subscribed decide what to show |
@@ -127,15 +127,13 @@ def config_change(changed, new, removed) do
 end
 ```
 
-Work that does need the application controller, such as restarting an application, is handed to another process: a `spawn/1`, a `Task`, or a process the application supervises.
+Work that does need the application controller is handed to another process: a `spawn/1`, a `Task`, or a process the application supervises.
 
 #### The version on traces and logs
 
 The OpenTelemetry SDK builds its resource, which carries `service.version`, when it starts.
 It is not in a cache the application can write to: it is in the state of the SDK's own processes, the resource detector, the tracer provider and the span processor.
-There are two ways to give them the new version.
-
-**Replace the resource in place.**
+The resource is replaced there, in place.
 Nothing is restarted, so no span is lost, and it is quick enough to run in the callback:
 
 ```elixir
@@ -173,16 +171,8 @@ end
  * It reaches into the SDK: the names of its processes and the resource being a field of their state are not a public interface. They are the ones of `opentelemetry` 1.7 with the default tracer provider. Check the return value, and check again when the SDK is upgraded.
  * The specification says a resource does not change once its tracer provider exists. This changes it, which is what a hot upgrade asks for: the same provider now runs another version of the code.
 
-**Restart the SDK.**
-`Application.stop(:opentelemetry)` and `Application.ensure_all_started(:opentelemetry)`, after putting the new version in the `:opentelemetry` resource configuration.
-It only uses public functions, and it has to run in another process than the callback.
-
- * Spans that ended before the restart and were still buffered are exported while it stops, with the version of the code that made them.
- * A span that is open while the SDK restarts is not exported, so a request in flight at that moment loses its trace.
- * The instrumentation attached through `:telemetry` stays attached.
-
 **Then the logs.**
-Either way, whatever copied the version into the logs at boot still holds the copy, and leaving it leaves traces and logs on different versions.
+Whatever copied the version into the logs at boot still holds the copy, and leaving it leaves traces and logs on different versions.
 For a logger filter, the copy is in the configuration of the filter:
 
 ```elixir
@@ -196,7 +186,7 @@ For a logger filter, the copy is in the configuration of the filter:
 )
 ```
 
-Both ways were checked with `opentelemetry` 1.7 and `opentelemetry_api` 1.5, in a Phoenix application served by Bandit, with the batch and the simple span processor.
+This was checked with `opentelemetry` 1.7 and `opentelemetry_api` 1.5, in a Phoenix application served by Bandit, with the batch and the simple span processor.
 
 #### Phoenix applications
 
