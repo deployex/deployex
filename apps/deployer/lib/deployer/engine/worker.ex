@@ -38,6 +38,7 @@ defmodule Deployer.Engine.Worker do
           deploy_rollback_timeout_ms: non_neg_integer(),
           deploy_schedule_interval_ms: non_neg_integer(),
           readiness: Foundation.Yaml.Readiness.t(),
+          hot_upgrade_config_change: boolean(),
           pending_pre_commands: map() | nil
         }
 
@@ -54,6 +55,7 @@ defmodule Deployer.Engine.Worker do
             deploy_rollback_timeout_ms: 0,
             deploy_schedule_interval_ms: 0,
             readiness: %Foundation.Yaml.Readiness{},
+            hot_upgrade_config_change: true,
             pending_pre_commands: nil
 
   @dialyzer {:nowarn_function, initialize_version: 1}
@@ -85,6 +87,7 @@ defmodule Deployer.Engine.Worker do
       state
       |> Map.put_new(:pending_pre_commands, nil)
       |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
+      |> Map.put_new(:hot_upgrade_config_change, true)
 
     # Subscribe before reading, in this order. A change made in between then arrives as a
     # message instead of being lost in the gap. Reading here is also what makes a restarted
@@ -497,6 +500,7 @@ defmodule Deployer.Engine.Worker do
   - env
   - deploy_rollback_timeout_ms
   - deploy_schedule_interval_ms
+  - hot_upgrade_config_change
   - readiness
   - replica_ports
   - replicas
@@ -534,12 +538,13 @@ defmodule Deployer.Engine.Worker do
 
   defp schedule_new_deployment(timeout), do: Process.send_after(self(), :schedule, timeout)
 
-  # An older version built the state without pending_pre_commands or readiness, or deployments
-  # without a field
+  # An older version built the state without pending_pre_commands, readiness or
+  # hot_upgrade_config_change, or deployments without a field
   defp upgrade_state(state) do
     state
     |> Map.put_new(:pending_pre_commands, nil)
     |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
+    |> Map.put_new(:hot_upgrade_config_change, true)
     |> Map.update!(
       :deployments,
       &Map.new(&1, fn {i, deployment} -> {i, upgrade_deployment(deployment)} end)
@@ -1396,7 +1401,8 @@ defmodule Deployer.Engine.Worker do
           current_path: Catalog.current_path(sname),
           new_path: Catalog.new_path(sname),
           from_version: from_version,
-          to_version: release.version
+          to_version: release.version,
+          config_change: Map.get(state, :hot_upgrade_config_change, true)
         }
 
         case HotUpgrade.execute(upgrade_data) do

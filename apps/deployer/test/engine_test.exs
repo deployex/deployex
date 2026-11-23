@@ -1724,9 +1724,11 @@ defmodule Deployer.EngineTest do
                               } = check ->
         {:ok, %{check | deploy: :hot_upgrade}}
       end)
+      # hot_upgrade_config_change defaults to true
       |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{
                                   from_version: ^from_version,
-                                  to_version: ^to_version
+                                  to_version: ^to_version,
+                                  config_change: true
                                 } ->
         :ok
       end)
@@ -1798,7 +1800,8 @@ defmodule Deployer.EngineTest do
       end)
       |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{
                                   from_version: ^from_version,
-                                  to_version: ^to_version
+                                  to_version: ^to_version,
+                                  config_change: false
                                 } ->
         {:error, "any"}
       end)
@@ -1811,7 +1814,8 @@ defmodule Deployer.EngineTest do
                             deploy_rollback_timeout_ms: 1_000,
                             deploy_schedule_interval_ms: 200,
                             name: name,
-                            language: language
+                            language: language,
+                            hot_upgrade_config_change: false
                           })
 
                  assert_receive {:handle_ref_event, ^ref}, 1_000

@@ -1032,6 +1032,44 @@ defmodule Foundation.YamlTest do
     end
   end
 
+  describe "hot_upgrade_config_change" do
+    test "defaults to true when the key is absent or empty" do
+      for path <- [@yaml_aws_default, application_yaml("hot_upgrade_config_change:")] do
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+          assert app.hot_upgrade_config_change == true
+        end
+      end
+    end
+
+    test "parses false" do
+      path = application_yaml("hot_upgrade_config_change: false")
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.hot_upgrade_config_change == false
+      end
+    end
+
+    test "rejects a value that is not a boolean" do
+      path = application_yaml(~s(hot_upgrade_config_change: "no"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(hot_upgrade_config_change "no" not supported, expected true or false),
+                     fn -> Yaml.load() end
+      end
+    end
+  end
+
   describe "readiness" do
     test "defaults to otp when the section is absent" do
       with_mocks([
@@ -1149,6 +1187,28 @@ defmodule Foundation.YamlTest do
       |> String.replace(
         ~s(    language: "elixir"\n),
         ~s(    language: "#{language}"\n    readiness:\n      #{section}\n),
+        global: false
+      )
+
+    File.write!(path, content)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
+  # Adds one line to the first application of the default file
+  defp application_yaml(line) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "deployex-application-#{System.unique_integer([:positive])}.yaml"
+      )
+
+    content =
+      @yaml_aws_default
+      |> File.read!()
+      |> String.replace(
+        ~s(    language: "elixir"\n),
+        ~s(    language: "elixir"\n    #{line}\n),
         global: false
       )
 

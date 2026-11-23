@@ -6,6 +6,7 @@ defmodule Sentinel.Config.Changes do
   @type(apply_strategy :: :immediate, :next_deploy, :full_deploy)
   @type numeric_change :: %{old: number(), new: number(), apply_strategy: apply_strategy()}
   @type string_change :: %{old: String.t(), new: String.t(), apply_strategy: apply_strategy()}
+  @type boolean_change :: %{old: boolean(), new: boolean(), apply_strategy: apply_strategy()}
   @type list_change :: %{old: list(), new: list(), apply_strategy: apply_strategy()}
 
   @type cert_status ::
@@ -37,6 +38,7 @@ defmodule Sentinel.Config.Changes do
           optional(:replicas) => numeric_change(),
           optional(:deploy_rollback_timeout_ms) => numeric_change(),
           optional(:deploy_schedule_interval_ms) => numeric_change(),
+          optional(:hot_upgrade_config_change) => boolean_change(),
           optional(:replica_ports) => list_change(),
           optional(:env) => list_change(),
           optional(:readiness) => readiness_change(),
