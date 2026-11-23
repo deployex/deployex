@@ -431,7 +431,10 @@ On the Versions page of the application, a hot upgrade has a `relup` link that s
 `GET /v1/apps/:name/relups/:from_version/:to_version` of the [Agent API](/guides/docs/agent-api/README.md) returns the same, and each version in `/versions` and `/ghosted` has the `from_version` that goes in that path.
 The summary is the place to check that an appup edited by hand did what was meant, for instance that the `apply` restarting a child is there.
 
-The relups of DeployEx's own hot upgrades are kept the same way, on disk only: neither the dashboard nor the API shows them yet.
+The relups of DeployEx's own hot upgrades are kept the same way.
+DeployEx is not one of the monitored applications, so the Agent API has them under the node: `GET /v1/node/versions` lists the hot upgrades DeployEx applied to itself and `GET /v1/node/relups/:from_version/:to_version` returns the relup of one.
+The dashboard does not show them yet.
+The upgrade into the first version that keeps relups has none: it is run by the version that was installed, which did not keep them.
 
 ## Going back
 

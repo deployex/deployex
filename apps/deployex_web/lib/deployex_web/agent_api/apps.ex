@@ -42,27 +42,47 @@ defmodule DeployexWeb.AgentApi.Apps do
   @spec relup(name :: String.t(), from_version :: String.t(), to_version :: String.t()) ::
           {:ok, map()} | {:error, :not_found | :unavailable}
   def relup(name, from_version, to_version) do
-    with {:ok, _app} <- find(name) do
-      case Catalog.relup(name, from_version, to_version) do
-        nil ->
-          {:error, :not_found}
+    with {:ok, _app} <- find(name), do: kept_relup(name, from_version, to_version)
+  end
 
-        relup ->
-          {:ok,
-           %{
-             from_version: relup.from_version,
-             to_version: relup.to_version,
-             inserted_at: utc(relup.inserted_at),
-             summary: %{
-               relup.summary
-               | applications:
-                   Enum.map(relup.summary.applications, fn {application, version} ->
-                     %{name: application, version: version}
-                   end)
-             },
-             relup: relup.text
-           }}
-      end
+  @deployex "deployex"
+
+  @doc """
+  The version history of DeployEx itself, which is the hot upgrades it applied to itself. A
+  full installation of DeployEx is not recorded.
+  """
+  @spec deployex_versions() :: {:ok, [map()]}
+  def deployex_versions,
+    do: {:ok, @deployex |> Status.history_version_list([]) |> Enum.map(&version/1)}
+
+  @doc """
+  The relup DeployEx kept for a hot upgrade of itself between two versions.
+  """
+  @spec deployex_relup(from_version :: String.t(), to_version :: String.t()) ::
+          {:ok, map()} | {:error, :not_found}
+  def deployex_relup(from_version, to_version),
+    do: kept_relup(@deployex, from_version, to_version)
+
+  defp kept_relup(name, from_version, to_version) do
+    case Catalog.relup(name, from_version, to_version) do
+      nil ->
+        {:error, :not_found}
+
+      relup ->
+        {:ok,
+         %{
+           from_version: relup.from_version,
+           to_version: relup.to_version,
+           inserted_at: utc(relup.inserted_at),
+           summary: %{
+             relup.summary
+             | applications:
+                 Enum.map(relup.summary.applications, fn {application, version} ->
+                   %{name: application, version: version}
+                 end)
+           },
+           relup: relup.text
+         }}
     end
   end
 
