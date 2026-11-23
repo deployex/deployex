@@ -65,7 +65,7 @@ curl -H "Authorization: Bearer $TOKEN" http://10.0.1.12:5002/v1/apps/myphoenixap
 | `GET /v1/node` | DeployEx: the node, version, `started_at` (the start of its VM), OTP and Elixir versions. The host: the OS, `uptime_seconds`, CPU and memory |
 | `GET /v1/apps` | Every monitored app, as below |
 | `GET /v1/apps/:name` | One monitored app: its mode, its ghosted versions and its instances |
-| `GET /v1/apps/:name/versions` | The version history of the app |
+| `GET /v1/apps/:name/versions` | The version history of the app. Each version has `hot_upgrade_config_change`, what its release asked for in `current.json`: `true`, `false`, or `null` when it did not say |
 | `GET /v1/apps/:name/ghosted` | The ghosted versions of the app |
 | `GET /v1/apps/:name/logs` | The stdout or stderr lines of one instance of the app (see [Logs](#logs)) |
 

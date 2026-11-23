@@ -116,6 +116,8 @@ defmodule DeployexWeb.AgentApi.Apps do
       hash: version.hash,
       sname: version.sname,
       deployment: version.deployment,
+      # What the release asked for in current.json, null when it did not say
+      hot_upgrade_config_change: Map.get(version, :hot_upgrade_config_change),
       inserted_at: utc(version.inserted_at)
     }
   end

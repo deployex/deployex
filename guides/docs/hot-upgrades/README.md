@@ -24,7 +24,115 @@ What that means in practice:
 
  * **Changed or removed keys are applied.** The environment is deleted and rebuilt, not merged, so a key you delete in the new version is really gone after the upgrade.
  * **A changed `runtime.exs` is applied.** DeployEx reads the new version's file, which `unpack_release/1` has already written to disk, so the values the application ends up with are the ones the new file resolves. The one condition is that it runs on the node as it is now: it is evaluated by the code the running node has loaded, so it must not rely on modules, functions or language features that only arrive with the new release. A `runtime.exs` that reads environment variables, files or secrets is fine. One that calls into a module the new version introduces is not, and that is the case to deploy fully.
+ * **`config_change/3` can be made to run on every hot upgrade.** OTP only calls it for an application whose environment changed, so a release can ask DeployEx to set one key of its own, see [Telling the application that it was hot-upgraded](#telling-the-application-that-it-was-hot-upgraded).
  * **A changed Config Provider is NOT applied.** Provider modules run on the node in its current version, before the new code is installed, so the old implementation is what resolves the configuration. A fix to a provider only takes effect once a full deployment has made it the running version.
+
+### Telling the application that it was hot-upgraded
+
+A hot upgrade replaces code without restarting anything, so nothing in the application runs again on its own: whatever it read or cached when it booted stays as it was.
+OTP has a callback for this, `config_change/3` on the application callback module, but `release_handler` only calls it for an application whose environment is different after the upgrade.
+A release that changes code and no configuration never triggers it.
+
+A release can ask DeployEx to trigger it.
+DeployEx then sets one key in the environment of the monitored application, as part of the configuration its relup hook applies:
+
+```elixir
+deployex_config_change: "1.1.0"   # the version being installed
+```
+
+The value is different on every upgrade, so `config_change/3` always runs.
+It runs once the relup has finished, so the callback is already the new version's code and the environment it reads is the new one, `runtime.exs` included.
+
+```elixir
+@impl true
+def config_change(changed, new, removed) do
+  # :deployex_config_change is in `new` on the first hot upgrade after a boot
+  # and in `changed` on the following ones
+  ...
+end
+```
+
+#### Turning it on
+
+It is off unless the release asks for it, since it runs application code during the upgrade and only the application knows what its callback does.
+
+The release asks for it in `current.json`, next to its version:
+
+```json
+{
+  "version": "1.1.0",
+  "hash": "9cad9cd3581c69fdd02ff60765e1c7dd4599d84a",
+  "pre_commands": [],
+  "hot_upgrade_config_change": true
+}
+```
+
+ * `true` sets the key for this release. `false`, or leaving the field out, does not.
+ * Anything other than `true` or `false` reads as the field being left out.
+ * There is no host setting for it. The pipeline that writes `current.json` decides, release by release.
+
+What each release asked for is stored with the version it deployed.
+The Versions page of the application shows it in the `config_change` column as `requested`, `declined` or `not set`, and `GET /v1/apps/:name/versions` of the [Agent API](/guides/docs/agent-api/README.md) returns it as `hot_upgrade_config_change`, `null` when the release did not say.
+A version deployed before this field existed shows as `not set`.
+
+#### What to expect from it
+
+ * The key is added to every application of the release that a `jellyfish.json` describes as `type: "project"`, which covers each application of an umbrella. A release without those files gets it on the application named after it.
+ * Only an application that the running node has loaded gets the key. One that the new release adds has no environment to compare yet, and starts with the new code anyway.
+ * The key is also set for Erlang and Gleam applications, as a binary.
+ * It is only set by a hot upgrade. After a full deployment the key is absent until the next hot upgrade.
+ * A release that does not ask, hot-upgraded over one that did, still gets the callback once. The key the earlier upgrade set is gone when the environment is rebuilt, so `config_change/3` is called with `:deployex_config_change` in `removed`. Look for the key in `changed` and `new`, as the Phoenix example below does, to react only to an upgrade that asked.
+ * DeployEx logs which applications got the key, and logs a warning when a release asked and none did, which is the case when the release name is not an application of the node and no `jellyfish.json` of this version names one.
+ * The callback runs inside `release_handler:install_release/2`, with the new code already running and before the release is made permanent, so the upgrade waits for it. Keep it short and hand anything slow to another process.
+ * A callback that fails does not fail the upgrade. One that raises, exits or returns an error leaves the release installed and made permanent, and OTP does not log it, so have the callback report its own failures.
+
+#### Phoenix applications
+
+**Keep the digested assets, and set `hot_upgrade_config_change` on every release.**
+This is the recommended setup, and it is the one `mix phx.new` generates: `cache_static_manifest` stays in `config/prod.exs` and `mix assets.deploy` runs `phx.digest`.
+
+`phx.digest` output is cached in memory when the endpoint starts, so on its own a hot upgrade leaves pages linking to the old digested file names, see [Phoenix and LiveView pitfalls](https://github.com/deployex/beam-hotupgrades#phoenix-and-liveview-pitfalls).
+The `config_change/3` that `mix phx.new` generates calls `MyAppWeb.Endpoint.config_change/2`, and that function reloads the manifest every time it is called (checked with Phoenix 1.8):
+
+```elixir
+@impl true
+def config_change(changed, _new, removed) do
+  MyAppWeb.Endpoint.config_change(changed, removed)
+  :ok
+end
+```
+
+So the application needs no code change, and two things from its pipeline:
+
+ * **`"hot_upgrade_config_change": true` in every `current.json`.** The manifest changes whenever an asset does, so this is a constant of the application rather than a choice per release. Without it, pages rendered after a hot upgrade link to file names the new release may not have, and load without their styles and scripts.
+ * **Both versions built in the same directory.** `phx.digest` keeps the digested files it finds from earlier runs, so building the previous version and then the target, as a hot upgrade build already does for the appups, ships the old files in the new release. A page that was opened before the upgrade still requests them. A target built from a clean `priv/static` has only its own files, and those requests get a 404.
+
+With both in place, a page rendered after the upgrade links to the new files, and a page that was already open keeps the consistent set it loaded.
+
+Pages that are already open are not told that a new version is running: a hot upgrade does not disconnect anyone, so `Phoenix.LiveView.static_changed?/1` has no reconnect to report on.
+Broadcast from the callback and let the LiveViews that subscribed decide what to show:
+
+```elixir
+@impl true
+def config_change(changed, new, removed) do
+  MyAppWeb.Endpoint.config_change(changed, removed)
+
+  if Keyword.has_key?(changed ++ new, :deployex_config_change) do
+    Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", :hot_upgraded)
+  end
+
+  :ok
+end
+```
+
+**The alternative is stable file names, with no manifest.**
+Leaving `cache_static_manifest` out of `config/prod.exs` keeps asset file names the same from one release to the next.
+A hot upgrade then serves the new files under them as soon as it is installed, with nothing to reload and no flag to set, and a browser that revalidates a file gets the new one, since its `ETag` changed.
+It cannot be misconfigured, and it costs three things:
+
+ * A page that was already open gets the new files under the names it loaded, so it can end up running old markup and scripts against new styles.
+ * Browsers revalidate each file on every load instead of caching it by its content hash.
+ * `static_changed?/1` compares against the manifest, so without one it never reports a change, on a hot upgrade or a full deployment.
 
 ## The steps DeployEx runs over RPC on the running node
 

@@ -1125,6 +1125,196 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
              })
   end
 
+  describe "add_config_change_marker/2" do
+    # The applications the node reports as loaded, in the shape application:loaded_applications/0 uses
+    defp stub_loaded_applications(node, applications) do
+      Foundation.RpcMock
+      |> stub(:call, fn ^node, :application, :loaded_applications, [], @expected_timeout ->
+        for application <- applications, do: {application, ~c"description", ~c"0.1.0"}
+      end)
+    end
+
+    test "adds nothing, and asks the node nothing, unless the upgrade asks for it", %{
+      node: node,
+      current_path: current_path
+    } do
+      Foundation.RpcMock
+      |> stub(:call, fn _node, _module, _function, _args, _timeout ->
+        flunk("no rpc call expected")
+      end)
+
+      runtime_config = [testapp: [key: "value"]]
+
+      data = %Execute{
+        node: node,
+        name: "testapp",
+        current_path: current_path,
+        to_version: ~c"0.2.0"
+      }
+
+      assert UpgradeApp.add_config_change_marker(data, runtime_config) == runtime_config
+
+      # Upgrade data built by a version without the field
+      assert data
+             |> Map.delete(:config_change)
+             |> UpgradeApp.add_config_change_marker(runtime_config) == runtime_config
+
+      # No application can be named without the release name
+      assert UpgradeApp.add_config_change_marker(
+               %{data | name: nil, config_change: true},
+               runtime_config
+             ) == runtime_config
+    end
+
+    @tag :capture_log
+    test "marks the application named after the release when it ships no jellyfish.json", %{
+      node: node,
+      current_path: current_path
+    } do
+      stub_loaded_applications(node, [:kernel, :stdlib, :testapp])
+
+      data = %Execute{
+        node: node,
+        name: "testapp",
+        language: "erlang",
+        current_path: current_path,
+        to_version: ~c"0.2.0",
+        config_change: true
+      }
+
+      # Erlang and Gleam resolve no runtime configuration, the marker is all the hook applies
+      assert UpgradeApp.add_config_change_marker(data, []) ==
+               [testapp: [deployex_config_change: "0.2.0"]]
+    end
+
+    @tag :capture_log
+    test "keeps the configuration the application already resolved", %{
+      node: node,
+      current_path: current_path
+    } do
+      stub_loaded_applications(node, [:logger, :testapp])
+
+      runtime_config = [
+        testapp: [{Testapp.Repo, [pool_size: 10]}, deployex_config_change: "0.1.0"],
+        logger: [level: :info]
+      ]
+
+      data = %Execute{
+        node: node,
+        name: "testapp",
+        current_path: current_path,
+        to_version: "0.2.0",
+        config_change: true
+      }
+
+      marked = UpgradeApp.add_config_change_marker(data, runtime_config)
+
+      assert marked[:testapp][Testapp.Repo] == [pool_size: 10]
+      assert Keyword.get_values(marked[:testapp], :deployex_config_change) == ["0.2.0"]
+      assert marked[:logger] == [level: :info]
+    end
+
+    @tag :capture_log
+    test "marks every project application of an umbrella, for this version only", %{
+      node: node,
+      current_path: current_path
+    } do
+      write_jellyfish = fn dir, content ->
+        ebin = "#{current_path}/lib/#{dir}/ebin"
+        File.mkdir_p!(ebin)
+        File.write!("#{ebin}/jellyfish.json", content)
+      end
+
+      write_jellyfish.("app_one-0.2.0", ~s({"name": "app_one", "from": "0.1.0", "to": "0.2.0"}))
+
+      write_jellyfish.(
+        "app_two-0.2.0",
+        ~s({"name": "app_two", "type": "project", "from": "0.1.0", "to": "0.2.0"})
+      )
+
+      # A dependency, and the file an earlier upgrade left behind, do not get the marker
+      write_jellyfish.("cowboy-2.0.0", @valid_jellyfish_library_file)
+
+      write_jellyfish.(
+        "app_old-0.1.0",
+        ~s({"name": "app_old", "type": "project", "from": "0.0.9", "to": "0.1.0"})
+      )
+
+      stub_loaded_applications(node, [:app_old, :app_one, :app_two, :cowboy, :myumbrella])
+
+      data = %Execute{
+        node: node,
+        name: "myumbrella",
+        current_path: current_path,
+        to_version: ~c"0.2.0",
+        config_change: true
+      }
+
+      marked = UpgradeApp.add_config_change_marker(data, app_one: [key: "value"])
+
+      assert marked |> Keyword.keys() |> Enum.sort() == [:app_one, :app_two]
+      assert marked[:app_one] == [key: "value", deployex_config_change: "0.2.0"]
+      assert marked[:app_two] == [deployex_config_change: "0.2.0"]
+    end
+
+    test "leaves out an application the node has not loaded", %{
+      node: node,
+      current_path: current_path
+    } do
+      # Nothing has loaded the application the release is named after
+      stub_loaded_applications(node, [:kernel, :stdlib])
+
+      data = %Execute{
+        node: node,
+        name: "an_application_no_node_has_loaded",
+        current_path: current_path,
+        to_version: ~c"0.2.0",
+        config_change: true
+      }
+
+      log =
+        capture_log(fn ->
+          assert UpgradeApp.add_config_change_marker(data, []) == []
+        end)
+
+      # A request that marks nothing is reported, the version record still says requested
+      assert log =~ "config_change/3 was requested but none of"
+      assert log =~ "an_application_no_node_has_loaded"
+
+      # The name was only compared, it never became an atom
+      assert_raise ArgumentError, fn ->
+        String.to_existing_atom("an_application_no_node_has_loaded")
+      end
+    end
+
+    test "adds nothing when the node does not answer", %{
+      node: node,
+      current_path: current_path
+    } do
+      Foundation.RpcMock
+      |> stub(:call, fn ^node, :application, :loaded_applications, [], @expected_timeout ->
+        {:badrpc, :nodedown}
+      end)
+
+      runtime_config = [testapp: [key: "value"]]
+
+      data = %Execute{
+        node: node,
+        name: "testapp",
+        current_path: current_path,
+        to_version: ~c"0.2.0",
+        config_change: true
+      }
+
+      log =
+        capture_log(fn ->
+          assert UpgradeApp.add_config_change_marker(data, runtime_config) == runtime_config
+        end)
+
+      assert log =~ "config_change/3 is not forced for this upgrade"
+    end
+  end
+
   test "install_runtime_config_hook/2 makes no rpc call when there is nothing to apply", %{
     node: node
   } do

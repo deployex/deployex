@@ -139,11 +139,14 @@ defmodule DeployexWeb.VersionsLive do
             </div>
           </div>
           <div class="overflow-x-auto">
-            <div class="min-w-[720px]">
+            <div class="min-w-[860px]">
               <div class="dx-vrow min-h-[38px]">
                 <div class="dx-lbl">Version</div>
                 <div class="dx-lbl">Instance</div>
                 <div class="dx-lbl">Deploy</div>
+                <div class="dx-lbl" title="What the release asked for in current.json">
+                  config_change
+                </div>
                 <div class="dx-lbl">Deployed, host time {HostTime.zone()}</div>
               </div>
               <div :for={row <- rows(@history, @filter, @currents, @now)} class="dx-vrow">
@@ -158,6 +161,7 @@ defmodule DeployexWeb.VersionsLive do
                     label={if row.deployment == :hot_upgrade, do: "Hot upgrade", else: "Full"}
                   />
                 </div>
+                <div class="dx-mono text-[0.8125rem]">{row.config_change}</div>
                 <div class="flex items-baseline gap-2.5">
                   <span class="dx-mono text-[0.8125rem]">{row.at}</span>
                   <span class="dx-muted text-[0.8125rem]">{row.age}</span>
@@ -332,6 +336,7 @@ defmodule DeployexWeb.VersionsLive do
           version: version.version,
           sname: version.sname,
           deployment: version.deployment,
+          config_change: config_change(version),
           current: current,
           at: at && HostTime.format(at, "%Y-%m-%d %H:%M"),
           age: View.age(at, now)
@@ -356,6 +361,16 @@ defmodule DeployexWeb.VersionsLive do
 
   defp ask_text(_segment, name, _pick, _current, _count),
     do: "Set #{name} to Automatic? DeployEx deploys the version in current.json, if it differs."
+
+  # What the release asked for in current.json. Only a release that asked got config_change/3
+  # forced. A record written by a version without the field reads as not set
+  defp config_change(version) do
+    case Map.get(version, :hot_upgrade_config_change) do
+      true -> "requested"
+      false -> "declined"
+      _unset -> "not set"
+    end
+  end
 
   # How often DeployEx checks for a new version, and how long a new version has to reach running
   defp timing(%{deploy_schedule_interval_ms: every, deploy_rollback_timeout_ms: within})

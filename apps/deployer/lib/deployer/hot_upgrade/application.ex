@@ -62,6 +62,13 @@ defmodule Deployer.HotUpgrade.Application do
        written to disk. It is evaluated by the code the running node has loaded, so it must not
        depend on modules or language features that only arrive with the new release.
 
+     * `config_change/3` can be called even when no configuration changed. `release_handler`
+       only calls it for an application whose environment differs after the relup has run, so
+       for a release that asks for it the hook also sets `:deployex_config_change` to the
+       version being installed (see `add_config_change_marker/2`). It is the one place a
+       monitored application can react to having been hot upgraded, for instance to reload
+       what it cached at boot.
+
      * A changed Config Provider is NOT picked up. The provider modules execute over RPC on the
        running node, which is still on the old version - `install_release/2` has not run yet.
        The old implementation is what resolves the configuration, so a fix to a provider only
@@ -89,6 +96,7 @@ defmodule Deployer.HotUpgrade.Application do
   @behaviour Deployer.HotUpgrade.Adapter
   @events_topic "deployex::hotupgrade::events"
   @runtime_config_key {:deployex, :runtime_config}
+  @config_change_key :deployex_config_change
   # The run of each application, now or the last one, for a page that opens in the middle of it
   @progress_table :deployer_hot_upgrade_progress
 
@@ -256,6 +264,7 @@ defmodule Deployer.HotUpgrade.Application do
          :ok <- check_install_release(data),
          :ok <- notify_progress(data, "Resolving the runtime configuration"),
          {:ok, runtime_config} <- resolve_runtime_config(data),
+         runtime_config = add_config_change_marker(data, runtime_config),
          :ok <- notify_progress(data, "Adding the runtime configuration to the relup") do
       install_runtime_config_hook(data, runtime_config)
     end
@@ -962,6 +971,55 @@ defmodule Deployer.HotUpgrade.Application do
   def resolve_runtime_config(_data), do: {:ok, []}
 
   @doc """
+  Add the config change marker to the environment of the applications the project owns.
+
+  `release_handler:install_release/2` calls `config_change/3` on the application callback
+  module of every application whose environment differs once the relup has run. A release
+  that changes code but no configuration leaves the environment as it was, so the application
+  is never told that it was upgraded.
+
+  The marker is one key, `:deployex_config_change`, holding the version being installed. It is
+  added to the configuration the relup hook applies (see `install_runtime_config_hook/2`), so
+  the environment always differs and `config_change/3` always runs, on the new code and with
+  the new configuration in place. The application receives the key in `new` on the first hot
+  upgrade after a boot and in `changed` on the following ones.
+
+  The applications that get it are the ones a `jellyfish.json` of type `project` describes for
+  this version, which is every application of an umbrella. A release with none of those files
+  gets the marker on the application named after it. Either way the application has to be
+  loaded on the node: the atoms are taken from `application:loaded_applications/0` there, so
+  none is created from a name read in a file.
+
+  Nothing is added unless `config_change` is set on the upgrade data, which the engine does
+  for a release whose `current.json` has `hot_upgrade_config_change` set to `true`.
+
+  The marker does not outlive the next hot upgrade: `change_appl_data/3` rebuilds the
+  environment without it. So a release that does not ask, installed over one that did, still
+  gets `config_change/3` called once, with the key in `removed`.
+
+  The applications that got the marker are logged, and so is a request that marked none.
+  """
+  @spec add_config_change_marker(Execute.t(), runtime_config()) :: runtime_config()
+  def add_config_change_marker(%Execute{name: name} = data, runtime_config)
+      when is_binary(name) do
+    # Upgrade data built by a version without the field reads as disabled
+    if Map.get(data, :config_change, false) do
+      version = to_string(data.to_version)
+
+      data
+      |> project_applications()
+      |> Enum.reduce(runtime_config, fn app, config ->
+        marker = [{@config_change_key, version}]
+        Keyword.update(config, app, marker, &Keyword.merge(&1, marker))
+      end)
+    else
+      runtime_config
+    end
+  end
+
+  def add_config_change_marker(_data, runtime_config), do: runtime_config
+
+  @doc """
   Add a hook to the generated relup that applies the resolved configuration from inside
   `release_handler:install_release/2`.
 
@@ -1079,6 +1137,67 @@ defmodule Deployer.HotUpgrade.Application do
   # Charlists by the time the upgrade runs, do_execute/1 converts them
   defp versions(%Execute{from_version: from_version, to_version: to_version}) do
     "#{from_version} -> #{to_version}"
+  end
+
+  # The names come from the release and the atoms from the node, so no atom is created from
+  # a file, and an application the node has not loaded, which has no environment to compare
+  # and no callback to call, gets nothing
+  defp project_applications(%Execute{node: node} = data) do
+    names = project_application_names(data)
+
+    case Rpc.call(node, :application, :loaded_applications, [], @rpc_timeout) do
+      loaded when is_list(loaded) ->
+        applications =
+          for {application, _description, _vsn} <- loaded,
+              Atom.to_string(application) in names,
+              do: application
+
+        log_config_change_applications(node, names, applications)
+
+        applications
+
+      reason ->
+        Logger.warning(
+          "Could not read the loaded applications of #{node}, config_change/3 is not forced " <>
+            "for this upgrade, reason: #{inspect(reason)}"
+        )
+
+        []
+    end
+  end
+
+  # The version record only says what the release asked for, so a request that marked nothing
+  # is reported here: the release name is not an application of the node, or no jellyfish.json
+  # of this version names one
+  defp log_config_change_applications(node, names, []) do
+    Logger.warning(
+      "config_change/3 was requested but none of #{inspect(names)} is loaded on #{node}, " <>
+        "it is not forced for this upgrade"
+    )
+  end
+
+  defp log_config_change_applications(node, _names, applications) do
+    Logger.info("config_change/3 is forced on #{node} for: #{inspect(applications)}")
+  end
+
+  # unpack_release/1 has already put the new libraries, and their jellyfish.json, under the
+  # current path. Older versions are still there, so only the files for this version count
+  defp project_application_names(%Execute{
+         current_path: current_path,
+         name: name,
+         to_version: version
+       }) do
+    version = to_string(version)
+
+    "#{current_path}/lib/*-*/ebin/jellyfish.json"
+    |> Path.wildcard()
+    |> Enum.map(&Jellyfish.decode_jellyfish_file/1)
+    |> Enum.filter(&(&1.type == "project" and &1.to == version and is_binary(&1.name)))
+    |> Enum.map(& &1.name)
+    |> case do
+      [] -> [name]
+      names -> names
+    end
   end
 
   @spec stash_runtime_config(node(), runtime_config()) :: :ok | {:error, any()}

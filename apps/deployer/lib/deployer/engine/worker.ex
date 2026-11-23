@@ -534,6 +534,10 @@ defmodule Deployer.Engine.Worker do
 
   defp schedule_new_deployment(timeout), do: Process.send_after(self(), :schedule, timeout)
 
+  # Only a release that asks for it in current.json gets config_change/3 forced. A release map
+  # built by a version without the field does not ask
+  defp config_change?(release), do: Map.get(release, :hot_upgrade_config_change) == true
+
   # An older version built the state without pending_pre_commands or readiness, or deployments
   # without a field
   defp upgrade_state(state) do
@@ -1396,7 +1400,8 @@ defmodule Deployer.Engine.Worker do
           current_path: Catalog.current_path(sname),
           new_path: Catalog.new_path(sname),
           from_version: from_version,
-          to_version: release.version
+          to_version: release.version,
+          config_change: config_change?(release)
         }
 
         case HotUpgrade.execute(upgrade_data) do
@@ -1510,6 +1515,7 @@ defmodule Deployer.Engine.Worker do
         version: release.version,
         hash: release.hash,
         pre_commands: release.pre_commands,
+        hot_upgrade_config_change: Map.get(release, :hot_upgrade_config_change),
         name: name,
         sname: sname,
         deployment: :hot_upgrade,

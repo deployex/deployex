@@ -19,7 +19,13 @@ defmodule DeployexWeb.AgentApi.AppControllerTest do
       [FixtureStatus.version(%{version: "4.5.7"})]
     end)
     |> stub(:history_version_list, fn "test_app", [] ->
-      [FixtureStatus.version(%{version: "4.5.6", pre_commands: ["eval Secret.run()"]})]
+      [
+        FixtureStatus.version(%{
+          version: "4.5.6",
+          pre_commands: ["eval Secret.run()"],
+          hot_upgrade_config_change: true
+        })
+      ]
     end)
   end
 
@@ -119,6 +125,7 @@ defmodule DeployexWeb.AgentApi.AppControllerTest do
                "hash" => "local",
                "sname" => "testapp-abc123",
                "deployment" => "full_deployment",
+               "hot_upgrade_config_change" => true,
                "inserted_at" => inserted_at
              } = version
 
