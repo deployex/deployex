@@ -92,12 +92,15 @@ Also, make sure you have added the `runtime_tools` to the release so DeployEx ca
   end
 ```
 
-Open the `config/prod.exs` and comment out the static manifest
+Keep the static manifest in `config/prod.exs`, as `mix phx.new` generates it:
 
 ```elixir
-#config :ectoapp, EctoappWeb.Endpoint,
-#  cache_static_manifest: "priv/static/cache_manifest.json"
+config :ectoapp, EctoappWeb.Endpoint,
+  cache_static_manifest: "priv/static/cache_manifest.json"
 ```
+
+A hot upgrade does not reload that manifest on its own, so every release asks DeployEx to call `config_change/3` on the application, with `hot_upgrade_config_change` in `current.json`.
+The `current.json` examples below include it, see [Phoenix applications](/guides/docs/hot-upgrades/README.md#phoenix-applications) for what it does and what it needs from the build.
 
 ## 5. Configuring your app as broadcast mode publishing metrics to DeployEx (optional)
 Add [Observer Web](https://github.com/deployex/observer_web)
@@ -234,7 +237,7 @@ Move the release file to the distributed folder and updated the version:
 ```bash
 export app_name=ectoapp
 cp _build/prod/${app_name}-0.1.0.tar.gz /tmp/deployex/bucket/dist/${app_name}
-echo "{\"version\":\"0.1.0\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
+echo "{\"version\":\"0.1.0\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\",\"hot_upgrade_config_change\": true}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
 ```
 
 ## 7. Running DeployEx and deploy the app
@@ -326,7 +329,7 @@ Check your digested files at "priv/static"
 ```bash
 export app_name=ectoapp
 cp _build/prod/${app_name}-0.1.1.tar.gz /tmp/deployex/bucket/dist/${app_name}
-echo "{\"version\":\"0.1.1\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
+echo "{\"version\":\"0.1.1\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\",\"hot_upgrade_config_change\": true}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
 ```
 
 3. You should then see the following messages in the DeployEx terminal while updating the app:
@@ -355,6 +358,7 @@ echo "{\"version\":\"0.1.1\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\"
 ### Hot-upgrades
 
 For this scenario, the project must first be compiled to the current version and subsequently compiled for the version it's expected to update to. The `current.json` file deployed includes the git hash representing the current application version. In this local testing phase, it suffices to compile for the previous version, such as `0.1.1`, and the subsequent version, like `0.1.2`, so the necessary files will be automatically populated.
+Build both versions in the same directory: `mix assets.deploy` keeps the digested files of the previous version in `priv/static`, and a page that was opened before the hot upgrade still requests them.
 
 1. Since the application is already compiled for `0.1.1`, change the `mix.exs` to `0.1.2`, apply any other changes if you want to test and execute the command:
 ```bash
@@ -376,7 +380,7 @@ Check your digested files at "priv/static"
 ```bash
 export app_name=ectoapp
 cp _build/prod/${app_name}-0.1.2.tar.gz /tmp/deployex/bucket/dist/${app_name}
-echo "{\"version\":\"0.1.2\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
+echo "{\"version\":\"0.1.2\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\",\"hot_upgrade_config_change\": true}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
 ```
 
 You can then check that DeployEx had executed a hot upgrade in the application:

@@ -85,15 +85,28 @@ A version deployed before this field existed shows as `not set`.
 
 #### Phoenix applications
 
-**Static assets do not need this, as long as they are not digested.**
-The setup the guides recommend for a hot-upgraded Phoenix application leaves `cache_static_manifest` out of `config/prod.exs`, see [Local-Elixir](/guides/docs/local-elixir/README.md).
-Asset file names then stay the same from one release to the next, and a hot upgrade serves the new files under them as soon as it is installed, with nothing for the application to reload.
-A browser that revalidates the file gets the new one, since its `ETag` changed.
-This is also what keeps pages that are already open working: the file names they loaded still exist.
+**Keep the digested assets, and set `hot_upgrade_config_change` on every release.**
+This is the recommended setup, and it is the one `mix phx.new` generates: `cache_static_manifest` stays in `config/prod.exs` and `mix assets.deploy` runs `phx.digest`.
 
-What the callback is for in that setup is the pages that are already open.
-They keep the assets they loaded, and nothing tells them a new version is running:
-`Phoenix.LiveView.static_changed?/1` compares against the digest manifest, so without one it never reports a change, and a hot upgrade does not disconnect anyone for it to run anyway.
+`phx.digest` output is cached in memory when the endpoint starts, so on its own a hot upgrade leaves pages linking to the old digested file names, see [Phoenix and LiveView pitfalls](https://github.com/deployex/beam-hotupgrades#phoenix-and-liveview-pitfalls).
+The `config_change/3` that `mix phx.new` generates calls `MyAppWeb.Endpoint.config_change/2`, and that function reloads the manifest every time it is called (checked with Phoenix 1.8):
+
+```elixir
+@impl true
+def config_change(changed, _new, removed) do
+  MyAppWeb.Endpoint.config_change(changed, removed)
+  :ok
+end
+```
+
+So the application needs no code change, and two things from its pipeline:
+
+ * **`"hot_upgrade_config_change": true` in every `current.json`.** The manifest changes whenever an asset does, so this is a constant of the application rather than a choice per release. Without it, pages rendered after a hot upgrade link to file names the new release may not have, and load without their styles and scripts.
+ * **Both versions built in the same directory.** `phx.digest` keeps the digested files it finds from earlier runs, so building the previous version and then the target, as a hot upgrade build already does for the appups, ships the old files in the new release. A page that was opened before the upgrade still requests them. A target built from a clean `priv/static` has only its own files, and those requests get a 404.
+
+With both in place, a page rendered after the upgrade links to the new files, and a page that was already open keeps the consistent set it loaded.
+
+Pages that are already open are not told that a new version is running: a hot upgrade does not disconnect anyone, so `Phoenix.LiveView.static_changed?/1` has no reconnect to report on.
 Broadcast from the callback and let the LiveViews that subscribed decide what to show:
 
 ```elixir
@@ -109,12 +122,14 @@ def config_change(changed, new, removed) do
 end
 ```
 
-**An application that keeps digested assets needs it for the manifest.**
-`phx.digest` output is cached in memory when the endpoint starts, so pages rendered after a hot upgrade keep linking to the old digested file names, see [Phoenix and LiveView pitfalls](https://github.com/deployex/beam-hotupgrades#phoenix-and-liveview-pitfalls).
-The `config_change/3` that `mix phx.new` generates calls `MyAppWeb.Endpoint.config_change/2`, and that function reloads the manifest every time it is called (checked with Phoenix 1.8), so with `hot_upgrade_config_change` set the next page rendered links to the new files.
-That fixes the manifest and nothing else.
-A page that is already open may still request an old digested file, and it is only served if the new release contains it: `phx.digest` keeps the files of previous runs it finds in `priv/static`, and a build that starts from a clean checkout has none.
-Stable file names avoid that problem, which is why they are the recommendation.
+**The alternative is stable file names, with no manifest.**
+Leaving `cache_static_manifest` out of `config/prod.exs` keeps asset file names the same from one release to the next.
+A hot upgrade then serves the new files under them as soon as it is installed, with nothing to reload and no flag to set, and a browser that revalidates a file gets the new one, since its `ETag` changed.
+It cannot be misconfigured, and it costs three things:
+
+ * A page that was already open gets the new files under the names it loaded, so it can end up running old markup and scripts against new styles.
+ * Browsers revalidate each file on every load instead of caching it by its content hash.
+ * `static_changed?/1` compares against the manifest, so without one it never reports a change, on a hot upgrade or a full deployment.
 
 ## The steps DeployEx runs over RPC on the running node
 
