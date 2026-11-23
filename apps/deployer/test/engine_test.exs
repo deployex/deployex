@@ -4583,6 +4583,14 @@ defmodule Deployer.EngineTest do
 
         Engine.Worker.updated_state_values(name, %{env: ["any=abc"]})
         assert %Deployer.Engine.Worker{env: ["any=abc"]} = :sys.get_state(module_name)
+
+        assert %Deployer.Engine.Worker{hot_upgrade_config_change: true} =
+                 :sys.get_state(module_name)
+
+        Engine.Worker.updated_state_values(name, %{hot_upgrade_config_change: false})
+
+        assert %Deployer.Engine.Worker{hot_upgrade_config_change: false} =
+                 :sys.get_state(module_name)
       end
     end
 

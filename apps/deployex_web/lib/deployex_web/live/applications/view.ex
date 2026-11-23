@@ -467,10 +467,18 @@ defmodule DeployexWeb.ApplicationsLive.View do
         "rollback timeout #{duration(status.deploy_rollback_timeout_ms)}",
       status.deploy_schedule_interval_ms > 0 &&
         "checks every #{duration(status.deploy_schedule_interval_ms)}",
+      config_change(status),
       mode(status.config)
     ]
     |> Enum.filter(&is_binary/1)
     |> Enum.join(" · ")
+  end
+
+  # A status built by a version without the field reads as the default
+  defp config_change(status) do
+    if Map.get(status, :hot_upgrade_config_change, true),
+      do: "config_change on hot upgrade",
+      else: "no config_change on hot upgrade"
   end
 
   defp mode(%{mode: :manual, manual_version: %{version: version}}),

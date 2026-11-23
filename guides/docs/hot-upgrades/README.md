@@ -52,6 +52,7 @@ end
 ```
 
  * The key is added to every application of the release that a `jellyfish.json` describes as `type: "project"`, which covers each application of an umbrella. A release without those files gets it on the application named after it.
+ * Only an application that the running node has loaded gets the key. One that the new release adds has no environment to compare yet, and starts with the new code anyway.
  * The key is also set for Erlang and Gleam applications, as a binary.
  * It is only set by a hot upgrade. After a full deployment the key is absent until the next hot upgrade.
  * It is on by default. Set `hot_upgrade_config_change: false` on the application in the [YAML configuration](/guides/docs/yaml/README.md) to turn it off, for instance when the callback does work that should only follow a real configuration change.

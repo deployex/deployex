@@ -985,7 +985,9 @@ defmodule Deployer.HotUpgrade.Application do
 
   The applications that get it are the ones a `jellyfish.json` of type `project` describes for
   this version, which is every application of an umbrella. A release with none of those files
-  gets the marker on the application named after it.
+  gets the marker on the application named after it. Either way the application has to be
+  loaded on the node: the atoms are taken from `application:loaded_applications/0` there, so
+  none is created from a name read in a file.
 
   Nothing is added unless `config_change` is set on the upgrade data, which the engine takes
   from `hot_upgrade_config_change` in the YAML configuration of the application.
@@ -1130,19 +1132,45 @@ defmodule Deployer.HotUpgrade.Application do
     "#{from_version} -> #{to_version}"
   end
 
+  # The names come from the release and the atoms from the node, so no atom is created from
+  # a file, and an application the node has not loaded, which has no environment to compare
+  # and no callback to call, gets nothing
+  defp project_applications(%Execute{node: node} = data) do
+    names = project_application_names(data)
+
+    case Rpc.call(node, :application, :loaded_applications, [], @rpc_timeout) do
+      loaded when is_list(loaded) ->
+        for {application, _description, _vsn} <- loaded,
+            Atom.to_string(application) in names,
+            do: application
+
+      reason ->
+        Logger.warning(
+          "Could not read the loaded applications of #{node}, config_change/3 is not forced " <>
+            "for this upgrade, reason: #{inspect(reason)}"
+        )
+
+        []
+    end
+  end
+
   # unpack_release/1 has already put the new libraries, and their jellyfish.json, under the
   # current path. Older versions are still there, so only the files for this version count
-  defp project_applications(%Execute{current_path: current_path, name: name, to_version: version}) do
+  defp project_application_names(%Execute{
+         current_path: current_path,
+         name: name,
+         to_version: version
+       }) do
     version = to_string(version)
 
     "#{current_path}/lib/*-*/ebin/jellyfish.json"
     |> Path.wildcard()
     |> Enum.map(&Jellyfish.decode_jellyfish_file/1)
     |> Enum.filter(&(&1.type == "project" and &1.to == version and is_binary(&1.name)))
-    |> Enum.map(&String.to_atom(&1.name))
+    |> Enum.map(& &1.name)
     |> case do
-      [] -> [String.to_atom(name)]
-      applications -> applications
+      [] -> [name]
+      names -> names
     end
   end
 

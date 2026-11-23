@@ -1315,7 +1315,7 @@ defmodule Sentinel.Config.WatcherTest do
         assert changes.summary.applications.details["my_new_app"].status == :modified
 
         assert changes.summary.applications.details["my_new_app"].changes.hot_upgrade_config_change ==
-                 %{old: true, new: false, apply_strategy: :immediate}
+                 %{old: true, new: false, apply_strategy: :next_deploy}
 
         assert log =~ "Detected 1 change(s) in upgradable fields: [:applications]"
       end

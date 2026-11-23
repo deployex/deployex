@@ -84,7 +84,7 @@ defmodule Deployer.Status.Application do
                                               deploy_rollback_timeout_ms,
                                             deploy_schedule_interval_ms:
                                               deploy_schedule_interval_ms
-                                          } ->
+                                          } = application ->
         children =
           Enum.reduce(deployed_monitored_apps[name] || [], [], fn app_info, acc ->
             # credo:disable-for-lines:1
@@ -135,6 +135,8 @@ defmodule Deployer.Status.Application do
           replicas: replicas,
           deploy_rollback_timeout_ms: deploy_rollback_timeout_ms,
           deploy_schedule_interval_ms: deploy_schedule_interval_ms,
+          # An application loaded by a version without the field reads as the default
+          hot_upgrade_config_change: Map.get(application, :hot_upgrade_config_change, true),
           status: :running,
           config: current_config,
           children: children,
