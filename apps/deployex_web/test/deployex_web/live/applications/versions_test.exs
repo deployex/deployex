@@ -4,6 +4,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
   import Phoenix.LiveViewTest
   import Mox
 
+  alias Deployer.HotUpgrade.Relup
   alias DeployexWeb.Fixture.Status, as: FixtureStatus
   alias DeployexWeb.HostTime
   alias Foundation.Catalog
@@ -108,7 +109,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
           instructions: 31
         },
         steps:
-          Deployer.HotUpgrade.Relup.steps([
+          Relup.steps([
             {:apply, {:erl_eval, :exprs, [[{:atom, 0, :ok}], []]}},
             {:load_object_code,
              {:myphoenixapp, ~c"1.4.2", [Myphoenixapp.Worker, MyphoenixappWeb]}},

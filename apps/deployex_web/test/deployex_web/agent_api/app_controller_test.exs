@@ -3,6 +3,7 @@ defmodule DeployexWeb.AgentApi.AppControllerTest do
 
   import Mox
 
+  alias Deployer.HotUpgrade.Relup
   alias DeployexWeb.Fixture.Status, as: FixtureStatus
 
   setup [:set_mox_global, :verify_on_exit!]
@@ -158,7 +159,7 @@ defmodule DeployexWeb.AgentApi.AppControllerTest do
           instructions: 7
         },
         steps:
-          Deployer.HotUpgrade.Relup.steps([
+          Relup.steps([
             :point_of_no_return,
             {:load, {TestApp.Worker, :brutal_purge, :brutal_purge}}
           ]),
