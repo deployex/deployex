@@ -212,10 +212,15 @@ defmodule Deployer.HotUpgrade.Relup do
         "while its code changes."
 
   def explain(%{key: :load, options: options}),
-    do: "Makes the new version of the module the current one. " <> purge(options)
+    do:
+      "Makes the new version of the module the current one. No process is restarted: each " <>
+        "one runs the new code from its next call into the module, and a paused one once " <>
+        "its code_change has run. " <> purge(options)
 
   def explain(%{key: :remove, options: options}),
-    do: "Deletes the module, which the new release no longer has. " <> purge(options)
+    do:
+      "Deletes the module, which the new release no longer has. A process that has moved " <>
+        "on to other code is not touched. " <> purge(options)
 
   def explain(%{key: :code_change}),
     do:
@@ -225,7 +230,9 @@ defmodule Deployer.HotUpgrade.Relup do
   def explain(%{key: :resume}), do: "Lets the paused processes run again, now on the new code."
 
   def explain(%{key: :purge}),
-    do: "Removes the old code of these modules, killing any process that still runs it."
+    do:
+      "Removes the old code of these modules. A process that already runs the new code is " <>
+        "not touched, only one that is still inside the old code is killed."
 
   def explain(%{key: :stop}),
     do: "Stops the processes that run these modules, through their supervisors."
@@ -261,28 +268,37 @@ defmodule Deployer.HotUpgrade.Relup do
   ### Private functions
   ### ==========================================================================
 
-  # What the two purge options of a load or a remove mean. The first is about code older
-  # than the version being replaced, the second about the version being replaced
-  defp purge([pre, post]), do: pre_purge(pre) <> " " <> post_purge(post)
+  # What the two purge options of a load or a remove mean. They say nothing about a process
+  # that follows the upgrade, which is every process in the usual case: they are only about
+  # one still executing code that is going away. The first is about code older than the
+  # version being replaced, since the VM holds two versions of a module, the second about
+  # the version being replaced
+  defp purge([pre, post]),
+    do:
+      "The options only matter for a process that is still inside older code, which is " <>
+        "the exception. " <> pre_purge(pre) <> " " <> post_purge(post)
+
   defp purge(_options), do: ""
 
   defp pre_purge("soft_purge"),
     do:
-      "Before it (soft_purge): if a process still runs code from before the version being " <>
-        "replaced, the upgrade stops with an error."
+      "First option (soft_purge): if one is still inside code from before the version " <>
+        "being replaced, the upgrade stops with an error."
 
   defp pre_purge(_brutal_purge),
     do:
-      "Before it (brutal_purge): a process that still runs code from before the version " <>
-        "being replaced is killed."
+      "First option (brutal_purge): one still inside code from before the version being " <>
+        "replaced is killed."
 
   defp post_purge("soft_purge"),
-    do: "After it (soft_purge): the replaced code is purged once no process runs it any more."
+    do:
+      "Second option (soft_purge): the replaced version is purged only once no process is " <>
+        "inside it any more."
 
   defp post_purge(_brutal_purge),
     do:
-      "After it (brutal_purge): the replaced code is purged when the release is made " <>
-        "permanent, and a process that still runs it is killed."
+      "Second option (brutal_purge): the replaced version is purged when the release is " <>
+        "made permanent, and one still inside it by then is killed."
 
   defp step({:load_object_code, {app, vsn, modules}}),
     do: new_step(:load_object_code, names(modules), [], "#{app} #{vsn}")

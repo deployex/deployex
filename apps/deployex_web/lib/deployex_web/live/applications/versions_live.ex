@@ -141,7 +141,7 @@ defmodule DeployexWeb.VersionsLive do
             </div>
           </div>
           <div class="overflow-x-auto">
-            <div class="min-w-[860px]">
+            <div class="min-w-[900px]">
               <div class="dx-vrow min-h-[38px]">
                 <div class="dx-lbl">Version</div>
                 <div class="dx-lbl">Instance</div>
@@ -166,15 +166,16 @@ defmodule DeployexWeb.VersionsLive do
                     <button
                       :if={row.from}
                       type="button"
-                      class="dx-link text-[0.8125rem]"
+                      class="dx-disclose"
                       title={"What the hot upgrade from #{row.from} did"}
                       aria-expanded={to_string(open?(@relup, row))}
+                      aria-controls="relup"
                       phx-click="relup"
                       phx-value-sname={row.sname}
                       phx-value-from={row.from}
                       phx-value-to={row.version}
                     >
-                      relup
+                      <Icons.icon name="chevron-right" class="size-3" /> relup
                     </button>
                   </div>
                   <div class="dx-mono text-[0.8125rem]">{row.config_change}</div>

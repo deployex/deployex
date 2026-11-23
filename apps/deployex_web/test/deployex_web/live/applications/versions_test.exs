@@ -163,7 +163,9 @@ defmodule DeployexWeb.Applications.VersionsTest do
     # The load of each module is one step, with its purge options and what they mean
     assert steps =~ "5–6"
     assert steps =~ "Myphoenixapp.Worker, MyphoenixappWeb"
-    assert steps =~ "After it (soft_purge): the replaced code is purged once no process runs it"
+    assert steps =~ "No process is restarted"
+    assert steps =~ "The options only matter for a process that is still inside older code"
+    assert steps =~ "Second option (soft_purge): the replaced version is purged only once"
     assert steps =~ "Lets the paused processes run again"
     assert steps |> :binary.match("suspend") < steps |> :binary.match("resume")
 

@@ -429,7 +429,7 @@ It is written into the release directory, which DeployEx removes when it prunes 
 
 On the Versions page of the application, a hot upgrade has a `relup` link. It opens under the row, with two views:
 
- * **Steps** lists what the node ran, in the order it ran it: each instruction, such as `suspend`, `load`, `code_change` or `purge`, with the modules it acted on and a sentence on what it means. The two purge options of a `load` are spelled out, since they decide what happens to a process that still runs old code. The `load` of each module of an application reads as one step. Under the steps, the outcome sums the upgrade up.
+ * **Steps** lists what the node ran, in the order it ran it: each instruction, such as `suspend`, `load`, `code_change` or `purge`, with the modules it acted on and a sentence on what it means. The two purge options of a `load` are spelled out: they do not restart anything, a process runs the new code from its next call into the module, and they only decide what happens to one that is still inside older code. The `load` of each module of an application reads as one step. Under the steps, the outcome sums the upgrade up.
  * **Original file** shows the relup as text, with a button that copies it.
 
 `GET /v1/apps/:name/relups/:from_version/:to_version` of the [Agent API](/guides/docs/agent-api/README.md) returns the same: the `steps`, each with its `meaning`, the `summary` and the script. Each version in `/versions` and `/ghosted` has the `from_version` that goes in that path.
