@@ -394,6 +394,40 @@ An application that needs 1Password credentials of its own gets them as fields o
 - **The pre-commands get the same secrets**, so a migration can reach the database.
 - **The values are not written anywhere.** They are passed in the environment of the process, not on its command line, and they are not in the logs, the dashboard or the Agent API. The dashboard shows only the adapter and the path.
 
+### An application that reads its own secrets
+
+The `secrets` section is not the only way for an application to get fresh secrets on a hot upgrade.
+An application whose release has a [Config Provider](https://hexdocs.pm/elixir/Config.Provider.html) that reads its secrets itself, from 1Password, AWS or anywhere else, needs nothing from DeployEx for it:
+
+```elixir
+releases: [
+  myphoenixapp: [
+    config_providers: [{Myphoenixapp.SecretsProvider, "myphoenixapp-prod-secrets"}]
+  ]
+]
+```
+
+DeployEx runs the Config Providers of the application again on every hot upgrade, on the running node, and applies what they return, see [What happens to configuration during a hot-upgrade](/guides/docs/hot-upgrades/README.md#what-happens-to-configuration-during-a-hot-upgrade).
+A provider that reads the secret store returns what it holds at that moment, and the application gets the keys that changed in `config_change/3`.
+
+How the two compare:
+
+| | `secrets` section | Config Provider of the application |
+|---|---|---|
+| Who reads the secret store | DeployEx | The application, with its own credentials |
+| Where the values end up | The environment of the OS process, then the configuration through `runtime.exs` | The configuration of the application, never its environment |
+| On a start | Read by DeployEx before the application starts. A restart falls back to the secrets of the previous start | Read by the application while it boots. A store that cannot be reached stops the boot |
+| On a hot upgrade | Read again and set on the running node | Read again by the provider |
+| When the store cannot be reached on a hot upgrade | The upgrade goes on with the secrets the node has | The provider fails, and the release is not installed |
+
+Three things to know about a provider on a hot upgrade:
+
+ * It runs on the node as it is, in the version that is being replaced. A fix to the provider itself only takes effect after a full deployment.
+ * It runs in a system that is already started. A provider that starts a process under a fixed name, such as an HTTP client pool, has to tolerate that process already being there.
+ * It changes the configuration, not what already used it, as with the `secrets` section.
+
+Both can be used by the same application: the provider runs after the environment is set, so it can read from it.
+
 ## Running behind a TLS-terminating proxy
 
 DeployEx can run behind anything that terminates TLS and forwards plain HTTP to the box: an
