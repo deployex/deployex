@@ -54,7 +54,7 @@ end
 
 #### Turning it on
 
-It is off unless something asks for it, since it runs application code during the upgrade.
+It is off unless the release asks for it, since it runs application code during the upgrade and only the application knows what its callback does.
 
 The release asks for it in `current.json`, next to its version:
 
@@ -67,9 +67,9 @@ The release asks for it in `current.json`, next to its version:
 }
 ```
 
- * `true` sets the key for this release, `false` does not, whatever the host is configured with.
- * A release that leaves the field out follows `hot_upgrade_config_change` of the application in the [YAML configuration](/guides/docs/yaml/README.md), which is `false` by default. Set it to `true` there to turn it on for every release that does not say.
+ * `true` sets the key for this release. `false`, or leaving the field out, does not.
  * Anything other than `true` or `false` reads as the field being left out.
+ * There is no host setting for it. The pipeline that writes `current.json` decides, release by release.
 
 What each release asked for is stored with the version it deployed.
 The Versions page of the application shows it in the `config_change` column as `requested`, `declined` or `not set`, and `GET /v1/apps/:name/versions` of the [Agent API](/guides/docs/agent-api/README.md) returns it as `hot_upgrade_config_change`, `null` when the release did not say.

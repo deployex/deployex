@@ -990,9 +990,8 @@ defmodule Deployer.HotUpgrade.Application do
   loaded on the node: the atoms are taken from `application:loaded_applications/0` there, so
   none is created from a name read in a file.
 
-  Nothing is added unless `config_change` is set on the upgrade data. The engine takes it from
-  `hot_upgrade_config_change` in the `current.json` of the release, and from the key of the
-  same name in the YAML configuration of the application when the release does not say.
+  Nothing is added unless `config_change` is set on the upgrade data, which the engine does
+  for a release whose `current.json` has `hot_upgrade_config_change` set to `true`.
   """
   @spec add_config_change_marker(Execute.t(), runtime_config()) :: runtime_config()
   def add_config_change_marker(%Execute{name: name} = data, runtime_config)

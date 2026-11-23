@@ -316,18 +316,6 @@ defmodule Sentinel.Config.Watcher do
     end
   end
 
-  # An application loaded by a version without the field reads as the default
-  defp add_boolean_changes(acc, field, old, new, default, strategy) do
-    old_val = with nil <- Map.get(old, field), do: default
-    new_val = Map.get(new, field)
-
-    if is_boolean(new_val) and old_val != new_val do
-      Map.put(acc, field, %{old: old_val, new: new_val, apply_strategy: strategy})
-    else
-      acc
-    end
-  end
-
   defp add_string_changes(acc, field, old, new, strategy) do
     old_val = Map.get(old, field)
     new_val = Map.get(new, field)
@@ -494,7 +482,6 @@ defmodule Sentinel.Config.Watcher do
     |> add_number_changes(:replicas, old_app, new_app, :immediate)
     |> add_number_changes(:deploy_rollback_timeout_ms, old_app, new_app, :immediate)
     |> add_number_changes(:deploy_schedule_interval_ms, old_app, new_app, :immediate)
-    |> add_boolean_changes(:hot_upgrade_config_change, old_app, new_app, false, :next_deploy)
     |> add_replica_ports_changes(old_app, new_app, :full_deploy)
     |> add_env_changes(old_app, new_app, :next_deploy)
     |> add_readiness_changes(old_app, new_app, :next_deploy)

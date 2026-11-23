@@ -467,19 +467,10 @@ defmodule DeployexWeb.ApplicationsLive.View do
         "rollback timeout #{duration(status.deploy_rollback_timeout_ms)}",
       status.deploy_schedule_interval_ms > 0 &&
         "checks every #{duration(status.deploy_schedule_interval_ms)}",
-      config_change(status),
       mode(status.config)
     ]
     |> Enum.filter(&is_binary/1)
     |> Enum.join(" · ")
-  end
-
-  # The default for a release that does not say in current.json. A status built by a version
-  # without the field reads as off
-  defp config_change(status) do
-    if Map.get(status, :hot_upgrade_config_change, false),
-      do: "config_change on hot upgrade",
-      else: "config_change on hot upgrade when the release asks"
   end
 
   defp mode(%{mode: :manual, manual_version: %{version: version}}),

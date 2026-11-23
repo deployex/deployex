@@ -4,7 +4,7 @@ defmodule Deployer.Release.Version do
   """
   @typedoc """
   `hot_upgrade_config_change` is what the release asks for in `current.json`: `true` or `false`,
-  or `nil` when it does not say, which leaves the decision to the application configuration.
+  or `nil` when it does not say, which is not asking.
   """
   @type t :: %__MODULE__{
           version: String.t() | nil,

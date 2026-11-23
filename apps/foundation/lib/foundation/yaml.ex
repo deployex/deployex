@@ -266,8 +266,7 @@ defmodule Foundation.Yaml do
       :env,
       :monitoring,
       :certificates,
-      readiness: %Foundation.Yaml.Readiness{},
-      hot_upgrade_config_change: false
+      readiness: %Foundation.Yaml.Readiness{}
     ]
 
     @type t :: %__MODULE__{
@@ -280,8 +279,7 @@ defmodule Foundation.Yaml do
             env: [String.t()],
             monitoring: [{atom(), Foundation.Yaml.Monitoring.t()}],
             certificates: [Foundation.Yaml.Certificate.t()],
-            readiness: Foundation.Yaml.Readiness.t(),
-            hot_upgrade_config_change: boolean()
+            readiness: Foundation.Yaml.Readiness.t()
           }
   end
 
@@ -698,20 +696,9 @@ defmodule Foundation.Yaml do
       env: parse_env(data["env"]),
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),
       certificates: parse_certificates(data["certificates"]),
-      readiness: data["readiness"] |> parse_readiness() |> check_readiness_port(data),
-      hot_upgrade_config_change:
-        parse_hot_upgrade_config_change(data["hot_upgrade_config_change"])
+      readiness: data["readiness"] |> parse_readiness() |> check_readiness_port(data)
     }
   end
-
-  # An empty value keeps the default, as a missing key does
-  defp parse_hot_upgrade_config_change(nil),
-    do: %Foundation.Yaml.Application{}.hot_upgrade_config_change
-
-  defp parse_hot_upgrade_config_change(value) when is_boolean(value), do: value
-
-  defp parse_hot_upgrade_config_change(value),
-    do: raise("hot_upgrade_config_change #{inspect(value)} not supported, expected true or false")
 
   # An http readiness probe against a port_key missing from replica_ports never passes, and the
   # only trace is a generic "not ready yet" debug line, so this is checked once at load

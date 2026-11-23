@@ -362,8 +362,8 @@ defmodule DeployexWeb.VersionsLive do
   defp ask_text(_segment, name, _pick, _current, _count),
     do: "Set #{name} to Automatic? DeployEx deploys the version in current.json, if it differs."
 
-  # What the release asked for in current.json. A record written by a version without the
-  # field, or for a release that did not say, followed the application configuration
+  # What the release asked for in current.json. Only a release that asked got config_change/3
+  # forced. A record written by a version without the field reads as not set
   defp config_change(version) do
     case Map.get(version, :hot_upgrade_config_change) do
       true -> "requested"
