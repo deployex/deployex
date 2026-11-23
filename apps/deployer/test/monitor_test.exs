@@ -2221,21 +2221,29 @@ defmodule Deployer.MonitorTest do
       assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
     end
 
-    # What the node of the application is told, in the order it is told
-    defp stub_node(test_pid, reply \\ :ok) do
+    # What the node of the application is told, in the order it is told. It is told with
+    # functions of Erlang and charlists, which an Erlang or a Gleam node has too. A reply
+    # other than :ok is what the call that sets, or the one that removes, answers
+    defp stub_node(test_pid, reply \\ :ok, failing \\ :both) do
       Foundation.RpcMock
       |> stub(:call, fn
-        _node, System, :put_env, [env], _timeout ->
+        _node, :lists, :zipwith, [fun, names, values], _timeout ->
+          assert fun == (&:os.putenv/2)
+          env = Enum.zip(Enum.map(names, &to_string/1), Enum.map(values, &to_string/1))
           send(test_pid, {:put_env, env})
-          reply
 
-        _node, System, :delete_env, [name], _timeout ->
-          send(test_pid, {:delete_env, name})
+          if reply == :ok or failing == :unset,
+            do: Enum.map(names, fn _name -> true end),
+            else: reply
+
+        _node, :lists, :foreach, [fun, names], _timeout ->
+          assert fun == (&:os.unsetenv/1)
+          Enum.each(names, &send(test_pid, {:delete_env, to_string(&1)}))
           reply
       end)
     end
 
-    defp start_with_secrets(context, env) do
+    defp start_with_secrets(context, env, service \\ %{}) do
       test_pid = self()
       FixtureFiles.create_bin_files(context.elixir_sname)
 
@@ -2253,7 +2261,9 @@ defmodule Deployer.MonitorTest do
       |> stub(:run, fn _command, _options -> {:ok, test_pid} end)
       |> stub(:stop, fn _pid -> :ok end)
 
-      assert {:ok, monitor} = MonitorApp.start_service(secrets_service(context))
+      assert {:ok, monitor} =
+               context |> secrets_service() |> Map.merge(service) |> MonitorApp.start_service()
+
       assert_receive :started, 1_000
       monitor
     end
@@ -2380,8 +2390,9 @@ defmodule Deployer.MonitorTest do
       assert MonitorApp.refresh_secrets(context.elixir_sname) ==
                {:error, {:secrets, :node_not_updated}}
 
+      # Nothing is removed from a node that could not be given the secrets
       assert_received {:put_env, ^now}
-      assert_received {:delete_env, "OLD_TOKEN"}
+      refute_received {:delete_env, _name}
 
       # The node still has what it was started with, so the secret that left is removed by
       # the refresh that reaches it
@@ -2393,6 +2404,94 @@ defmodule Deployer.MonitorTest do
       assert_received {:delete_env, "OLD_TOKEN"}
 
       assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    @tag :capture_log
+    test "refresh_secrets/1 removes at the next refresh what it could not remove", context do
+      test_pid = self()
+      start_with_secrets(context, [{"DATABASE_URL", @secret_value}, {"OLD_TOKEN", "old"}])
+
+      now = [{"DATABASE_URL", "ecto://user:rotated-password@db/app"}, {"NEW_TOKEN", "new"}]
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path -> {:ok, now} end)
+
+      # The secrets are set, the one that left is not removed
+      stub_node(test_pid, {:badrpc, :timeout}, :unset)
+
+      assert MonitorApp.refresh_secrets(context.elixir_sname) ==
+               {:error, {:secrets, :node_not_updated}}
+
+      assert_received {:put_env, ^now}
+      assert_received {:delete_env, "OLD_TOKEN"}
+
+      # It is still on the node, and so is the new one, which is not taken for one that left
+      stub_node(test_pid)
+
+      assert :ok = MonitorApp.refresh_secrets(context.elixir_sname)
+
+      assert_received {:put_env, ^now}
+      assert_received {:delete_env, "OLD_TOKEN"}
+      refute_received {:delete_env, _name}
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    @tag :capture_log
+    test "refresh_secrets/1 leaves alone what the YAML of the application sets", context do
+      test_pid = self()
+
+      # The run script exports the env and the ports of the YAML after the secrets, so at a
+      # start they win over a secret with the same name
+      service = %{env: ["API_URL=https://api.internal", "FLAG"]}
+
+      start_with_secrets(
+        context,
+        [{"DATABASE_URL", @secret_value}, {"API_URL", "from-the-item"}, {"PORT", "9999"}],
+        service
+      )
+
+      stub_node(test_pid)
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path ->
+        {:ok, [{"DATABASE_URL", "ecto://user:rotated-password@db/app"}, {"PATH", "/tmp"}]}
+      end)
+
+      assert :ok = MonitorApp.refresh_secrets(context.elixir_sname)
+
+      # Neither set nor removed: API_URL and PORT come from the YAML, PATH from the script
+      assert_received {:put_env, [{"DATABASE_URL", "ecto://user:rotated-password@db/app"}]}
+      refute_received {:delete_env, _name}
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    @tag :capture_log
+    test "refresh_secrets/1 waits for a secret store that takes longer than a default call",
+         context do
+      test_pid = self()
+      start_with_secrets(context, [{"DATABASE_URL", @secret_value}])
+      stub_node(test_pid)
+
+      now = [{"DATABASE_URL", "ecto://user:rotated-password@db/app"}]
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path ->
+        Process.sleep(5_500)
+        {:ok, now}
+      end)
+
+      # The caller gets the answer, it does not go on while the node is still being updated
+      assert :ok = MonitorApp.refresh_secrets(context.elixir_sname)
+      assert_received {:put_env, ^now}
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    test "refresh_secrets/1 returns an error for a monitor that does not answer", context do
+      assert MonitorApp.refresh_secrets(context.elixir_sname) ==
+               {:error, {:secrets, :monitor_not_answering}}
     end
   end
 end
