@@ -94,8 +94,8 @@ A hot upgrade restarts nothing, so everything the application worked out when it
 | What stays as it was | Why | What to do |
 |---|---|---|
 | The version the application reports | A value read at boot, such as an environment variable or `runtime.exs`, still holds the old one. `runtime.exs` is of no help either, it is evaluated before the new code is installed | Read `Application.spec(:my_app, :vsn)` when the callback runs. The value of `:deployex_config_change` is the same version |
-| The version on traces (OpenTelemetry) | The SDK reads its resource once, when it starts, and the specification does not let a resource change afterwards | Put the new version in the `:opentelemetry` resource configuration and restart the `:opentelemetry` application |
-| The version on log lines | Whatever copied the version into the logs at boot, a logger filter, the metadata or the formatter options, still holds the copy | Set it up again, after the SDK has restarted when it reads the version from there |
+| The version on traces (OpenTelemetry) | The SDK reads its resource once, when it starts, and keeps it in the state of its processes | Replace the resource in those processes, or restart the `:opentelemetry` application, see [The version on traces and logs](#the-version-on-traces-and-logs) |
+| The version on log lines | Whatever copied the version into the logs at boot, a logger filter, the metadata or the formatter options, still holds the copy | Give it the new version, for a filter with `:logger.set_handler_config/3` |
 | The static asset manifest (Phoenix, digested assets) | The endpoint reads it when it starts | `MyAppWeb.Endpoint.config_change/2`, see [Phoenix applications](#phoenix-applications) |
 | Pages that are already open (Phoenix) | A hot upgrade disconnects no one | Broadcast, and let the pages that subscribed decide what to show |
 | A value a process took when it started | A database pool keeps the password it connected with, a client keeps the token it was built with | Restart that process. It applies to secrets too, see [Secrets from 1Password](/guides/docs/yaml/README.md#secrets-from-1password) |
@@ -106,9 +106,8 @@ Two rules follow from where the callback runs, which is inside the application c
  * **It cannot stop or start an application, or change the application environment.** `Application.stop/1`, `Application.ensure_all_started/1` and `Application.put_env/3` are calls to the application controller, which is the process making them, so they exit with `calling_self`. OTP catches that exit and does not log it, and the upgrade goes on as if the work had been done. Reading is fine: `Application.get_env/2` and `Application.spec/2` return the new configuration and the new version.
  * **It has to return quickly.** While it runs, nothing else on the node can start or stop an application.
 
-So the callback does what is quick and cannot fail, and hands the rest to another process.
-Which process does not matter, only that it is not the application controller: a `spawn/1` or a `Task` works as well.
-The example uses a `GenServer` the application supervises, so that a failure is reported, two upgrades in a row do not overlap, and there is one place for what the application does after a hot upgrade:
+Most of the table needs neither: reading the version, asking another process to change its state, a broadcast and the logger are not calls to the application controller, and take a few milliseconds.
+So the callback can do them itself:
 
 ```elixir
 # lib/my_app/application.ex
@@ -118,60 +117,86 @@ def config_change(changed, new, removed) do
 
   # In `new` on the first hot upgrade after a boot, in `changed` on the following ones
   if Keyword.has_key?(changed ++ new, :deployex_config_change) do
-    MyApp.HotUpgrade.upgraded()
+    version = :my_app |> Application.spec(:vsn) |> to_string()
+
+    MyApp.TelemetryVersion.put(version)
+    Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", {:hot_upgraded, version})
   end
 
   :ok
 end
 ```
 
+Work that does need the application controller, such as restarting an application, is handed to another process: a `spawn/1`, a `Task`, or a process the application supervises.
+
+#### The version on traces and logs
+
+The OpenTelemetry SDK builds its resource, which carries `service.version`, when it starts.
+It is not in a cache the application can write to: it is in the state of the SDK's own processes, the resource detector, the tracer provider and the span processor.
+There are two ways to give them the new version.
+
+**Replace the resource in place.**
+Nothing is restarted, so no span is lost, and it is quick enough to run in the callback:
+
 ```elixir
-# lib/my_app/hot_upgrade.ex, started by the supervisor of the application
-defmodule MyApp.HotUpgrade do
-  use GenServer
+defmodule MyApp.TelemetryVersion do
+  # The processes of the SDK that hold the resource
+  @holders [
+    :otel_resource_detector,
+    :otel_tracer_provider_global,
+    :otel_batch_processor_global,
+    :otel_simple_processor_global
+  ]
 
-  def start_link(_args), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  # Returns true when the SDK reports the new version afterwards
+  def put(version) do
+    old = :otel_resource_detector.get_resource()
+    new = :otel_resource.merge(:otel_resource.create(%{"service.version": version}), old)
 
-  # Returns at once, the work is done by this process
-  def upgraded, do: GenServer.cast(__MODULE__, :upgraded)
+    for name <- @holders, pid = Process.whereis(name) do
+      :sys.replace_state(pid, &swap(&1, old, new))
+    end
 
-  @impl true
-  def init(nil), do: {:ok, nil}
-
-  @impl true
-  def handle_cast(:upgraded, state) do
-    version = :my_app |> Application.spec(:vsn) |> to_string()
-
-    restart_telemetry(version)
-    Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", {:hot_upgraded, version})
-
-    {:noreply, state}
+    :otel_tracer_provider.resource() == new and :otel_resource_detector.get_resource() == new
   end
 
-  # The SDK reads its resource once, when it starts
-  defp restart_telemetry(version) do
-    resource =
-      :opentelemetry
-      |> Application.get_env(:resource, %{})
-      |> Map.update(:service, %{version: version}, &Map.put(&1, :version, version))
+  defp swap(old, old, new), do: new
 
-    Application.put_env(:opentelemetry, :resource, resource)
+  defp swap(term, old, new) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.map(&swap(&1, old, new)) |> List.to_tuple()
 
-    :ok = Application.stop(:opentelemetry)
-    {:ok, _apps} = Application.ensure_all_started(:opentelemetry)
-
-    # Whatever copied the version into the logs at boot is set up again here
-  end
+  defp swap(term, _old, _new), do: term
 end
 ```
 
-What to expect from restarting the OpenTelemetry SDK (checked with `opentelemetry` 1.7 and `opentelemetry_api` 1.5, in a Phoenix application served by Bandit):
+ * Spans that end after it carry the new version, a span that was open at that moment included.
+ * It reaches into the SDK: the names of its processes and the resource being a field of their state are not a public interface. They are the ones of `opentelemetry` 1.7 with the default tracer provider. Check the return value, and check again when the SDK is upgraded.
+ * The specification says a resource does not change once its tracer provider exists. This changes it, which is what a hot upgrade asks for: the same provider now runs another version of the code.
+
+**Restart the SDK.**
+`Application.stop(:opentelemetry)` and `Application.ensure_all_started(:opentelemetry)`, after putting the new version in the `:opentelemetry` resource configuration.
+It only uses public functions, and it has to run in another process than the callback.
 
  * Spans that ended before the restart and were still buffered are exported while it stops, with the version of the code that made them.
- * Spans that end after it carry the new version.
  * A span that is open while the SDK restarts is not exported, so a request in flight at that moment loses its trace.
- * The instrumentation attached through `:telemetry` stays attached. Setting it up a second time, to refresh what it copied, did not double the spans of a request with `opentelemetry_bandit` and `opentelemetry_phoenix`. Check it for the libraries the application uses.
- * Restarting the SDK and not the logs leaves the two on different versions.
+ * The instrumentation attached through `:telemetry` stays attached.
+
+**Then the logs.**
+Either way, whatever copied the version into the logs at boot still holds the copy, and leaving it leaves traces and logs on different versions.
+For a logger filter, the copy is in the configuration of the filter:
+
+```elixir
+{:ok, %{filters: filters}} = :logger.get_handler_config(:default)
+{fun, config} = Keyword.fetch!(filters, :my_log_filter)
+
+:logger.set_handler_config(
+  :default,
+  :filters,
+  Keyword.put(filters, :my_log_filter, {fun, %{config | version: version}})
+)
+```
+
+Both ways were checked with `opentelemetry` 1.7 and `opentelemetry_api` 1.5, in a Phoenix application served by Bandit, with the batch and the simple span processor.
 
 #### Phoenix applications
 
