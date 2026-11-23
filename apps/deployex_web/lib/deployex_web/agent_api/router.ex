@@ -27,6 +27,7 @@ defmodule DeployexWeb.AgentApi.Router do
     get "/apps", AppController, :index
     get "/apps/:name", AppController, :show
     get "/apps/:name/versions", AppController, :versions
+    get "/apps/:name/relups/:from_version/:to_version", AppController, :relup
     get "/apps/:name/ghosted", AppController, :ghosted
     get "/apps/:name/logs", LogController, :index
   end

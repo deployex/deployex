@@ -314,6 +314,57 @@ defmodule Foundation.Catalog.Local do
     |> insert_by_timestamp(version)
   end
 
+  # The newest relups kept per application. One is written per hot upgrade attempt, and an
+  # application the size of a Phoenix project has relups of tens of kilobytes
+  @relups_kept 20
+
+  @impl true
+  def add_relup(name, %{from_version: from_version, to_version: to_version} = relup) do
+    with {:ok, file} <- relup_file(name, from_version, to_version),
+         :ok <- File.mkdir_p(Path.dirname(file)),
+         :ok <- File.write(file, :erlang.term_to_binary(relup)) do
+      prune_relups(name)
+    end
+  end
+
+  @impl true
+  def relup(name, from_version, to_version) do
+    with {:ok, file} <- relup_file(name, from_version, to_version),
+         {:ok, data} <- File.read(file) do
+      Plug.Crypto.non_executable_binary_to_term(data)
+    else
+      _no_relup -> nil
+    end
+  end
+
+  # The versions end up in a file name, and reach here from a request too
+  defp relup_file(name, from_version, to_version) do
+    if Enum.all?([name, from_version, to_version], &file_name_part?/1) do
+      {:ok, "#{relup_path(name)}/#{from_version}_to_#{to_version}.relup"}
+    else
+      {:error, :invalid_relup_name}
+    end
+  end
+
+  defp file_name_part?(value) when is_binary(value),
+    do:
+      Regex.match?(~r/^[A-Za-z0-9][A-Za-z0-9._+-]*$/, value) and not String.contains?(value, "..")
+
+  defp file_name_part?(_value), do: false
+
+  defp prune_relups(name) do
+    path = relup_path(name)
+
+    path
+    |> File.ls!()
+    |> Enum.map(&"#{path}/#{&1}")
+    |> Enum.sort_by(&File.stat!(&1, time: :posix).mtime, :desc)
+    |> Enum.drop(@relups_kept)
+    |> Enum.each(&File.rm/1)
+
+    :ok
+  end
+
   @impl true
   def ghosted_versions(name) do
     name
@@ -423,6 +474,11 @@ defmodule Foundation.Catalog.Local do
 
   defp ghosted_version_path(name),
     do: "#{var_path()}/storage/#{name}/deployex/ghosted"
+
+  # Created when the first relup is kept, an installation that was hot upgraded to this
+  # version never ran setup_new_app/1 with it
+  defp relup_path(name),
+    do: "#{var_path()}/storage/#{name}/deployex/relup"
 
   defp insert_by_timestamp(path, data) do
     file = "#{System.os_time(:microsecond)}.term"

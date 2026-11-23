@@ -1414,7 +1414,11 @@ defmodule Deployer.Engine.Worker do
 
         case HotUpgrade.execute(upgrade_data) do
           :ok ->
-            Status.set_current_version_map(sname, release, deployment: :hot_upgrade)
+            # The version it came from names the relup that was kept for this upgrade
+            Status.set_current_version_map(sname, release,
+              deployment: :hot_upgrade,
+              from_version: from_version
+            )
 
             # Cleanup Any folder left for the new sname
             Catalog.cleanup(new_sname)
@@ -1524,6 +1528,8 @@ defmodule Deployer.Engine.Worker do
         hash: release.hash,
         pre_commands: release.pre_commands,
         hot_upgrade_config_change: Map.get(release, :hot_upgrade_config_change),
+        # Nothing was installed, so the instance still runs the version the upgrade started from
+        from_version: Status.current_version(sname),
         name: name,
         sname: sname,
         deployment: :hot_upgrade,

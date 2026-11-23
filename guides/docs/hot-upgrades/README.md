@@ -417,6 +417,22 @@ There DeployEx does fall back to a full deployment, which restarts the instance 
 [error] Hot Upgrade failed, running for full deployment
 ```
 
+### Seeing what a hot upgrade did
+
+The relup is the plan the node ran: which applications had their code replaced, which modules were loaded, which processes were suspended for a `code_change`, and which functions the upgrade called.
+It is written into the release directory, which DeployEx removes when it prunes older releases, so DeployEx keeps a copy with the version history.
+
+ * It is kept just before the release is installed, with the instruction DeployEx adds for the runtime configuration, so it is what the node was given. An upgrade that failed after that point has its relup too.
+ * Only the upgrade is kept. A relup also describes the way back, which DeployEx never applies.
+ * It holds instructions, not configuration. The resolved configuration travels separately and is erased once the upgrade has applied it.
+ * The newest 20 are kept for each application, one for each pair of versions.
+
+On the Versions page of the application, a hot upgrade has a `relup` link that shows a summary and the script.
+`GET /v1/apps/:name/relups/:from_version/:to_version` of the [Agent API](/guides/docs/agent-api/README.md) returns the same, and each version in `/versions` and `/ghosted` has the `from_version` that goes in that path.
+The summary is the place to check that an appup edited by hand did what was meant, for instance that the `apply` restarting a child is there.
+
+The relups of DeployEx's own hot upgrades are kept the same way, on disk only: neither the dashboard nor the API shows them yet.
+
 ## Going back
 
 There is no hot downgrade.

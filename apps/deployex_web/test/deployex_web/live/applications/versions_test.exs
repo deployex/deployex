@@ -38,7 +38,8 @@ defmodule DeployexWeb.Applications.VersionsTest do
       [
         %{
           version("1.4.2", :hot_upgrade, ~N[2026-10-28 12:14:00])
-          | hot_upgrade_config_change: true
+          | hot_upgrade_config_change: true,
+            from_version: "1.4.1"
         },
         # A record written by a version without the field
         "1.4.1"
@@ -86,6 +87,74 @@ defmodule DeployexWeb.Applications.VersionsTest do
     assert html =~ "This host keeps the releases of the last 2 versions."
     assert html =~ ~s(href="/applications/#{@name}/ghosted")
     refute html =~ ~s(id="mode-save")
+  end
+
+  @tag :capture_log
+  test "a hot upgrade shows the relup DeployEx kept for it", %{conn: conn} do
+    stub_status(config())
+
+    :ok =
+      Foundation.Catalog.add_relup(@name, %{
+        from_version: "1.4.1",
+        to_version: "1.4.2",
+        summary: %{
+          applications: [{"myphoenixapp", "1.4.2"}, {"finch", "0.25.0"}],
+          modules: 12,
+          updated: ["Myphoenixapp.Worker"],
+          removed: [],
+          applies: ["supervisor.restart_child/2"],
+          runtime_config: true,
+          restart_emulator: false,
+          instructions: 31
+        },
+        text: "{\"1.4.2\",[{\"1.4.1\",[],[point_of_no_return]}],[]}.\n",
+        inserted_at: ~N[2026-10-28 12:14:00]
+      })
+
+    on_exit(fn ->
+      File.rm_rf(
+        Path.join([
+          Application.fetch_env!(:foundation, :var_path),
+          "storage",
+          @name,
+          "deployex",
+          "relup"
+        ])
+      )
+    end)
+
+    {:ok, view, html} = live(conn, ~p"/applications/#{@name}/versions")
+
+    # Only the hot upgrade that knows where it came from offers its relup
+    assert [_one] = Regex.scan(~r/phx-click="relup"/, html)
+    refute has_element?(view, "#relup")
+
+    html = view |> element(~s(button[phx-click="relup"])) |> render_click()
+
+    assert html =~ "Relup · 1.4.1 → 1.4.2"
+    assert html =~ "Replaces code in 2 applications: myphoenixapp 1.4.2, finch 0.25.0"
+    assert html =~ "Loads 12 modules"
+    assert html =~ "Suspends the processes of Myphoenixapp.Worker and runs their code_change"
+    assert html =~ "Calls supervisor.restart_child/2"
+    assert html =~ "Applies the runtime configuration"
+    assert html =~ "31 instructions in all"
+    refute html =~ "Restarts the VM"
+    assert view |> element("#relup-text") |> render() =~ "point_of_no_return"
+
+    refute view |> element("#relup-close") |> render_click() =~ "Relup ·"
+  end
+
+  @tag :capture_log
+  test "a hot upgrade whose relup was not kept says so", %{conn: conn} do
+    stub_status(config())
+
+    {:ok, view, _html} = live(conn, ~p"/applications/#{@name}/versions")
+
+    html = view |> element(~s(button[phx-click="relup"])) |> render_click()
+
+    assert html =~ "Relup · 1.4.1 → 1.4.2"
+    assert html =~ "DeployEx has no relup for this hot upgrade"
+    refute has_element?(view, "#relup-text")
   end
 
   @tag :capture_log

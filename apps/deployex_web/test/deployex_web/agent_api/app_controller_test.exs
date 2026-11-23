@@ -126,6 +126,7 @@ defmodule DeployexWeb.AgentApi.AppControllerTest do
                "sname" => "testapp-abc123",
                "deployment" => "full_deployment",
                "hot_upgrade_config_change" => true,
+               "from_version" => nil,
                "inserted_at" => inserted_at
              } = version
 
@@ -138,6 +139,77 @@ defmodule DeployexWeb.AgentApi.AppControllerTest do
       stub_status()
 
       assert conn |> get("/v1/apps/..%2F..%2Fetc/versions") |> json_response(404)
+    end
+  end
+
+  describe "GET /v1/apps/:name/relups/:from_version/:to_version" do
+    setup do
+      relup = %{
+        from_version: "4.5.5",
+        to_version: "4.5.6",
+        summary: %{
+          applications: [{"test_app", "4.5.6"}],
+          modules: 2,
+          updated: ["TestApp.Worker"],
+          removed: [],
+          applies: [],
+          runtime_config: true,
+          restart_emulator: false,
+          instructions: 7
+        },
+        text: "{\"4.5.6\",[{\"4.5.5\",[],[point_of_no_return]}],[]}.\n",
+        inserted_at: ~N[2026-11-23 10:00:00]
+      }
+
+      :ok = Foundation.Catalog.add_relup("test_app", relup)
+
+      on_exit(fn ->
+        File.rm_rf(
+          Path.join([
+            Application.fetch_env!(:foundation, :var_path),
+            "storage",
+            "test_app",
+            "deployex",
+            "relup"
+          ])
+        )
+      end)
+
+      :ok
+    end
+
+    test "returns the relup kept for a hot upgrade, with what it does", %{conn: conn} do
+      stub_status()
+
+      assert %{
+               "from_version" => "4.5.5",
+               "to_version" => "4.5.6",
+               "inserted_at" => "2026-11-23T10:00:00Z",
+               "summary" => %{
+                 "applications" => [%{"name" => "test_app", "version" => "4.5.6"}],
+                 "modules" => 2,
+                 "updated" => ["TestApp.Worker"],
+                 "runtime_config" => true,
+                 "restart_emulator" => false,
+                 "instructions" => 7
+               },
+               "relup" => "{\"4.5.6\"" <> _script
+             } = conn |> get("/v1/apps/test_app/relups/4.5.5/4.5.6") |> json_response(200)
+    end
+
+    test "returns 404 for an upgrade that has no relup, or a version that is not one", %{
+      conn: conn
+    } do
+      stub_status()
+
+      assert conn |> get("/v1/apps/test_app/relups/4.5.4/4.5.5") |> json_response(404)
+      assert conn |> get("/v1/apps/test_app/relups/..%2F..%2Fetc/4.5.6") |> json_response(404)
+    end
+
+    test "returns 404 before any catalog read for an unknown name", %{conn: conn} do
+      stub_status()
+
+      assert conn |> get("/v1/apps/..%2Ftest_app/relups/4.5.5/4.5.6") |> json_response(404)
     end
   end
 

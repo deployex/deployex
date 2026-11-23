@@ -238,15 +238,31 @@ defmodule Deployer.HotUpgrade.DeployexTest do
     # a captured function would be built by the code being replaced and would not survive
     # install_release, an MFA resolves to whatever is loaded when it runs
     assert_receive {:callback, callback}
-    assert {Deployex, :add_hot_upgrade_version, ["1.0.0"]} = callback
+    # The version it came from goes along, it names the relup kept for the upgrade
+    current_version = to_string(Application.spec(:foundation, :vsn))
+    assert {Deployex, :add_hot_upgrade_version, ["1.0.0", ^current_version]} = callback
     refute is_function(callback)
   end
 
   test "add_hot_upgrade_version/1 records the version as a hot upgrade" do
+    # The call a version before this one built passes only the new version
     assert :ok = Deployex.add_hot_upgrade_version("1.2.3")
 
-    assert %Foundation.Catalog.Version{version: "1.2.3", deployment: :hot_upgrade} =
-             Enum.at(Foundation.Catalog.versions("deployex", sname: "deployex"), 0)
+    assert %Foundation.Catalog.Version{
+             version: "1.2.3",
+             from_version: nil,
+             deployment: :hot_upgrade
+           } = Enum.at(Foundation.Catalog.versions("deployex", sname: "deployex"), 0)
+  end
+
+  test "add_hot_upgrade_version/2 records the version the upgrade came from" do
+    assert :ok = Deployex.add_hot_upgrade_version("1.2.4", "1.2.3")
+
+    assert %Foundation.Catalog.Version{
+             version: "1.2.4",
+             from_version: "1.2.3",
+             deployment: :hot_upgrade
+           } = Enum.at(Foundation.Catalog.versions("deployex", sname: "deployex"), 0)
   end
 
   test "execute/1 error before the release is installed says DeployEx keeps running" do

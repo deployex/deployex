@@ -11,6 +11,7 @@ defmodule DeployexWeb.VersionsLive do
   alias DeployexWeb.HostTime
   alias DeployexWeb.UI.Icons
   alias DeployexWeb.UI.Tags
+  alias Foundation.Catalog
 
   @impl true
   def render(assigns) do
@@ -155,11 +156,22 @@ defmodule DeployexWeb.VersionsLive do
                   <span :if={row.current} class="dx-chip dx-s-ok px-2 py-px text-xs">current</span>
                 </div>
                 <div class="dx-mono text-[0.8125rem]">{row.sname}</div>
-                <div>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <Tags.deploy_tag
                     type={if row.deployment == :hot_upgrade, do: :hot, else: :full}
                     label={if row.deployment == :hot_upgrade, do: "Hot upgrade", else: "Full"}
                   />
+                  <button
+                    :if={row.from}
+                    type="button"
+                    class="dx-link text-[0.8125rem]"
+                    title={"What the hot upgrade from #{row.from} did"}
+                    phx-click="relup"
+                    phx-value-from={row.from}
+                    phx-value-to={row.version}
+                  >
+                    relup
+                  </button>
                 </div>
                 <div class="dx-mono text-[0.8125rem]">{row.config_change}</div>
                 <div class="flex items-baseline gap-2.5">
@@ -180,6 +192,41 @@ defmodule DeployexWeb.VersionsLive do
             <.link class="dx-link" navigate={~p"/applications/#{@name}/ghosted"}>Ghosted versions</.link>
           </p>
         </section>
+
+        <section :if={@relup} id="relup" class="dx-card" aria-labelledby="relup-h">
+          <div class="flex flex-wrap items-center justify-between gap-3 px-[18px] py-4">
+            <h2 id="relup-h" class="text-base font-bold">
+              Relup · {@relup.from} → {@relup.to}
+            </h2>
+            <button
+              id="relup-close"
+              type="button"
+              class="dx-link text-[0.875rem]"
+              phx-click="close_relup"
+            >
+              Close
+            </button>
+          </div>
+          <p
+            :if={is_nil(@relup.kept)}
+            class="dx-muted border-t border-(--dx-base-300) px-5 py-4 text-[0.875rem]"
+          >
+            DeployEx has no relup for this hot upgrade. It keeps the newest ones of each application, and
+            none from before it started keeping them.
+          </p>
+          <div :if={@relup.kept} class="border-t border-(--dx-base-300) px-5 py-4">
+            <p class="dx-muted text-[0.8125rem]">
+              The plan the node ran for this hot upgrade, as it was when DeployEx installed it.
+            </p>
+            <ul class="mt-3 flex flex-col gap-1.5 text-[0.875rem]">
+              <li :for={line <- relup_lines(@relup.kept.summary)}>{line}</li>
+            </ul>
+            <pre
+              id="relup-text"
+              class="dx-mono mt-4 max-h-[480px] overflow-auto rounded border border-(--dx-base-300) p-3 text-[0.75rem]"
+            >{@relup.kept.text}</pre>
+          </div>
+        </section>
       </div>
     </Layouts.app>
     """
@@ -192,6 +239,7 @@ defmodule DeployexWeb.VersionsLive do
     {:ok,
      socket
      |> assign(name: name, segment: nil, pick: nil, asking: false, current_path: "/applications")
+     |> assign(:relup, nil)
      |> assign(:page_title, "#{name} versions and mode")
      |> load()}
   end
@@ -213,6 +261,13 @@ defmodule DeployexWeb.VersionsLive do
     do: {:noreply, assign(socket, pick: version, asking: false)}
 
   def handle_event("pick", _params, socket), do: {:noreply, socket}
+
+  # The relup is read when it is asked for, it can be tens of kilobytes
+  def handle_event("relup", %{"from" => from, "to" => to}, %{assigns: %{name: name}} = socket) do
+    {:noreply, assign(socket, :relup, %{from: from, to: to, kept: Catalog.relup(name, from, to)})}
+  end
+
+  def handle_event("close_relup", _params, socket), do: {:noreply, assign(socket, :relup, nil)}
 
   def handle_event("ask", _params, socket), do: {:noreply, assign(socket, :asking, true)}
   def handle_event("cancel", _params, socket), do: {:noreply, assign(socket, :asking, false)}
@@ -336,6 +391,7 @@ defmodule DeployexWeb.VersionsLive do
           version: version.version,
           sname: version.sname,
           deployment: version.deployment,
+          from: from(version),
           config_change: config_change(version),
           current: current,
           at: at && HostTime.format(at, "%Y-%m-%d %H:%M"),
@@ -371,6 +427,34 @@ defmodule DeployexWeb.VersionsLive do
       _unset -> "not set"
     end
   end
+
+  # The version a hot upgrade started from, which names its relup. A record written by a
+  # version without the field has none
+  defp from(%{deployment: :hot_upgrade} = version), do: Map.get(version, :from_version)
+  defp from(_version), do: nil
+
+  # What the upgrade did, one line for each thing it did
+  defp relup_lines(summary) do
+    applications =
+      Enum.map_join(summary.applications, ", ", fn {name, version} -> "#{name} #{version}" end)
+
+    [
+      "Replaces code in #{count(length(summary.applications), "application")}: #{applications}",
+      "Loads #{count(summary.modules, "module")}",
+      summary.updated != [] &&
+        "Suspends the processes of #{Enum.join(summary.updated, ", ")} and runs their code_change",
+      summary.removed != [] && "Removes #{Enum.join(summary.removed, ", ")}",
+      summary.applies != [] && "Calls #{Enum.join(summary.applies, ", ")}",
+      summary.runtime_config &&
+        "Applies the runtime configuration, with the config_change marker when the release asked for it",
+      summary.restart_emulator && "Restarts the VM",
+      "#{count(summary.instructions, "instruction")} in all"
+    ]
+    |> Enum.filter(&is_binary/1)
+  end
+
+  defp count(1, noun), do: "1 #{noun}"
+  defp count(number, noun), do: "#{number} #{noun}s"
 
   # How often DeployEx checks for a new version, and how long a new version has to reach running
   defp timing(%{deploy_schedule_interval_ms: every, deploy_rollback_timeout_ms: within})

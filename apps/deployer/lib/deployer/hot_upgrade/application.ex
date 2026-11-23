@@ -104,6 +104,7 @@ defmodule Deployer.HotUpgrade.Application do
   alias Deployer.HotUpgrade.Execute
   alias Deployer.HotUpgrade.Jellyfish
   alias Deployer.HotUpgrade.Progress
+  alias Deployer.HotUpgrade.Relup
   alias Foundation.Rpc
 
   @typedoc """
@@ -265,8 +266,10 @@ defmodule Deployer.HotUpgrade.Application do
          :ok <- notify_progress(data, "Resolving the runtime configuration"),
          {:ok, runtime_config} <- resolve_runtime_config(data),
          runtime_config = add_config_change_marker(data, runtime_config),
-         :ok <- notify_progress(data, "Adding the runtime configuration to the relup") do
-      install_runtime_config_hook(data, runtime_config)
+         :ok <- notify_progress(data, "Adding the runtime configuration to the relup"),
+         :ok <- install_runtime_config_hook(data, runtime_config) do
+      # What is on disk now is what install_release/2 runs, so this is the one to keep
+      Relup.save(data)
     end
   end
 

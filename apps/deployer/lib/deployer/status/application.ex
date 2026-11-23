@@ -199,6 +199,7 @@ defmodule Deployer.Status.Application do
       pre_commands: release.pre_commands,
       # A release map built by a version without the field
       hot_upgrade_config_change: Map.get(release, :hot_upgrade_config_change),
+      from_version: Keyword.get(attrs, :from_version),
       sname: sname,
       name: name,
       deployment: Keyword.get(attrs, :deployment),
