@@ -46,7 +46,7 @@ release_adapter: "s3"                                    # Release adapter: s3, 
 release_bucket: "myphoenixapp-prod-distribution"         # Release distribution bucket name
 
 # Secrets Management
-secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp or env
+secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp, env, 1password-connect or 1password-cli
 secrets_path: "deployex-myphoenixapp-prod-secrets"       # Secret path to retrieve from
 
 # Cloud Provider Configuration
@@ -241,6 +241,12 @@ applications:
         value: "myphoenixapp-prod-secrets"
       - key: AWS_REGION
         value: "sa-east-1"
+
+    # Secrets (optional). The fields of a 1Password item, passed to the monitored app as
+    # environment variables every time it starts. See "Secrets from 1Password"
+    secrets:
+      adapter: "1password-connect"     # 1password-connect or 1password-cli
+      path: "vaults/production/items/myphoenixapp"
     
     # Application-Level Monitoring (optional with defaults)
     # Supported types are atom, process and port, any other type is rejected
@@ -313,6 +319,79 @@ applications:
         value: "sa-east-1"
 ```
 
+## Secrets from 1Password
+
+DeployEx can read secrets from 1Password in two places:
+
+- **Its own secrets**, with `secrets_adapter` and `secrets_path` at the top of the file, like the `aws`, `gcp` and `env` adapters.
+- **The secrets of a monitored application**, with the `secrets` section of the application. DeployEx reads them every time it starts the application and passes them to it as environment variables. This is what the 1Password Kubernetes operator does with a Secret and `envFrom`.
+
+Both take the same two values. The adapter says how 1Password is reached, the path says which item holds the secrets:
+
+```yaml
+secrets_adapter: "1password-connect"
+secrets_path: "vaults/production/items/deployex"
+
+applications:
+  - name: "myphoenixapp"
+    secrets:
+      adapter: "1password-connect"
+      path: "vaults/production/items/myphoenixapp"
+```
+
+### The item
+
+The path is `vaults/<vault>/items/<item>`, the format of the operator's `item-path` annotation.
+Each part is a name or an ID, and a name cannot contain a `/`.
+When several vaults or items share a name the oldest one is used, as the operator does.
+
+Each field of the item is one secret: the label of the field is its name and the value of the field is its value.
+For DeployEx's own secrets the labels are the names in the README, such as `DEPLOYEX_SECRET_KEY_BASE`.
+For an application they are the names of the environment variables it reads, such as `DATABASE_URL`.
+
+- A field without a value is left out, and when two fields have the same label the later one wins. The operator does the same.
+- The notes of the item, its URLs and its file attachments are not read. The operator does read them.
+- A field of an application is left out when its label is not a valid environment variable name, or starts with `RELEASE_` or `DEPLOYEX_`, which DeployEx removes from the environment of every application it starts. The labels left out are logged, values never are.
+
+### Reaching 1Password
+
+| Adapter | How | Needs |
+|---|---|---|
+| `1password-connect` | The REST API of a [1Password Connect server](https://developer.1password.com/docs/connect/) | `OP_CONNECT_HOST` (for example `http://connect.internal:8080`) and `OP_CONNECT_TOKEN` |
+| `1password-cli` | The `op` command line tool, version 2.30 or later, in the `PATH` of DeployEx | `OP_SERVICE_ACCOUNT_TOKEN`, a [service account](https://developer.1password.com/docs/service-accounts/) token. `op` uses a Connect server instead when `OP_CONNECT_HOST` and `OP_CONNECT_TOKEN` are set |
+
+These are the variable names the 1Password tools use, and they are read from the environment of DeployEx.
+They cannot come from the secrets adapter, which is what they give access to.
+On a host installed with `deployex.sh`, give them to the service with a systemd drop-in that points to a file only root can read:
+
+```bash
+sudo install -d -m 0700 /etc/systemd/system/deployex.service.d
+sudo install -m 0600 /dev/null /etc/systemd/system/deployex.service.d/onepassword.env
+sudoedit /etc/systemd/system/deployex.service.d/onepassword.env
+# OP_CONNECT_HOST=http://connect.internal:8080
+# OP_CONNECT_TOKEN=...
+printf '[Service]\nEnvironmentFile=/etc/systemd/system/deployex.service.d/onepassword.env\n' |
+  sudo tee /etc/systemd/system/deployex.service.d/onepassword.conf
+sudo systemctl daemon-reload
+sudo systemctl restart deployex.service
+```
+
+- **Use `EnvironmentFile=`, not `Environment=`.** systemd shows the `Environment=` lines of a unit to every user of the host, with `systemctl show`, whatever the mode of the file they are written in. Of an `EnvironmentFile=` it shows only the path.
+- **`deployex.sh --install` and `--update` keep the drop-in**, they only rewrite the unit file. `--uninstall` removes the whole `deployex.service.d` directory, the credentials with it.
+- **`deployex.sh` warns when they are missing.** On `--install` and `--update`, when the YAML uses a 1Password adapter and the service is not given the variables that adapter needs, or `op` is not installed for `1password-cli`, it prints a warning before it starts the service. It reads the names of the variables, never their values.
+
+A monitored application starts as a child of DeployEx, so DeployEx removes these three variables from the environment of every application it starts.
+An application that needs 1Password credentials of its own gets them as fields of its item.
+
+### What to expect for an application
+
+- **The secrets are read at every start**: a full deployment, a restart from the dashboard and a restart after a crash. A value changed in 1Password reaches the application at its next start.
+- **A hot upgrade does not read them again.** The application keeps running with the environment it was started with, so a secret that a new version needs has to be in the item before the instance last started, or the release has to be deployed fully.
+- **An application is not started without its secrets.** When the item cannot be read at the first start of an instance, DeployEx logs why and tries again, as it does for a failing pre-command.
+- **A restart does not depend on 1Password being reachable.** When the item cannot be read at a later start, the instance starts with the secrets of its previous start and DeployEx logs a warning. They are kept in memory, and not across a restart of DeployEx.
+- **The pre-commands get the same secrets**, so a migration can reach the database.
+- **The values are not written anywhere.** They are passed in the environment of the process, not on its command line, and they are not in the logs, the dashboard or the Agent API. The dashboard shows only the adapter and the path.
+
 ## Running behind a TLS-terminating proxy
 
 DeployEx can run behind anything that terminates TLS and forwards plain HTTP to the box: an
@@ -377,6 +456,7 @@ If the secret is missing when the `auth` section is applied, DeployEx logs a war
 - `replica_ports` - Port configuration for replicas
 - `env` - Environment variables
 - `readiness` - When a started application counts as ready, which is when the previous version stops. Applied on the next deployment. See [Application Readiness](#application-readiness)
+- `secrets` - Where the application's secrets are read from. Applied on the next deployment, an instance that already runs keeps the secrets it was started with. See [Secrets from 1Password](#secrets-from-1password)
 
 #### Application Readiness
 

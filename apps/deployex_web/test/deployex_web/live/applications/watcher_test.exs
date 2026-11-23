@@ -74,6 +74,47 @@ defmodule DeployexWeb.Applications.WatcherTest do
   end
 
   @tag :capture_log
+  test "GET /applications Review pending secrets changes renders where they come from", %{
+    conn: conn
+  } do
+    Deployer.StatusMock
+    |> expect(:monitoring, fn -> {:ok, FixtureStatus.list()} end)
+    |> expect(:subscribe, fn -> :ok end)
+    |> stub(:history_version_list, fn _name, _options -> FixtureStatus.versions() end)
+
+    {:ok, liveview, _html} = live(conn, ~p"/applications")
+
+    secrets = %Foundation.Yaml.Secrets{
+      adapter: Foundation.ConfigProvider.Secrets.OnePasswordConnect,
+      path: "vaults/production/items/myphoenixapp"
+    }
+
+    pending = FixtureWatcher.build_pending_changes()
+
+    {name, modified} =
+      Enum.find(pending.summary.applications.details, fn {_name, app} ->
+        app.status == :modified
+      end)
+
+    modified =
+      Map.update!(
+        modified,
+        :changes,
+        &Map.put(&1, :secrets, %{old: nil, new: secrets, apply_strategy: :next_deploy})
+      )
+
+    pending = put_in(pending.summary.applications.details[name], modified)
+
+    send(liveview.pid, {:watcher_config_new, Node.self(), pending})
+
+    html = liveview |> element("#host-config-review") |> render_click()
+
+    assert html =~ "Secrets"
+    assert html =~ "none"
+    assert html =~ "adapter: OnePasswordConnect path: vaults/production/items/myphoenixapp"
+  end
+
+  @tag :capture_log
   test "GET /applications Review pending changes and click escape button", %{conn: conn} do
     Deployer.StatusMock
     |> expect(:monitoring, fn -> {:ok, FixtureStatus.list()} end)

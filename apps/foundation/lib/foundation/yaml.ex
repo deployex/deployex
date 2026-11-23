@@ -251,6 +251,22 @@ defmodule Foundation.Yaml do
           }
   end
 
+  defmodule Secrets do
+    @moduledoc """
+    Where the secrets of a monitored application come from.
+
+    DeployEx reads the item at `path` with `adapter` every time it starts the application and
+    passes each of its fields to it as an environment variable.
+    """
+
+    defstruct [:adapter, :path]
+
+    @type t :: %__MODULE__{
+            adapter: module(),
+            path: String.t()
+          }
+  end
+
   defmodule Application do
     @moduledoc """
     Provides structure to define Application feature
@@ -266,6 +282,7 @@ defmodule Foundation.Yaml do
       :env,
       :monitoring,
       :certificates,
+      :secrets,
       readiness: %Foundation.Yaml.Readiness{}
     ]
 
@@ -279,6 +296,7 @@ defmodule Foundation.Yaml do
             env: [String.t()],
             monitoring: [{atom(), Foundation.Yaml.Monitoring.t()}],
             certificates: [Foundation.Yaml.Certificate.t()],
+            secrets: Foundation.Yaml.Secrets.t() | nil,
             readiness: Foundation.Yaml.Readiness.t()
           }
   end
@@ -617,6 +635,11 @@ defmodule Foundation.Yaml do
   defp secrets_adapter("aws"), do: Foundation.ConfigProvider.Secrets.Aws
   defp secrets_adapter("gcp"), do: Foundation.ConfigProvider.Secrets.Gcp
   defp secrets_adapter("env"), do: Foundation.ConfigProvider.Secrets.Env
+
+  defp secrets_adapter("1password-connect"),
+    do: Foundation.ConfigProvider.Secrets.OnePasswordConnect
+
+  defp secrets_adapter("1password-cli"), do: Foundation.ConfigProvider.Secrets.OnePasswordCli
   defp secrets_adapter(adapter), do: raise("Secret #{adapter} not supported")
 
   defp release_adapter("s3"), do: Deployer.Release.S3
@@ -696,8 +719,43 @@ defmodule Foundation.Yaml do
       env: parse_env(data["env"]),
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),
       certificates: parse_certificates(data["certificates"]),
+      secrets: parse_application_secrets(data["secrets"]),
       readiness: data["readiness"] |> parse_readiness() |> check_readiness_port(data)
     }
+  end
+
+  defp parse_application_secrets(nil), do: nil
+
+  defp parse_application_secrets(%{} = data) do
+    %Foundation.Yaml.Secrets{
+      adapter: application_secrets_adapter(data["adapter"]),
+      path: application_secrets_path(data["path"])
+    }
+  end
+
+  defp parse_application_secrets(value),
+    do: raise("application secrets #{inspect(value)} not supported, expected adapter and path")
+
+  # The adapters that read one item, whose fields become the environment of the application
+  defp application_secrets_adapter("1password-connect"),
+    do: Foundation.ConfigProvider.Secrets.OnePasswordConnect
+
+  defp application_secrets_adapter("1password-cli"),
+    do: Foundation.ConfigProvider.Secrets.OnePasswordCli
+
+  defp application_secrets_adapter(adapter),
+    do:
+      raise(
+        "application secrets adapter #{inspect(adapter)} not supported, " <>
+          "expected 1password-connect or 1password-cli"
+      )
+
+  # Checked when the YAML loads, so a path that can never be read is not found at the first start
+  defp application_secrets_path(path) do
+    case Foundation.OnePassword.parse_path(path) do
+      {:ok, _vault, _item} -> path
+      {:error, _reason} -> raise(Foundation.OnePassword.path_error(path))
+    end
   end
 
   # An http readiness probe against a port_key missing from replica_ports never passes, and the

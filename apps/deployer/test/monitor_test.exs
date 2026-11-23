@@ -1988,4 +1988,237 @@ defmodule Deployer.MonitorTest do
         wait_for_status(sname, status, attempts - 1)
     end
   end
+
+  describe "Application secrets" do
+    @secret_value "ecto://user:top-secret-password@db/app"
+
+    defp secrets do
+      %Foundation.Yaml.Secrets{
+        adapter: Foundation.ConfigProvider.SecretsMock,
+        path: "vaults/production/items/myelixir"
+      }
+    end
+
+    defp secrets_service(%{elixir_name: name, elixir_sname: sname, ports: ports}) do
+      %Service{
+        name: name,
+        sname: sname,
+        language: "elixir",
+        ports: ports,
+        secrets: secrets(),
+        retry_delay_pre_commands: 10,
+        readiness: %Readiness{type: :timeout, min_ready_ms: 10}
+      }
+    end
+
+    defp env_option(options), do: options |> List.keyfind(:env, 0) |> elem(1)
+
+    @tag :capture_log
+    test "the secrets are read at the start and reach the application through its environment",
+         context do
+      test_pid = self()
+      FixtureFiles.create_bin_files(context.elixir_sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn _sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      Foundation.ConfigProvider.SecretsMock
+      |> expect(:application_env, fn "vaults/production/items/myelixir" ->
+        {:ok, [{"DATABASE_URL", @secret_value}, {"OP_CONNECT_TOKEN", "the-app-own-token"}]}
+      end)
+
+      Host.CommanderMock
+      |> expect(:run_link, fn command, options ->
+        send(test_pid, {:started, command, options})
+        {:ok, test_pid, 123_456}
+      end)
+      |> stub(:run, fn _command, _options -> {:ok, test_pid} end)
+      |> stub(:stop, fn _pid -> :ok end)
+
+      assert {:ok, monitor} = MonitorApp.start_service(secrets_service(context))
+
+      assert_receive {:started, command, options}, 1_000
+
+      env = env_option(options)
+
+      assert {"DATABASE_URL", @secret_value} in env
+
+      # The credentials DeployEx reads 1Password with are removed from the environment the
+      # application inherits. One of its own secrets with the same name is set after that
+      assert {"OP_CONNECT_HOST", false} in env
+      assert {"OP_SERVICE_ACCOUNT_TOKEN", false} in env
+
+      assert Enum.find_index(env, &(&1 == {"OP_CONNECT_TOKEN", false})) <
+               Enum.find_index(env, &(&1 == {"OP_CONNECT_TOKEN", "the-app-own-token"}))
+
+      # The values are not in the command, which the process list shows, nor in the state
+      # that other processes read
+      refute command =~ "top-secret-password"
+      refute inspect(MonitorApp.state(context.elixir_sname)) =~ "top-secret-password"
+
+      # They are kept for the next restart in the process dictionary of the monitor, which
+      # the process page of the dashboard prints, so not as a term that prints its values
+      {:dictionary, dictionary} = Process.info(monitor, :dictionary)
+      assert Enum.any?(dictionary, &match?({{MonitorApp, :secret_env}, _kept}, &1))
+      refute inspect(dictionary, limit: :infinity) =~ "top-secret-password"
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    @tag :capture_log
+    test "an application without secrets is only given the removal of the 1Password credentials",
+         context do
+      test_pid = self()
+      FixtureFiles.create_bin_files(context.elixir_sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn _sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      Host.CommanderMock
+      |> expect(:run_link, fn _command, options ->
+        send(test_pid, {:started, options})
+        {:ok, test_pid, 123_456}
+      end)
+      |> stub(:run, fn _command, _options -> {:ok, test_pid} end)
+      |> stub(:stop, fn _pid -> :ok end)
+
+      assert {:ok, _pid} =
+               MonitorApp.start_service(%{secrets_service(context) | secrets: nil})
+
+      assert_receive {:started, options}, 1_000
+
+      assert env_option(options) == [
+               {"OP_CONNECT_HOST", false},
+               {"OP_CONNECT_TOKEN", false},
+               {"OP_SERVICE_ACCOUNT_TOKEN", false}
+             ]
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    test "an application is not started while its secrets cannot be read", context do
+      test_pid = self()
+      FixtureFiles.create_bin_files(context.elixir_sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn _sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      # Refused twice, then readable. The mock runs in the monitor, so it counts there
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path ->
+        attempt = Process.get(:secrets_attempt, 1)
+        Process.put(:secrets_attempt, attempt + 1)
+        send(test_pid, {:secrets_read, attempt})
+
+        if attempt < 3,
+          do: {:error, {:http_status, 401, "/v1/vaults"}},
+          else: {:ok, [{"DATABASE_URL", @secret_value}]}
+      end)
+
+      Host.CommanderMock
+      |> expect(:run_link, 1, fn _command, options ->
+        send(test_pid, {:started, options})
+        {:ok, test_pid, 123_456}
+      end)
+      |> stub(:run, fn _command, _options -> {:ok, test_pid} end)
+      |> stub(:stop, fn _pid -> :ok end)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, _pid} = MonitorApp.start_service(secrets_service(context))
+
+          assert_receive {:secrets_read, 1}, 1_000
+          assert_receive {:secrets_read, 2}, 1_000
+          refute_received {:started, _options}
+
+          assert_receive {:started, options}, 1_000
+          assert {"DATABASE_URL", @secret_value} in env_option(options)
+
+          assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+        end)
+
+      assert log =~ "Could not read the secrets of sname: #{context.elixir_sname}"
+      assert log =~ "{:http_status, 401"
+      refute log =~ "top-secret-password"
+    end
+
+    test "a restart uses the secrets of the last start when they cannot be read again",
+         context do
+      test_pid = self()
+      FixtureFiles.create_bin_files(context.elixir_sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn _sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path ->
+        attempt = Process.get(:secrets_attempt, 1)
+        Process.put(:secrets_attempt, attempt + 1)
+
+        if attempt == 1,
+          do: {:ok, [{"DATABASE_URL", @secret_value}]},
+          else: {:error, {:request_failed, :econnrefused}}
+      end)
+
+      Host.CommanderMock
+      |> stub(:run_link, fn _command, options ->
+        send(test_pid, {:started, options})
+        {:ok, test_pid, 123_456}
+      end)
+      |> stub(:run, fn _command, _options -> {:ok, test_pid} end)
+      |> stub(:stop, fn _pid -> :ok end)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, monitor} = MonitorApp.start_service(secrets_service(context))
+          assert_receive {:started, _options}, 1_000
+
+          # The application went down and the secret store is unreachable right then
+          send(monitor, {:run_service, context.elixir_sname})
+
+          assert_receive {:started, options}, 1_000
+          assert {"DATABASE_URL", @secret_value} in env_option(options)
+
+          assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+        end)
+
+      assert log =~ "using the ones from its last start"
+      refute log =~ "top-secret-password"
+    end
+
+    @tag :capture_log
+    test "the pre_commands of a deployment get the secrets too", context do
+      test_pid = self()
+      FixtureFiles.create_bin_files(context.elixir_sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn _sname ->
+        %Catalog.Version{version: "1.0.0", pre_commands: ["eval Migrate.run"]}
+      end)
+
+      Foundation.ConfigProvider.SecretsMock
+      |> stub(:application_env, fn _path -> {:ok, [{"DATABASE_URL", @secret_value}]} end)
+
+      Host.CommanderMock
+      |> stub(:run, fn command, options ->
+        if command =~ "eval Migrate.run", do: send(test_pid, {:pre_command, command, options})
+        {:ok, test_pid}
+      end)
+      |> stub(:run_link, fn _command, _options ->
+        send(test_pid, :started)
+        {:ok, test_pid, 123_456}
+      end)
+      |> stub(:stop, fn _pid -> :ok end)
+
+      assert {:ok, _pid} = MonitorApp.start_service(secrets_service(context))
+
+      assert_receive {:pre_command, command, options}, 1_000
+      assert {"DATABASE_URL", @secret_value} in env_option(options)
+      refute command =~ "top-secret-password"
+
+      assert_receive :started, 1_000
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+  end
 end

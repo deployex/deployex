@@ -722,6 +722,12 @@ defmodule DeployexWeb.Components.ConfigChangesModal do
   defp format_value(:readiness, %{type: type, min_ready_ms: min_ready_ms}),
     do: "type: #{type} min_ready_ms: #{min_ready_ms}"
 
+  # Where the secrets come from, never the secrets themselves
+  defp format_value(:secrets, nil), do: "none"
+
+  defp format_value(:secrets, %{adapter: adapter, path: path}),
+    do: "adapter: #{adapter |> Module.split() |> List.last()} path: #{path}"
+
   defp format_value(_, value), do: to_string(value)
 
   defp format_cert_value(nil), do: "none"

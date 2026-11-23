@@ -414,6 +414,19 @@ defmodule Sentinel.Config.Watcher do
     end
   end
 
+  # An application loaded by a version without secrets reads as having none. An instance
+  # that already runs keeps the secrets it was started with until its next deployment
+  defp add_secrets_changes(acc, old_app, new_app, strategy) do
+    old_secrets = Map.get(old_app, :secrets)
+    new_secrets = Map.get(new_app, :secrets)
+
+    if old_secrets == new_secrets do
+      acc
+    else
+      Map.put(acc, :secrets, %{old: old_secrets, new: new_secrets, apply_strategy: strategy})
+    end
+  end
+
   defp add_replica_ports_changes(acc, old_app, new_app, strategy) do
     old_replica_ports = Enum.map(old_app.replica_ports, &"#{&1.key}=#{&1.base}") |> Enum.sort()
     new_replica_ports = Enum.map(new_app.replica_ports, &"#{&1.key}=#{&1.base}") |> Enum.sort()
@@ -485,6 +498,7 @@ defmodule Sentinel.Config.Watcher do
     |> add_replica_ports_changes(old_app, new_app, :full_deploy)
     |> add_env_changes(old_app, new_app, :next_deploy)
     |> add_readiness_changes(old_app, new_app, :next_deploy)
+    |> add_secrets_changes(old_app, new_app, :next_deploy)
     |> add_monitoring_changes(old_app, new_app, :immediate)
     |> add_certificates_changes(old_app, new_app, :immediate)
   end
