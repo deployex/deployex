@@ -86,6 +86,91 @@ A version deployed before this field existed shows as `not set`.
  * The callback runs inside `release_handler:install_release/2`, with the new code already running and before the release is made permanent, so the upgrade waits for it. Keep it short and hand anything slow to another process.
  * A callback that fails does not fail the upgrade. One that raises, exits or returns an error leaves the release installed and made permanent, and OTP does not log it, so have the callback report its own failures.
 
+#### What the application does in it
+
+A hot upgrade restarts nothing, so everything the application worked out when it booted is still what it worked out then.
+`config_change/3` is where it brings those things up to date, and an application that is hot-upgraded should have one for each of them:
+
+| What stays as it was | Why | What to do |
+|---|---|---|
+| The version the application reports | A value read at boot, such as an environment variable or `runtime.exs`, still holds the old one. `runtime.exs` is of no help either, it is evaluated before the new code is installed | Read `Application.spec(:my_app, :vsn)` when the callback runs. The value of `:deployex_config_change` is the same version |
+| The version on traces (OpenTelemetry) | The SDK reads its resource once, when it starts, and the specification does not let a resource change afterwards | Put the new version in the `:opentelemetry` resource configuration and restart the `:opentelemetry` application |
+| The version on log lines | Whatever copied the version into the logs at boot, a logger filter, the metadata or the formatter options, still holds the copy | Set it up again, after the SDK has restarted when it reads the version from there |
+| The static asset manifest (Phoenix, digested assets) | The endpoint reads it when it starts | `MyAppWeb.Endpoint.config_change/2`, see [Phoenix applications](#phoenix-applications) |
+| Pages that are already open (Phoenix) | A hot upgrade disconnects no one | Broadcast, and let the pages that subscribed decide what to show |
+| A value a process took when it started | A database pool keeps the password it connected with, a client keeps the token it was built with | Restart that process. It applies to secrets too, see [Secrets from 1Password](/guides/docs/yaml/README.md#secrets-from-1password) |
+| A cache filled at boot | Nothing ran again to fill it: an ETS table, a `:persistent_term`, a file read once | Fill it again |
+
+Two rules follow from where the callback runs, which is inside the application controller of the node:
+
+ * **It cannot stop or start an application, or change the application environment.** `Application.stop/1`, `Application.ensure_all_started/1` and `Application.put_env/3` are calls to the application controller, which is the process making them, so they exit with `calling_self`. OTP catches that exit and does not log it, and the upgrade goes on as if the work had been done. Reading is fine: `Application.get_env/2` and `Application.spec/2` return the new configuration and the new version.
+ * **It has to return quickly.** While it runs, nothing else on the node can start or stop an application.
+
+So the callback does what is quick and cannot fail, and hands the rest to a process the application supervises:
+
+```elixir
+# lib/my_app/application.ex
+@impl true
+def config_change(changed, new, removed) do
+  MyAppWeb.Endpoint.config_change(changed, removed)
+
+  # In `new` on the first hot upgrade after a boot, in `changed` on the following ones
+  if Keyword.has_key?(changed ++ new, :deployex_config_change) do
+    MyApp.HotUpgrade.upgraded()
+  end
+
+  :ok
+end
+```
+
+```elixir
+# lib/my_app/hot_upgrade.ex, started by the supervisor of the application
+defmodule MyApp.HotUpgrade do
+  use GenServer
+
+  def start_link(_args), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+
+  # Returns at once, the work is done by this process
+  def upgraded, do: GenServer.cast(__MODULE__, :upgraded)
+
+  @impl true
+  def init(nil), do: {:ok, nil}
+
+  @impl true
+  def handle_cast(:upgraded, state) do
+    version = :my_app |> Application.spec(:vsn) |> to_string()
+
+    restart_telemetry(version)
+    Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", {:hot_upgraded, version})
+
+    {:noreply, state}
+  end
+
+  # The SDK reads its resource once, when it starts
+  defp restart_telemetry(version) do
+    resource =
+      :opentelemetry
+      |> Application.get_env(:resource, %{})
+      |> Map.update(:service, %{version: version}, &Map.put(&1, :version, version))
+
+    Application.put_env(:opentelemetry, :resource, resource)
+
+    :ok = Application.stop(:opentelemetry)
+    {:ok, _apps} = Application.ensure_all_started(:opentelemetry)
+
+    # Whatever copied the version into the logs at boot is set up again here
+  end
+end
+```
+
+What to expect from restarting the OpenTelemetry SDK (checked with `opentelemetry` 1.7 and `opentelemetry_api` 1.5, in a Phoenix application served by Bandit):
+
+ * Spans that ended before the restart and were still buffered are exported while it stops, with the version of the code that made them.
+ * Spans that end after it carry the new version.
+ * A span that is open while the SDK restarts is not exported, so a request in flight at that moment loses its trace.
+ * The instrumentation attached through `:telemetry` stays attached. Setting it up a second time, to refresh what it copied, did not double the spans of a request with `opentelemetry_bandit` and `opentelemetry_phoenix`. Check it for the libraries the application uses.
+ * Restarting the SDK and not the logs leaves the two on different versions.
+
 #### Phoenix applications
 
 **Keep the digested assets, and set `hot_upgrade_config_change` on every release.**
@@ -110,7 +195,7 @@ So the application needs no code change, and two things from its pipeline:
 With both in place, a page rendered after the upgrade links to the new files, and a page that was already open keeps the consistent set it loaded.
 
 Pages that are already open are not told that a new version is running: a hot upgrade does not disconnect anyone, so `Phoenix.LiveView.static_changed?/1` has no reconnect to report on.
-Broadcast from the callback and let the LiveViews that subscribed decide what to show:
+Broadcast from the callback, or from the process it hands the work to, and let the LiveViews that subscribed decide what to show:
 
 ```elixir
 @impl true
