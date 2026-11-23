@@ -29,6 +29,93 @@ defmodule Foundation.CatalogTest do
     assert [^version] = Catalog.versions(name, [])
   end
 
+  describe "relups" do
+    defp relup(from_version, to_version) do
+      %{
+        from_version: from_version,
+        to_version: to_version,
+        summary: %{modules: 2},
+        text: "{\"#{to_version}\",[{\"#{from_version}\",[],[point_of_no_return]}],[]}.\n",
+        inserted_at: ~N[2026-11-23 10:00:00]
+      }
+    end
+
+    test "add_relup/2 keeps the relup of an upgrade, relup/3 reads it back", %{name: name} do
+      assert Catalog.relup(name, "1.0.0", "1.1.0") == nil
+
+      assert :ok = Catalog.add_relup(name, relup("1.0.0", "1.1.0"))
+      assert :ok = Catalog.add_relup(name, relup("1.1.0", "1.2.0-9cad9cd+build.5"))
+
+      assert Catalog.relup(name, "1.0.0", "1.1.0") == relup("1.0.0", "1.1.0")
+
+      assert %{to_version: "1.2.0-9cad9cd+build.5"} =
+               Catalog.relup(name, "1.1.0", "1.2.0-9cad9cd+build.5")
+
+      # The same two versions on another instance are the same upgrade
+      assert :ok = Catalog.add_relup(name, %{relup("1.0.0", "1.1.0") | summary: %{modules: 3}})
+      assert %{summary: %{modules: 3}} = Catalog.relup(name, "1.0.0", "1.1.0")
+    end
+
+    test "a version that is not a plain file name is neither written nor read", %{name: name} do
+      for version <- ["../../etc/passwd", "1.0.0/..", "..", "", "1.0 0", "1.1.0\n", nil] do
+        assert Catalog.add_relup(name, relup("1.0.0", version)) == {:error, :invalid_relup_name}
+        assert Catalog.add_relup(name, relup(version, "1.1.0")) == {:error, :invalid_relup_name}
+        assert Catalog.relup(name, "1.0.0", version) == nil
+        assert Catalog.relup(name, version, "1.1.0") == nil
+      end
+
+      assert Catalog.relup("../#{name}", "1.0.0", "1.1.0") == nil
+    end
+
+    test "a kept file that cannot be read back reads as no relup", %{name: name} do
+      assert :ok = Catalog.add_relup(name, relup("1.0.0", "1.1.0"))
+
+      path =
+        Path.join([
+          Application.fetch_env!(:foundation, :var_path),
+          "storage",
+          name,
+          "deployex",
+          "relup",
+          "1.0.0_to_1.1.0.relup"
+        ])
+
+      # What a write that was cut short leaves
+      File.write!(path, "not a term")
+
+      assert Catalog.relup(name, "1.0.0", "1.1.0") == nil
+
+      # Nothing but the relups is left in the directory, a write goes through a file of its own
+      assert :ok = Catalog.add_relup(name, relup("1.0.0", "1.1.0"))
+      assert File.ls!(Path.dirname(path)) == ["1.0.0_to_1.1.0.relup"]
+      assert Catalog.relup(name, "1.0.0", "1.1.0") == relup("1.0.0", "1.1.0")
+    end
+
+    test "add_relup/2 keeps the newest 20 relups of an application", %{name: name} do
+      for patch <- 1..23 do
+        assert :ok = Catalog.add_relup(name, relup("1.0.#{patch - 1}", "1.0.#{patch}"))
+
+        # The file times have a resolution of a second, so each relup is given its own
+        path =
+          Path.join([
+            Application.fetch_env!(:foundation, :var_path),
+            "storage",
+            name,
+            "deployex",
+            "relup",
+            "1.0.#{patch - 1}_to_1.0.#{patch}.relup"
+          ])
+
+        File.touch!(path, 1_700_000_000 + patch)
+      end
+
+      assert Catalog.relup(name, "1.0.0", "1.0.1") == nil
+      assert Catalog.relup(name, "1.0.2", "1.0.3") == nil
+      assert %{to_version: "1.0.4"} = Catalog.relup(name, "1.0.3", "1.0.4")
+      assert %{to_version: "1.0.23"} = Catalog.relup(name, "1.0.22", "1.0.23")
+    end
+  end
+
   test "ghosted_versions/0", %{name: name} do
     assert [] == Catalog.ghosted_versions(name)
   end

@@ -14,12 +14,21 @@
     outline-offset: 2px;
 }
 
-.dx-app a.dx-link {
+.dx-app a.dx-link,
+.dx-app button.dx-link {
     color: var(--dx-primary-text);
 }
 
-.dx-app a.dx-link:hover {
+.dx-app a.dx-link:hover,
+.dx-app button.dx-link:hover {
     color: var(--dx-base-content);
+}
+
+/* A button that reads as a link, for an action that opens something in the page */
+.dx-app button.dx-link {
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
 }
 
 .dx-card {
@@ -2243,12 +2252,40 @@
 
 .dx-vrow {
     display: grid;
-    grid-template-columns: 110px minmax(180px, 1fr) 150px 120px 210px;
+    grid-template-columns: 110px minmax(180px, 1fr) 190px 120px 210px;
     gap: 18px;
     align-items: center;
     padding: 0 20px;
     min-height: 52px;
     border-top: 1px solid var(--dx-base-300);
+}
+
+/* A button that opens a panel under its row. Its chevron points down while the panel is open */
+.dx-disclose {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 24px;
+    padding: 0 8px 0 5px;
+    border: 1px solid var(--dx-base-300);
+    border-radius: 6px;
+    color: var(--dx-muted);
+    font: 600 0.75rem/1 var(--dx-font-sans);
+    cursor: pointer;
+}
+
+.dx-disclose:hover,
+.dx-disclose[aria-expanded="true"] {
+    background: var(--dx-base-200);
+    color: var(--dx-base-content);
+}
+
+.dx-disclose svg {
+    transition: transform 120ms;
+}
+
+.dx-disclose[aria-expanded="true"] svg {
+    transform: rotate(90deg);
 }
 
 .dx-grow {

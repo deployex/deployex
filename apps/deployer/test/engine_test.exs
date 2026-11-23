@@ -1675,7 +1675,7 @@ defmodule Deployer.EngineTest do
         end
       end)
       |> expect(:update, 1, fn _sname -> :ok end)
-      |> expect(:set_current_version_map, 2, fn _sname, release, _attrs ->
+      |> expect(:set_current_version_map, 2, fn _sname, release, attrs ->
         # 0 -> 1.0.0
         # 1 -> 2.0.0
         called = Process.get("set_current_version_map", 0)
@@ -1684,6 +1684,7 @@ defmodule Deployer.EngineTest do
         if called > 0 do
           # What the release asked for is what the version record is given to store
           send(pid, {:stored_config_change, release.hot_upgrade_config_change})
+          send(pid, {:stored_attrs, attrs})
           send(pid, {:handle_ref_event, ref})
         end
 
@@ -1752,6 +1753,10 @@ defmodule Deployer.EngineTest do
 
         assert_receive {:handle_ref_event, ^ref}, 1_000
         assert_receive {:stored_config_change, true}
+
+        # The record of a hot upgrade names the version it came from, which is what finds
+        # the relup that was kept for it
+        assert_receive {:stored_attrs, [deployment: :hot_upgrade, from_version: ^from_version]}
       end
     end
 
@@ -3852,7 +3857,10 @@ defmodule Deployer.EngineTest do
         if called > 2, do: to_version, else: from_version
       end)
       |> stub(:update, fn _sname -> :ok end)
-      |> expect(:set_current_version_map, 1, fn _sname, _release, deployment: :hot_upgrade ->
+      |> expect(:set_current_version_map, 1, fn _sname,
+                                                _release,
+                                                deployment: :hot_upgrade,
+                                                from_version: _from_version ->
         send(test_pid, {:handle_ref_event, ref})
         :ok
       end)

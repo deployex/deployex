@@ -417,6 +417,29 @@ There DeployEx does fall back to a full deployment, which restarts the instance 
 [error] Hot Upgrade failed, running for full deployment
 ```
 
+### Seeing what a hot upgrade did
+
+The relup is the plan the node ran: which applications had their code replaced, which modules were loaded, which processes were suspended for a `code_change`, and which functions the upgrade called.
+It is written into the release directory, which DeployEx removes when it prunes older releases, so DeployEx keeps a copy with the version history.
+
+ * It is kept just before the release is installed, with the instruction DeployEx adds for the runtime configuration, so it is what the node was given. An upgrade that failed after that point has its relup too.
+ * Only the upgrade is kept. A relup also describes the way back, which DeployEx never applies.
+ * It holds instructions, not configuration. The resolved configuration travels separately and is erased once the upgrade has applied it.
+ * The newest 20 are kept for each application, one for each pair of versions.
+
+On the Versions page of the application, a hot upgrade has a `relup` link. It opens under the row, with two views:
+
+ * **Steps** lists what the node ran, in the order it ran it: each instruction, such as `suspend`, `load`, `code_change` or `purge`, with the modules it acted on and a sentence on what it means. The two purge options of a `load` are spelled out: they do not restart anything, a process runs the new code from its next call into the module, and they only decide what happens to one that is still inside older code. The `load` of each module of an application reads as one step. Under the steps, the outcome sums the upgrade up.
+ * **Original file** shows the relup as text, with a button that copies it.
+
+`GET /v1/apps/:name/relups/:from_version/:to_version` of the [Agent API](/guides/docs/agent-api/README.md) returns the same: the `steps`, each with its `meaning`, the `summary` and the script. Each version in `/versions` and `/ghosted` has the `from_version` that goes in that path.
+The steps are the place to check that an appup edited by hand did what was meant, for instance that the `apply` restarting a child is there, and where it runs.
+
+The relups of DeployEx's own hot upgrades are kept the same way.
+DeployEx is not one of the monitored applications, so the Agent API has them under the node: `GET /v1/node/versions` lists the hot upgrades DeployEx applied to itself and `GET /v1/node/relups/:from_version/:to_version` returns the relup of one.
+The dashboard does not show them yet.
+The upgrade into the first version that keeps relups has none: it is run by the version that was installed, which did not keep them.
+
 ## Going back
 
 There is no hot downgrade.

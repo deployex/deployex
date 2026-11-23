@@ -6,7 +6,9 @@ defmodule DeployexWeb.AgentApi.Apps do
   pre_commands are never included.
   """
 
+  alias Deployer.HotUpgrade.Relup
   alias Deployer.Status
+  alias Foundation.Catalog
 
   @type snapshot :: map()
 
@@ -31,6 +33,63 @@ defmodule DeployexWeb.AgentApi.Apps do
   def versions(name) do
     with {:ok, _app} <- find(name) do
       {:ok, name |> Status.history_version_list([]) |> Enum.map(&version/1)}
+    end
+  end
+
+  @doc """
+  The relup DeployEx kept for the hot upgrade of the app between two versions: what the
+  upgrade does, and the script the node ran.
+  """
+  @spec relup(name :: String.t(), from_version :: String.t(), to_version :: String.t()) ::
+          {:ok, map()} | {:error, :not_found | :unavailable}
+  def relup(name, from_version, to_version) do
+    with {:ok, _app} <- find(name), do: kept_relup(name, from_version, to_version)
+  end
+
+  @deployex "deployex"
+
+  @doc """
+  The version history of DeployEx itself, which is the hot upgrades it applied to itself. A
+  full installation of DeployEx is not recorded.
+  """
+  @spec deployex_versions() :: {:ok, [map()]}
+  def deployex_versions,
+    do: {:ok, @deployex |> Status.history_version_list([]) |> Enum.map(&version/1)}
+
+  @doc """
+  The relup DeployEx kept for a hot upgrade of itself between two versions.
+  """
+  @spec deployex_relup(from_version :: String.t(), to_version :: String.t()) ::
+          {:ok, map()} | {:error, :not_found}
+  def deployex_relup(from_version, to_version),
+    do: kept_relup(@deployex, from_version, to_version)
+
+  defp kept_relup(name, from_version, to_version) do
+    case Catalog.relup(name, from_version, to_version) do
+      nil ->
+        {:error, :not_found}
+
+      relup ->
+        {:ok,
+         %{
+           from_version: relup.from_version,
+           to_version: relup.to_version,
+           inserted_at: utc(relup.inserted_at),
+           summary: %{
+             relup.summary
+             | applications:
+                 Enum.map(relup.summary.applications, fn {application, version} ->
+                   %{name: application, version: version}
+                 end)
+           },
+           # The steps the node ran, in order, each with what it means. A relup kept before
+           # the steps were has none
+           steps:
+             Enum.map(Map.get(relup, :steps, []), fn step ->
+               step |> Map.delete(:key) |> Map.put(:meaning, Relup.explain(step))
+             end),
+           relup: relup.text
+         }}
     end
   end
 
@@ -118,6 +177,9 @@ defmodule DeployexWeb.AgentApi.Apps do
       deployment: version.deployment,
       # What the release asked for in current.json, null when it did not say
       hot_upgrade_config_change: Map.get(version, :hot_upgrade_config_change),
+      # The version a hot upgrade started from, null for a full deployment. With `version`
+      # it names the relup at /relups/:from_version/:to_version
+      from_version: Map.get(version, :from_version),
       inserted_at: utc(version.inserted_at)
     }
   end

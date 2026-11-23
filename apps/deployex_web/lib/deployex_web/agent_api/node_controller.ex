@@ -2,6 +2,7 @@ defmodule DeployexWeb.AgentApi.NodeController do
   use DeployexWeb, :controller
 
   alias Deployer.Status
+  alias DeployexWeb.AgentApi.Apps
 
   action_fallback DeployexWeb.AgentApi.FallbackController
 
@@ -16,6 +17,16 @@ defmodule DeployexWeb.AgentApi.NodeController do
         host: host(Host.Info.latest())
       })
     end
+  end
+
+  # The hot upgrades DeployEx applied to itself. It is not one of the monitored apps, so its
+  # history and its relups are here and not under /apps
+  def versions(conn, _params) do
+    with {:ok, versions} <- Apps.deployex_versions(), do: json(conn, %{versions: versions})
+  end
+
+  def relup(conn, %{"from_version" => from_version, "to_version" => to_version}) do
+    with {:ok, relup} <- Apps.deployex_relup(from_version, to_version), do: json(conn, relup)
   end
 
   defp deployex do

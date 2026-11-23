@@ -24,9 +24,12 @@ defmodule DeployexWeb.AgentApi.Router do
     pipe_through :read
 
     get "/node", NodeController, :show
+    get "/node/versions", NodeController, :versions
+    get "/node/relups/:from_version/:to_version", NodeController, :relup
     get "/apps", AppController, :index
     get "/apps/:name", AppController, :show
     get "/apps/:name/versions", AppController, :versions
+    get "/apps/:name/relups/:from_version/:to_version", AppController, :relup
     get "/apps/:name/ghosted", AppController, :ghosted
     get "/apps/:name/logs", LogController, :index
   end
