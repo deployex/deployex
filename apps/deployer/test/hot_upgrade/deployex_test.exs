@@ -166,13 +166,22 @@ defmodule Deployer.HotUpgrade.DeployexTest do
     Host.CommanderMock
     |> expect(:run, fn _command, _options -> {:ok, []} end)
 
+    test_pid = self()
+
     with_mock HotUpgradeApp, [:passthrough],
       check: fn _check -> {:ok, %Check{deploy: :hot_upgrade}} end,
-      execute: fn _check -> :ok end do
+      execute: fn execute ->
+        send(test_pid, {:executed, execute})
+        :ok
+      end do
       # the default is synchronous, so :ok really is the upgrade having finished
       assert capture_log(fn ->
                assert :ok = Deployex.execute("/tmp/deployex-1.0.0.tar.gz", [])
              end) =~ "Hot upgrade in deployex installed with success"
+
+      # DeployexWeb serves digested assets, so every self-upgrade forces config_change/3,
+      # which is what makes its endpoint reload the static manifest
+      assert_received {:executed, %Deployer.HotUpgrade.Execute{config_change: true}}
     end
   end
 
