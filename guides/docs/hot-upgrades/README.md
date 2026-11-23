@@ -106,7 +106,9 @@ Two rules follow from where the callback runs, which is inside the application c
  * **It cannot stop or start an application, or change the application environment.** `Application.stop/1`, `Application.ensure_all_started/1` and `Application.put_env/3` are calls to the application controller, which is the process making them, so they exit with `calling_self`. OTP catches that exit and does not log it, and the upgrade goes on as if the work had been done. Reading is fine: `Application.get_env/2` and `Application.spec/2` return the new configuration and the new version.
  * **It has to return quickly.** While it runs, nothing else on the node can start or stop an application.
 
-So the callback does what is quick and cannot fail, and hands the rest to a process the application supervises:
+So the callback does what is quick and cannot fail, and hands the rest to another process.
+Which process does not matter, only that it is not the application controller: a `spawn/1` or a `Task` works as well.
+The example uses a `GenServer` the application supervises, so that a failure is reported, two upgrades in a row do not overlap, and there is one place for what the application does after a hot upgrade:
 
 ```elixir
 # lib/my_app/application.ex
