@@ -119,7 +119,8 @@ def config_change(changed, new, removed) do
   if Keyword.has_key?(changed ++ new, :deployex_config_change) do
     version = :my_app |> Application.spec(:vsn) |> to_string()
 
-    MyApp.TelemetryVersion.put(version)
+    MyApp.Version.put_on_traces(version)
+    MyApp.Version.put_on_logs(version)
     Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", {:hot_upgraded, version})
   end
 
@@ -131,14 +132,22 @@ Work that does need the application controller is handed to another process: a `
 
 #### The version on traces and logs
 
+`MyApp.Version` in the example above is the application's own module, and it has two things to bring up to date.
+
+**Traces.**
 The OpenTelemetry SDK builds its resource, which carries `service.version`, when it starts.
 It is not in a cache the application can write to: it is in the state of the SDK's own processes, the resource detector, the tracer provider and the span processor.
 The resource is replaced there, in place.
-Nothing is restarted, so no span is lost, and it is quick enough to run in the callback:
+Nothing is restarted, so no span is lost, and it is quick enough to run in the callback.
+
+**Logs.**
+Whatever copied the version into the logs at boot, a logger filter, the metadata or the formatter options, still holds the copy.
+Leaving it leaves traces and logs on different versions.
+For a logger filter, the copy is in the configuration of the filter, which the logger lets the application replace.
 
 ```elixir
-defmodule MyApp.TelemetryVersion do
-  # The processes of the SDK that hold the resource
+defmodule MyApp.Version do
+  # The processes of the OpenTelemetry SDK that hold the resource
   @holders [
     :otel_resource_detector,
     :otel_tracer_provider_global,
@@ -146,8 +155,12 @@ defmodule MyApp.TelemetryVersion do
     :otel_simple_processor_global
   ]
 
+  # The filter of the application that adds the version to each log event,
+  # with a configuration such as %{version: "1.0.0"}
+  @log_filter :my_log_filter
+
   # Returns true when the SDK reports the new version afterwards
-  def put(version) do
+  def put_on_traces(version) do
     old = :otel_resource_detector.get_resource()
     new = :otel_resource.merge(:otel_resource.create(%{"service.version": version}), old)
 
@@ -156,6 +169,14 @@ defmodule MyApp.TelemetryVersion do
     end
 
     :otel_tracer_provider.resource() == new and :otel_resource_detector.get_resource() == new
+  end
+
+  def put_on_logs(version) do
+    {:ok, %{filters: filters}} = :logger.get_handler_config(:default)
+    {fun, config} = Keyword.fetch!(filters, @log_filter)
+    filters = Keyword.put(filters, @log_filter, {fun, %{config | version: version}})
+
+    :logger.set_handler_config(:default, :filters, filters)
   end
 
   defp swap(old, old, new), do: new
@@ -168,23 +189,9 @@ end
 ```
 
  * Spans that end after it carry the new version, a span that was open at that moment included.
- * It reaches into the SDK: the names of its processes and the resource being a field of their state are not a public interface. They are the ones of `opentelemetry` 1.7 with the default tracer provider. Check the return value, and check again when the SDK is upgraded.
+ * Log events after it carry the new version.
+ * `put_on_traces/1` reaches into the SDK: the names of its processes and the resource being a field of their state are not a public interface. They are the ones of `opentelemetry` 1.7 with the default tracer provider. Check the return value, and check again when the SDK is upgraded.
  * The specification says a resource does not change once its tracer provider exists. This changes it, which is what a hot upgrade asks for: the same provider now runs another version of the code.
-
-**Then the logs.**
-Whatever copied the version into the logs at boot still holds the copy, and leaving it leaves traces and logs on different versions.
-For a logger filter, the copy is in the configuration of the filter:
-
-```elixir
-{:ok, %{filters: filters}} = :logger.get_handler_config(:default)
-{fun, config} = Keyword.fetch!(filters, :my_log_filter)
-
-:logger.set_handler_config(
-  :default,
-  :filters,
-  Keyword.put(filters, :my_log_filter, {fun, %{config | version: version}})
-)
-```
 
 This was checked with `opentelemetry` 1.7 and `opentelemetry_api` 1.5, in a Phoenix application served by Bandit, with the batch and the simple span processor.
 
