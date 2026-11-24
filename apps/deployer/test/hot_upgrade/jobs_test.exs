@@ -33,6 +33,8 @@ defmodule Deployer.HotUpgrade.JobsTest do
       for {queue, state} <- Agent.get(@queues, & &1), do: Map.put(state, :queue, queue)
     end
 
+    # A queue named "broken" cannot be paused
+    def pause_queue(_name, queue: "broken", local_only: true), do: {:error, :no_notifier}
     def pause_queue(_name, queue: queue, local_only: true), do: put(queue, :paused, true)
     def resume_queue(_name, queue: queue, local_only: true), do: put(queue, :paused, false)
 
@@ -207,6 +209,53 @@ defmodule Deployer.HotUpgrade.JobsTest do
       refute queue("default").paused
     end
 
+    test "pause and resume the other queues when one cannot be paused" do
+      start_oban!(200, %{
+        "broken" => %{paused: false, running: []},
+        "default" => %{paused: false, running: []},
+        "mailers" => %{paused: false, running: []}
+      })
+
+      # The one that did not pause is waited for until the grace period is over
+      assert [{Oban, ["broken", "default", "mailers"], {:running, 1}}] =
+               run(Jobs.pause_instruction())
+
+      assert queue("default").paused
+      assert queue("mailers").paused
+
+      assert {"0.2.0", [{Oban, ["broken", "default", "mailers"], {:running, 1}, :resumed}]} =
+               run(Jobs.resume_instruction("0.2.0"))
+
+      refute queue("default").paused
+      refute queue("mailers").paused
+    end
+
+    test "do not take a check that fails for jobs that finished" do
+      start_oban!(300, %{"default" => %{paused: false, running: [11]}})
+
+      # The queues stop answering while the instruction waits
+      breaker =
+        Task.async(fn ->
+          Process.sleep(100)
+          Agent.update(__MODULE__.Queues, fn _queues -> :not_a_map end)
+        end)
+
+      started_at = System.monotonic_time(:millisecond)
+
+      assert [{Oban, ["default"], :unknown}] = run(Jobs.pause_instruction())
+
+      assert System.monotonic_time(:millisecond) - started_at >= 300
+      Task.await(breaker)
+    end
+
+    test "leave out an instance with no queue to pause" do
+      start_oban!(5_000, %{"maintenance" => %{paused: true, running: []}})
+
+      assert [] = run(Jobs.pause_instruction())
+      assert {"0.2.0", []} = run(Jobs.resume_instruction("0.2.0"))
+      assert queue("maintenance").paused
+    end
+
     test "do nothing when Oban is not running" do
       assert [] = run(Jobs.pause_instruction())
       assert {"0.2.0", []} = run(Jobs.resume_instruction("0.2.0"))
@@ -289,6 +338,24 @@ defmodule Deployer.HotUpgrade.JobsTest do
                  %{name: "MyElixir.Oban", queues: ["default"], running: 2, resumed: "failed"}
                ]
              } = Catalog.relup("myelixir", "0.1.0", "0.2.0")
+    end
+
+    test "keeps the jobs as not known when they were not waited for", ctx do
+      ctx.keep.(ctx.with_instructions)
+
+      expect_result(
+        {"0.2.0",
+         [
+           {Oban, ["default"], :pending, :resumed},
+           {MyElixir.Oban, ["default"], :unknown, :resumed}
+         ]}
+      )
+
+      assert capture_log(fn -> assert :ok = Jobs.record(ctx.data) end) =~
+               "Oban paused 1 queue, its jobs could not be waited for, and resumed"
+
+      assert %{jobs: [%{name: "Oban", running: nil}, %{name: "MyElixir.Oban", running: nil}]} =
+               Catalog.relup("myelixir", "0.1.0", "0.2.0")
     end
 
     test "keeps an empty list for an application without Oban", ctx do

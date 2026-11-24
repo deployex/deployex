@@ -6,9 +6,10 @@
 %% shutdown_grace_period of the instance, 20 seconds at most. A job that is still running
 %% after that is left running, and is killed by the upgrade only if its code is replaced.
 %%
-%% A queue that was already paused is not touched, so it is not resumed either. What was
-%% paused is left in persistent_term before the wait, for the instruction at the end of the
-%% relup to resume. These are expressions and not a module, evaluated by erl_eval.
+%% A queue that was already paused is not touched, so it is not resumed either. What is to
+%% be paused is left in persistent_term before any queue is paused, for the instruction at
+%% the end of the relup to resume whatever happens here. These are expressions and not a
+%% module, evaluated by erl_eval.
 %%
 %% It runs after the point of no return, where an instruction that fails restarts the node,
 %% so nothing here may raise.
@@ -33,21 +34,29 @@ try
             _ -> []
         end,
     Queues = fun(Name) -> [Q || Q <- 'Elixir.Oban':check_all_queues(Name), is_map(Q)] end,
+    %% An instance with no queue to pause is left out
     Paused =
         lists:flatmap(
           fun({Name, Grace}) ->
               try
-                  Running = [maps:get(queue, Q) || Q <- Queues(Name),
-                                                   maps:get(paused, Q, false) =:= false],
-                  [ok = 'Elixir.Oban':pause_queue(Name, [{queue, Q}, {local_only, true}])
-                   || Q <- Running],
-                  [{Name, Running, Grace}]
+                  case [maps:get(queue, Q) || Q <- Queues(Name),
+                                              maps:get(paused, Q, false) =:= false] of
+                      [] -> [];
+                      Running -> [{Name, Running, Grace}]
+                  end
               catch
                   _:_ -> []
               end
           end, Instances),
     persistent_term:put(Key, [{Name, Qs, pending} || {Name, Qs, _Grace} <- Paused]),
-    %% Jobs still running in the queues that were paused, or a queue that has not paused yet
+    %% One at a time: a queue that fails to pause does not keep the others from being
+    %% paused, nor any of them from being resumed. Resuming one that did not pause is
+    %% harmless, it was running before.
+    [try 'Elixir.Oban':pause_queue(Name, [{queue, Q}, {local_only, true}])
+     catch _:_ -> failed
+     end || {Name, Qs, _Grace} <- Paused, Q <- Qs],
+    %% Jobs still running in the queues that were paused, or a queue that has not paused
+    %% yet. A check that fails says nothing about the jobs, so it does not end the wait.
     Busy = fun(Name, Qs) ->
                try
                    lists:sum([case maps:get(paused, Q, false) of
@@ -55,7 +64,7 @@ try
                                   false -> length(maps:get(running, Q, [])) + 1
                               end || Q <- Queues(Name), lists:member(maps:get(queue, Q), Qs)])
                catch
-                   _:_ -> 0
+                   _:_ -> unknown
                end
            end,
     Wait = lists:min([20000 | [lists:max([Grace || {_, _, Grace} <- Paused]) || Paused =/= []]]),
@@ -68,7 +77,11 @@ try
                    false -> timer:sleep(100), Loop()
                end
            end,
-    persistent_term:put(Key, [{Name, Qs, case N of 0 -> finished; _ -> {running, N} end}
+    persistent_term:put(Key, [{Name, Qs, case N of
+                                             0 -> finished;
+                                             unknown -> unknown;
+                                             _ -> {running, N}
+                                         end}
                               || {Name, Qs, N} <- Loop()])
 catch
     _:_ -> ok

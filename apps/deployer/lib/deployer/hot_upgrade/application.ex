@@ -91,6 +91,9 @@ defmodule Deployer.HotUpgrade.Application do
   require Logger
 
   @rpc_timeout 60_000
+  # install_release/2 also runs the instructions of Jobs and Pipelines, which wait up to 65
+  # seconds: 20 for the jobs, and 5, 30 and 10 to find, stop and start the pipelines
+  @install_timeout @rpc_timeout + 65_000
   @execute_timeout 300_000
   @check_timeout 300_000
   @behaviour Deployer.HotUpgrade.Adapter
@@ -648,7 +651,7 @@ defmodule Deployer.HotUpgrade.Application do
            :release_handler,
            :install_release,
            [to_version, [{:update_paths, true}]],
-           @rpc_timeout
+           @install_timeout
          ) do
       {:ok, _, _} ->
         Logger.info("Installed Release: #{inspect(to_version)}")

@@ -49,6 +49,19 @@ defmodule Deployer.HotUpgrade.PipelinesTest do
     end
   end
 
+  # A process that is not a supervisor and starts a pipeline of its own
+  defmodule Owner do
+    use GenServer
+
+    def start_link(name), do: GenServer.start_link(__MODULE__, name)
+
+    @impl true
+    def init(name) do
+      {:ok, _pid} = Pipeline.start_link(name)
+      {:ok, name}
+    end
+  end
+
   setup do
     Process.register(self(), :pipelines_test)
 
@@ -201,6 +214,92 @@ defmodule Deployer.HotUpgrade.PipelinesTest do
       assert [] = run(Pipelines.stop_instruction())
       assert Process.whereis(:dynamic_pipeline) == pid
       assert {"0.2.0", []} = run(Pipelines.start_instruction("0.2.0"))
+    end
+
+    test "leave alone a pipeline that is a temporary child" do
+      supervisor =
+        start_supervised!(%{
+          id: :app,
+          start:
+            {Supervisor, :start_link,
+             [
+               [
+                 Supervisor.child_spec({Pipeline, :kept_pipeline}, id: :kept_pipeline),
+                 Supervisor.child_spec({Pipeline, :temporary_pipeline},
+                   id: :temporary_pipeline,
+                   restart: :temporary
+                 )
+               ],
+               [strategy: :one_for_one]
+             ]}
+        })
+
+      :persistent_term.put(@running_key, [:kept_pipeline, :temporary_pipeline])
+      temporary = Process.whereis(:temporary_pipeline)
+
+      assert [{:kept_pipeline, ^supervisor, :kept_pipeline, :stopped}] =
+               run(Pipelines.stop_instruction())
+
+      # Its supervisor would have forgotten it, and nothing could start it again
+      assert Process.whereis(:temporary_pipeline) == temporary
+    end
+
+    test "do not ask a process that is not a supervisor for its children" do
+      owner = start_supervised!({Owner, :owned_pipeline})
+      :persistent_term.put(@running_key, [:owned_pipeline])
+      pipeline = Process.whereis(:owned_pipeline)
+
+      assert [] = run(Pipelines.stop_instruction())
+
+      # A call it does not know would have stopped it, and the pipeline with it
+      assert Process.alive?(owner)
+      assert Process.whereis(:owned_pipeline) == pipeline
+    end
+
+    test "do not wait for a supervisor that does not answer" do
+      supervisor = start_supervised_pipelines!([:orders_pipeline])
+      :sys.suspend(supervisor)
+
+      started_at = System.monotonic_time(:millisecond)
+
+      # Nothing is found within the 5 seconds given to look for the pipelines
+      assert [] = run(Pipelines.stop_instruction())
+
+      waited = System.monotonic_time(:millisecond) - started_at
+      assert waited >= 5_000 and waited < 8_000
+
+      # And a start is given up after 10 seconds, to happen when the supervisor answers
+      :ok = :sys.resume(supervisor)
+      :ok = Supervisor.terminate_child(supervisor, :orders_pipeline)
+      :sys.suspend(supervisor)
+
+      :persistent_term.put(@result_key, [
+        {:orders_pipeline, supervisor, :orders_pipeline, :timeout}
+      ])
+
+      assert {"0.2.0", [{:orders_pipeline, :timeout, :timeout}]} =
+               run(Pipelines.start_instruction("0.2.0"))
+
+      :ok = :sys.resume(supervisor)
+      # Any call is answered after the start that was waiting
+      _children = Supervisor.which_children(supervisor)
+      assert is_pid(Process.whereis(:orders_pipeline))
+    end
+
+    test "take a pipeline that is running again for started" do
+      supervisor = start_supervised_pipelines!([:orders_pipeline])
+
+      # Its supervisor was started again during the upgrade, under another pid
+      gone = spawn(fn -> :ok end)
+
+      :persistent_term.put(@result_key, [
+        {:orders_pipeline, gone, :orders_pipeline, :stopped},
+        {:other_pipeline, supervisor, :no_such_child, :stopped}
+      ])
+
+      assert {"0.2.0",
+              [{:orders_pipeline, :stopped, :started}, {:other_pipeline, :stopped, :failed}]} =
+               run(Pipelines.start_instruction("0.2.0"))
     end
 
     test "do nothing when no pipeline is running" do

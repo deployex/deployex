@@ -71,9 +71,9 @@ So DeployEx keeps the pipelines out of the way while the code is replaced, with 
 
 There is nothing to turn on, and nothing to add to the application.
 
- * **The upgrade waits for the messages in flight**, up to 30 seconds for all the pipelines together, which stop at the same time. Consumers that handle a message in milliseconds add nothing noticeable. A pipeline that is still stopping after 30 seconds is no longer waited for: the upgrade goes on, a message it is still handling can be killed as before, and it is started again at the end.
+ * **The upgrade waits for the messages in flight**, up to 30 seconds for all the pipelines together, which stop at the same time. Consumers that handle a message in milliseconds add nothing noticeable. A pipeline that is still stopping after 30 seconds is no longer waited for: the upgrade goes on, a message it is still handling can be killed as before, and it is started again at the end, or as soon as it has stopped: the start is waited for up to 10 seconds.
  * **Nothing is consumed on that node meanwhile.** The other nodes keep consuming.
- * **A pipeline DeployEx could not start again is left alone**: one that was not started under a name, or by a supervisor that keeps no child to start again, such as a `DynamicSupervisor`. So is an application without Broadway, or with a version of it that does not list its pipelines.
+ * **A pipeline DeployEx could not start again is left alone**: one that was not started under a name, or by a supervisor that keeps no child to start again, such as a `DynamicSupervisor`, one that is a `temporary` child, or one started by a process that is not a supervisor. So is an application without Broadway, or with a version of it that does not list its pipelines.
  * **An upgrade that restarts the VM does not carry them**, it stops everything anyway.
  * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be started again is written down before anything is stopped.
  * **What happened is kept**, with the relup: each pipeline, whether it stopped in time and whether it started. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `pipelines`. The code is `apps/deployer/priv/relup/pipelines_stop.erl` and `pipelines_start.erl`.
@@ -94,10 +94,10 @@ There is nothing to turn on, and nothing to add to the application.
  * **A job that outlasts the wait keeps running.** It is killed only when a module it is inside of is replaced by this upgrade, and Oban then tries it again, a few seconds later. A job whose code did not change is not touched, which a deployment that stops the node cannot offer.
  * **The rules for a job are the ones a deployment already asks for**: more than one attempt, since a kill uses one and a job with a single attempt is not tried again, and safe to run again from the start.
  * **Only this node is paused**, and no job starts on it during the upgrade. A queue that was already paused is left paused.
- * **The upgrade takes that much longer** when jobs are running, and no longer when the queues are idle. With the pipelines, an upgrade waits 50 seconds at most.
+ * **The upgrade takes that much longer** when jobs are running, and no longer when the queues are idle. With the pipelines, an upgrade waits 65 seconds at most: 20 for the jobs, and 5, 30 and 10 to find, stop and start the pipelines.
  * **An application without Oban is not changed**, nor is one with a version of it that cannot pause a queue on one node. An upgrade that restarts the VM does not carry the instructions.
- * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be resumed is written down before the wait.
- * **What happened is kept**, with the relup: the queues that were paused, how many jobs were still running when the wait ended, and whether the queues were resumed. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `jobs`. The code is `apps/deployer/priv/relup/jobs_pause.erl` and `jobs_resume.erl`.
+ * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be resumed is written down before any queue is paused.
+ * **What happened is kept**, with the relup: the queues that were paused, how many jobs were still running when the wait ended (`null` when the queues could not be checked), and whether the queues were resumed. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `jobs`. The code is `apps/deployer/priv/relup/jobs_pause.erl` and `jobs_resume.erl`.
 
 ### Telling the application that it was hot-upgraded
 

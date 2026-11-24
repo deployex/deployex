@@ -25,15 +25,43 @@ try
         end,
     %% A pipeline is a child of the supervisor that started it. One that was not started
     %% under a name, or by a supervisor that keeps no child to start again, is left alone.
+    %% So is one started by a process that is not a supervisor, which must not be asked
+    %% for its children, and a temporary child, which its supervisor forgets once stopped.
     Find = fun(Name) ->
                Pid = whereis(Name),
                {dictionary, Dictionary} = process_info(Pid, dictionary),
                [Parent | _] = proplists:get_value('$ancestors', Dictionary),
+               ParentPid = case is_pid(Parent) of
+                               true -> Parent;
+                               false -> whereis(Parent)
+                           end,
+               {dictionary, ParentDictionary} = process_info(ParentPid, dictionary),
+               {supervisor, _, _} = proplists:get_value('$initial_call', ParentDictionary),
                [Id] = [I || {I, P, _, _} <- supervisor:which_children(Parent),
                             P =:= Pid, I =/= undefined],
+               {ok, #{restart := Restart}} = supervisor:get_childspec(Parent, Id),
+               true = Restart =/= temporary,
                {Name, Parent, Id}
            end,
-    Found = lists:flatmap(fun(Name) -> try [Find(Name)] catch _:_ -> [] end end, Names),
+    %% A supervisor that is busy does not answer, and the release handler cannot wait for
+    %% it: each pipeline is looked for in a process of its own, 5 seconds for all of them.
+    Finds = [spawn_monitor(fun() ->
+                               exit(try {found, Find(Name)} catch _:_ -> not_found end)
+                           end) || Name <- Names],
+    FindDeadline = erlang:monotonic_time(millisecond) + 5000,
+    Found =
+        lists:append(
+          [begin
+               FindLeft = max(FindDeadline - erlang:monotonic_time(millisecond), 0),
+               receive
+                   {'DOWN', FindRef, process, _, {found, Pipeline}} -> [Pipeline];
+                   {'DOWN', FindRef, process, _, _NotFound} -> []
+               after FindLeft ->
+                   erlang:demonitor(FindRef, [flush]),
+                   exit(FindPid, kill),
+                   []
+               end
+           end || {FindPid, FindRef} <- Finds]),
     persistent_term:put(Key, [{N, P, I, pending} || {N, P, I} <- Found]),
     %% All at once, each one waits for its own messages. 30 seconds for all of them, which is
     %% as long as a pipeline gives its own messages unless it was told otherwise: the

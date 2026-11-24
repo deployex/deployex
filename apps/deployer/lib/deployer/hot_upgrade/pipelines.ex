@@ -20,7 +20,8 @@ defmodule Deployer.HotUpgrade.Pipelines do
   A pipeline is stopped through the supervisor that started it, which is the graceful
   shutdown of Broadway: the messages being handled finish, and what does not finish in time
   goes back to its queue when the connection closes. The pipelines stop at the same time,
-  and the upgrade waits up to 30 seconds for them.
+  and the upgrade waits up to 30 seconds for them. It waits up to 10 seconds for them to
+  start again: one that was still stopping starts when its supervisor gets to it.
 
   As the other instructions DeployEx adds, they carry abstract forms and are evaluated by
   `erl_eval`. The code is in `priv/relup/pipelines_stop.erl` and `pipelines_start.erl`.
@@ -31,6 +32,8 @@ defmodule Deployer.HotUpgrade.Pipelines do
       pipelines.
     * A pipeline that was not started under a name, or by a supervisor that keeps no child
       to start again, such as a `DynamicSupervisor`.
+    * A pipeline that is a `temporary` child, or that was started by a process that is not
+      a supervisor.
     * An upgrade that restarts the VM, which stops everything anyway.
 
   ## They never fail the upgrade
@@ -55,7 +58,8 @@ defmodule Deployer.HotUpgrade.Pipelines do
     * `name` - the name it is registered under
     * `stopped` - `"stopped"`, `"timeout"` when it was still stopping after 30 seconds, or
       `"failed"`
-    * `started` - `"started"` or `"failed"`
+    * `started` - `"started"`, `"timeout"` when it was still starting after 10 seconds, or
+      `"failed"`
   """
   @type result :: %{name: String.t(), stopped: String.t(), started: String.t()}
 
@@ -163,6 +167,12 @@ defmodule Deployer.HotUpgrade.Pipelines do
       ...>   %{name: "MyApp.Emails", stopped: "timeout", started: "started"}
       ...> ])
       "MyApp.Orders stopped and started, MyApp.Emails still stopping after 30 seconds and started"
+
+      iex> Deployer.HotUpgrade.Pipelines.describe([
+      ...>   %{name: "MyApp.Orders", stopped: "timeout", started: "timeout"},
+      ...>   %{name: "MyApp.Emails", stopped: "failed", started: "failed"}
+      ...> ])
+      "MyApp.Orders still stopping after 30 seconds and still starting after 10 seconds, MyApp.Emails not stopped and NOT STARTED"
   """
   @spec describe([result()]) :: String.t()
   def describe([]), do: "no Broadway pipeline was running"
@@ -176,7 +186,12 @@ defmodule Deployer.HotUpgrade.Pipelines do
           _failed -> "not stopped"
         end
 
-      started = if result.started == "started", do: "started", else: "NOT STARTED"
+      started =
+        case result.started do
+          "started" -> "started"
+          "timeout" -> "still starting after 10 seconds"
+          _failed -> "NOT STARTED"
+        end
 
       "#{result.name} #{stopped} and #{started}"
     end)

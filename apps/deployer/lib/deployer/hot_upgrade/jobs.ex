@@ -39,8 +39,8 @@ defmodule Deployer.HotUpgrade.Jobs do
   ## They never fail the upgrade
 
   Both run after the point of no return, where an instruction that fails restarts the node,
-  so each catches what it raises. What is to be resumed is written down before the wait. A
-  relup they cannot be added to is installed without them.
+  so each catches what it raises. What is to be resumed is written down before any queue is
+  paused. A relup they cannot be added to is installed without them.
   """
 
   require Logger
@@ -57,13 +57,15 @@ defmodule Deployer.HotUpgrade.Jobs do
 
     * `name` - the name of the instance
     * `queues` - the queues that were paused
-    * `running` - the jobs that were still running when the wait ended, 0 when all finished
+    * `running` - the jobs that were still running when the wait ended, 0 when all
+      finished, and `nil` when it is not known: the queues could not be checked, or the
+      wait did not complete
     * `resumed` - `"resumed"` or `"failed"`
   """
   @type result :: %{
           name: String.t(),
           queues: [String.t()],
-          running: non_neg_integer(),
+          running: non_neg_integer() | nil,
           resumed: String.t()
         }
 
@@ -174,6 +176,11 @@ defmodule Deployer.HotUpgrade.Jobs do
       ...>   %{name: "MyApp.Oban", queues: ["default"], running: 2, resumed: "failed"}
       ...> ])
       "MyApp.Oban paused 1 queue, 2 jobs were still running after the wait, and NOT RESUMED"
+
+      iex> Deployer.HotUpgrade.Jobs.describe([
+      ...>   %{name: "Oban", queues: ["default"], running: nil, resumed: "resumed"}
+      ...> ])
+      "Oban paused 1 queue, its jobs could not be waited for, and resumed"
   """
   @spec describe([result()]) :: String.t()
   def describe([]), do: "no Oban queue was running"
@@ -188,6 +195,7 @@ defmodule Deployer.HotUpgrade.Jobs do
 
       running =
         case result.running do
+          nil -> "its jobs could not be waited for"
           0 -> "no job was left running"
           1 -> "1 job was still running after the wait"
           count -> "#{count} jobs were still running after the wait"
@@ -238,8 +246,10 @@ defmodule Deployer.HotUpgrade.Jobs do
     end
   end
 
+  defp running(:finished), do: 0
   defp running({:running, count}) when is_integer(count), do: count
-  defp running(_finished_or_pending), do: 0
+  # The queues could not be checked, or the pause did not get to the end of the wait
+  defp running(_unknown_or_pending), do: nil
 
   defp not_recorded(name, reason) do
     Logger.warning(
