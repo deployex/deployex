@@ -84,6 +84,9 @@ defmodule Deployer.HotUpgrade.ProtocolsTest do
     beam
   end
 
+  # The modules only exist once the test compiled them
+  defp answer(module), do: module.answer()
+
   defp load!(module, answer) do
     :code.purge(module)
     {:module, ^module} = :code.load_binary(module, ~c"#{module}.erl", compile!(module, answer))
@@ -196,9 +199,9 @@ defmodule Deployer.HotUpgrade.ProtocolsTest do
       assert {"0.2.0", [deployex_changed_protocol: :reloaded, deployex_new_protocol: :reloaded]} =
                run(Protocols.instruction(root, "0.2.0"))
 
-      assert :deployex_changed_protocol.answer() == :updated
-      assert :deployex_same_protocol.answer() == :same
-      assert :deployex_new_protocol.answer() == :new
+      assert answer(:deployex_changed_protocol) == :updated
+      assert answer(:deployex_same_protocol) == :same
+      assert answer(:deployex_new_protocol) == :new
 
       on_exit(fn ->
         :code.purge(:deployex_new_protocol)
@@ -222,7 +225,7 @@ defmodule Deployer.HotUpgrade.ProtocolsTest do
       assert {"0.2.0", [deployex_broken_protocol: :failed, deployex_changed_protocol: :reloaded]} =
                run(Protocols.instruction(root, "0.2.0"))
 
-      assert :deployex_changed_protocol.answer() == :updated
+      assert answer(:deployex_changed_protocol) == :updated
     end
 
     test "does nothing for a release without consolidated protocols", %{root: root} do
