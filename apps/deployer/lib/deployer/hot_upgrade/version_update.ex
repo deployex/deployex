@@ -26,8 +26,9 @@ defmodule Deployer.HotUpgrade.VersionUpdate do
 
     * **Traces** - only when the OpenTelemetry SDK is running and its `service.version` is
       exactly the version being upgraded from. The resource is replaced in
-      `otel_resource_detector`, `otel_tracer_provider_global` and the global batch and simple
-      processors, the processes that hold it in the SDK 1.x.
+      `otel_tracer_provider_global` and the global batch and simple processors, the
+      processes that hold it in the SDK 1.x, and then in `otel_resource_detector`, which is
+      only replaced when the others were.
     * **Logs** - every binary equal to the version being upgraded from, in the filters and
       the formatter of each handler, and in the filters and the metadata of the primary
       configuration.
@@ -64,7 +65,8 @@ defmodule Deployer.HotUpgrade.VersionUpdate do
     * `traces` - `"updated"`, `"left_alone"` when the `service.version` was not the version
       being upgraded from, `"no_sdk"` when the OpenTelemetry SDK is not running, `"failed"`
       when it could not be replaced
-    * `traces_found` - the `service.version` that was left alone
+    * `traces_found` - the `service.version` that was left alone, `nil` when the resource
+      has none
     * `logs` - how many logger settings held the version and were changed, or `"failed"`
   """
   @type result :: %{
@@ -177,6 +179,11 @@ defmodule Deployer.HotUpgrade.VersionUpdate do
       ["Traces: service.version moved from 0.1.0 to 0.2.0",
        "Logs: 1 logger setting moved to 0.2.0"]
 
+      iex> result = %{traces: "left_alone", traces_found: nil, logs: 2}
+      iex> Deployer.HotUpgrade.VersionUpdate.describe(result, "0.1.0", "0.2.0")
+      ["Traces: left alone, the resource has no service.version",
+       "Logs: 2 logger settings moved to 0.2.0"]
+
       iex> result = %{traces: "left_alone", traces_found: "7.7.7", logs: 0}
       iex> Deployer.HotUpgrade.VersionUpdate.describe(result, "0.1.0", "0.2.0")
       ["Traces: left alone, service.version was 7.7.7 and not 0.1.0",
@@ -184,35 +191,43 @@ defmodule Deployer.HotUpgrade.VersionUpdate do
   """
   @spec describe(result(), String.t(), String.t()) :: [String.t()]
   def describe(result, from_version, to_version) do
-    traces =
-      case result.traces do
-        "updated" ->
-          "service.version moved from #{from_version} to #{to_version}"
-
-        "left_alone" ->
-          "left alone, service.version was #{result.traces_found} and not #{from_version}"
-
-        "no_sdk" ->
-          "the OpenTelemetry SDK is not running, nothing to change"
-
-        _failed ->
-          "service.version could not be replaced, it is still #{from_version}"
-      end
-
-    logs =
-      case result.logs do
-        0 -> "no logger setting held #{from_version}, nothing changed"
-        1 -> "1 logger setting moved to #{to_version}"
-        count when is_integer(count) -> "#{count} logger settings moved to #{to_version}"
-        _failed -> "the logger settings could not be read or changed"
-      end
-
-    ["Traces: #{traces}", "Logs: #{logs}"]
+    [
+      "Traces: #{describe_traces(result, from_version, to_version)}",
+      "Logs: #{describe_logs(result.logs, from_version, to_version)}"
+    ]
   end
 
   ### ==========================================================================
   ### Private functions
   ### ==========================================================================
+
+  defp describe_traces(%{traces: "updated"}, from_version, to_version),
+    do: "service.version moved from #{from_version} to #{to_version}"
+
+  defp describe_traces(%{traces: "left_alone", traces_found: nil}, _from_version, _to_version),
+    do: "left alone, the resource has no service.version"
+
+  defp describe_traces(%{traces: "left_alone", traces_found: found}, from_version, _to_version),
+    do: "left alone, service.version was #{found} and not #{from_version}"
+
+  defp describe_traces(%{traces: "no_sdk"}, _from_version, _to_version),
+    do: "the OpenTelemetry SDK is not running, nothing to change"
+
+  defp describe_traces(_failed, from_version, _to_version),
+    do:
+      "service.version could not be replaced in every process that holds it, " <>
+        "the node may still report #{from_version}"
+
+  defp describe_logs(0, from_version, _to_version),
+    do: "no logger setting held #{from_version}, nothing changed"
+
+  defp describe_logs(1, _from_version, to_version), do: "1 logger setting moved to #{to_version}"
+
+  defp describe_logs(count, _from_version, to_version) when is_integer(count),
+    do: "#{count} logger settings moved to #{to_version}"
+
+  defp describe_logs(_failed, _from_version, _to_version),
+    do: "the logger settings could not be read or changed"
 
   # A relup has one script for each version it upgrades from
   defp append({from_vsn, descr, script}, from_version, to_version) when is_list(script) do
@@ -242,6 +257,8 @@ defmodule Deployer.HotUpgrade.VersionUpdate do
         :updated -> {"updated", nil}
         :no_sdk -> {"no_sdk", nil}
         {:left_alone, found} when is_binary(found) -> {"left_alone", found}
+        # A resource without a service.version
+        {:left_alone, :undefined} -> {"left_alone", nil}
         {:left_alone, found} -> {"left_alone", inspect(found)}
         _failed -> {"failed", nil}
       end

@@ -30,11 +30,33 @@ Traces =
                     From ->
                         NewRes = otel_resource:merge(
                                    otel_resource:create(#{'service.version' => To}), OldRes),
-                        Holders = [otel_resource_detector, otel_tracer_provider_global,
-                                   otel_batch_processor_global, otel_simple_processor_global],
-                        [sys:replace_state(P, fun(S) -> Swap(S, OldRes, NewRes) end, 2000)
-                         || N <- Holders, P <- [whereis(N)], is_pid(P)],
-                        updated;
+                        Replace =
+                            fun(Name) ->
+                                case whereis(Name) of
+                                    undefined -> ok;
+                                    P ->
+                                        try
+                                            sys:replace_state(
+                                              P, fun(S) -> Swap(S, OldRes, NewRes) end, 2000),
+                                            ok
+                                        catch _:_ -> failed
+                                        end
+                                end
+                            end,
+                        %% The detector is what says which version the node reports, so it
+                        %% is replaced last, and only when the processes that export were:
+                        %% an upgrade that could not reach one of them does not leave the
+                        %% detector saying a version the node does not export
+                        Exporting = [otel_tracer_provider_global, otel_batch_processor_global,
+                                     otel_simple_processor_global],
+                        case [N || N <- Exporting, Replace(N) =/= ok] of
+                            [] ->
+                                case Replace(otel_resource_detector) of
+                                    ok -> updated;
+                                    failed -> failed
+                                end;
+                            _NotReplaced -> failed
+                        end;
                     Other -> {left_alone, Other}
                 end
         end

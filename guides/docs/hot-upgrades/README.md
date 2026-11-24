@@ -51,6 +51,7 @@ It runs for every hot upgrade, whether or not the release asks for `config_chang
    | `Traces: service.version moved from 1.0.0 to 1.1.0` | The resource was replaced |
    | `Traces: left alone, service.version was 2024.11 and not 1.0.0` | The application reports something other than the release version, so it is for its `config_change/3` to update |
    | `Traces: the OpenTelemetry SDK is not running, nothing to change` | The application has no SDK |
+   | `Traces: service.version could not be replaced in every process that holds it, the node may still report 1.0.0` | One of the processes of the SDK did not answer in time. The process that says which version the node reports is left as it was, so the next hot upgrade says `left alone` rather than claim a version that was not reached. A restart of the application brings it up to date |
    | `Logs: 1 logger setting moved to 1.1.0` | A filter, a formatter or the metadata held the version |
    | `Logs: no logger setting held 1.0.0, nothing changed` | The logs carry no version, or not the release version |
 

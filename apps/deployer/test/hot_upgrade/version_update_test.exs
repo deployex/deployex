@@ -315,6 +315,42 @@ defmodule Deployer.HotUpgrade.VersionUpdateTest do
       assert :otel_resource_detector.get_resource() == resource("7.7.7")
     end
 
+    test "leaves the detector alone when a process that exports could not be replaced" do
+      start_sdk("0.1.0")
+
+      # A batch processor that takes longer than the instruction waits for it
+      Process.exit(Process.whereis(:otel_batch_processor_global), :kill)
+      test_pid = self()
+
+      busy =
+        spawn(fn ->
+          Process.register(self(), :otel_batch_processor_global)
+          send(test_pid, :registered)
+          Process.sleep(:infinity)
+        end)
+
+      on_exit(fn -> Process.exit(busy, :kill) end)
+      assert_receive :registered
+
+      assert {:failed, 0} = run("0.1.0", "0.2.0")
+
+      # The detector still says the version the node exports, so the result of the next
+      # upgrade does not claim a version that was never reached
+      assert :otel_resource_detector.get_resource() == resource("0.1.0")
+      assert {{:left_alone, "0.1.0"}, 0} = run("0.2.0", "0.3.0")
+    end
+
+    test "says so when the resource has no service.version" do
+      holders = [otel_resource_detector: {:state, :otel_resource.create(%{"service.name": "x"})}]
+
+      for {name, state} <- holders do
+        {:ok, pid} = Holder.start(name, state)
+        on_exit(fn -> Process.exit(pid, :kill) end)
+      end
+
+      assert {{:left_alone, :undefined}, 0} = run("0.1.0", "0.2.0")
+    end
+
     test "does nothing without the SDK, and does not raise when it misbehaves" do
       assert {:no_sdk, 0} = run("0.1.0", "0.2.0")
 
