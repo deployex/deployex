@@ -5,6 +5,7 @@ defmodule DeployexWeb.VersionsLive do
   """
   use DeployexWeb, :live_view
 
+  alias Deployer.HotUpgrade.Pipelines
   alias Deployer.HotUpgrade.Relup
   alias Deployer.HotUpgrade.VersionUpdate
   alias Deployer.Status
@@ -555,6 +556,9 @@ defmodule DeployexWeb.VersionsLive do
       Map.get(summary, :version_update, false) &&
         "Moves the version on traces and logs to the new one",
       version_update_lines(kept),
+      Map.get(summary, :pipelines, false) &&
+        "Stops the Broadway pipelines while the code is replaced, and starts them again",
+      pipelines_line(kept),
       summary.restart_emulator && "Restarts the VM",
       "#{count(summary.instructions, "instruction")} in all"
     ]
@@ -567,6 +571,12 @@ defmodule DeployexWeb.VersionsLive do
     do: VersionUpdate.describe(result, kept.from_version, kept.to_version)
 
   defp version_update_lines(_kept), do: []
+
+  # What happened to each pipeline, read back once the release was installed
+  defp pipelines_line(%{pipelines: results}) when is_list(results),
+    do: "Pipelines: #{Pipelines.describe(results)}"
+
+  defp pipelines_line(_kept), do: nil
 
   defp count(1, noun), do: "1 #{noun}"
   defp count(number, noun), do: "#{number} #{noun}s"

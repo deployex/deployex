@@ -22,6 +22,8 @@ defmodule Deployer.HotUpgrade.Relup do
       also what carries the `config_change` marker
     * `version_update` - whether DeployEx moves the version on traces and logs in it, see
       `Deployer.HotUpgrade.VersionUpdate`
+    * `pipelines` - whether DeployEx stops the Broadway pipelines while the code is replaced,
+      see `Deployer.HotUpgrade.Pipelines`
     * `restart_emulator` - whether the upgrade restarts the VM
     * `instructions` - the number of instructions in the script
   """
@@ -33,6 +35,7 @@ defmodule Deployer.HotUpgrade.Relup do
           applies: [String.t()],
           runtime_config: boolean(),
           version_update: boolean(),
+          pipelines: boolean(),
           restart_emulator: boolean(),
           instructions: non_neg_integer()
         }
@@ -127,6 +130,7 @@ defmodule Deployer.HotUpgrade.Relup do
         applies: ["MyApp.Release.after_upgrade/1"],
         runtime_config: false,
         version_update: false,
+        pipelines: false,
         restart_emulator: false,
         instructions: 8
       }
@@ -141,6 +145,7 @@ defmodule Deployer.HotUpgrade.Relup do
       applies: [],
       runtime_config: false,
       version_update: false,
+      pipelines: false,
       restart_emulator: false,
       instructions: length(script)
     }
@@ -260,6 +265,18 @@ defmodule Deployer.HotUpgrade.Relup do
         "Only a value equal to the previous version is replaced, and it never fails. " <>
         "Its code is priv/relup/version_update.erl of the deployer application."
 
+  def explain(%{key: :pipelines_stop}),
+    do:
+      "Added by DeployEx. Stops the Broadway pipelines of the node through their " <>
+        "supervisors, so the messages they are handling finish before any module is " <>
+        "replaced and none is killed half handled. It waits up to 45 seconds, and it never " <>
+        "fails. Its code is priv/relup/pipelines_stop.erl of the deployer application."
+
+  def explain(%{key: :pipelines_start}),
+    do:
+      "Added by DeployEx. Starts the pipelines that were stopped, now on the new code. " <>
+        "Its code is priv/relup/pipelines_start.erl of the deployer application."
+
   def explain(%{key: :apply}),
     do:
       "Calls this function. If it fails before the point of no return the upgrade stops " <>
@@ -327,6 +344,11 @@ defmodule Deployer.HotUpgrade.Relup do
     do: new_step(:code_change, names(modules), [to_string(mode)])
 
   defp step({:code_change, modules}), do: new_step(:code_change, names(modules))
+
+  defp step({:apply, {:erl_eval, :exprs, [_forms, [{:Pipelines, phase} | _]]}})
+       when phase in [:stop, :start] do
+    %{new_step(:"pipelines_#{phase}", [], [], "#{phase} the pipelines") | instruction: "apply"}
+  end
 
   defp step({:apply, {:erl_eval, :exprs, [_forms, [{:From, from}, {:To, to}]]}}),
     do: %{new_step(:version_update, [], [], "version #{from} to #{to}") | instruction: "apply"}
@@ -406,6 +428,10 @@ defmodule Deployer.HotUpgrade.Relup do
 
   defp count({:remove, {module, _pre_purge, _post_purge}}, acc),
     do: %{acc | removed: [module_name(module) | acc.removed]}
+
+  # The two instructions DeployEx puts around the code replacement, see Pipelines
+  defp count({:apply, {:erl_eval, :exprs, [_forms, [{:Pipelines, _phase} | _]]}}, acc),
+    do: %{acc | pipelines: true}
 
   # The instruction DeployEx puts at the end of the script, see VersionUpdate
   defp count({:apply, {:erl_eval, :exprs, [_forms, [{:From, _from}, {:To, _to}]]}}, acc),
