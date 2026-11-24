@@ -96,6 +96,15 @@ defmodule Deployer.HotUpgrade.Application do
   @behaviour Deployer.HotUpgrade.Adapter
   @events_topic "deployex::hotupgrade::events"
   @runtime_config_key {:deployex, :runtime_config}
+
+  # The code the relup hook evaluates, which reads the key above
+  @runtime_config_hook_path Path.expand("../../../priv/relup/runtime_config.erl", __DIR__)
+  @external_resource @runtime_config_hook_path
+  {:ok, tokens, _end} =
+    @runtime_config_hook_path |> File.read!() |> String.to_charlist() |> :erl_scan.string()
+
+  {:ok, forms} = :erl_parse.parse_exprs(tokens)
+  @runtime_config_hook_forms forms
   @config_change_key :deployex_config_change
   # The run of each application, now or the last one, for a page that opens in the middle of it
   @progress_table :deployer_hot_upgrade_progress
@@ -105,6 +114,7 @@ defmodule Deployer.HotUpgrade.Application do
   alias Deployer.HotUpgrade.Jellyfish
   alias Deployer.HotUpgrade.Progress
   alias Deployer.HotUpgrade.Relup
+  alias Deployer.HotUpgrade.VersionUpdate
   alias Foundation.Rpc
 
   @typedoc """
@@ -267,7 +277,9 @@ defmodule Deployer.HotUpgrade.Application do
          {:ok, runtime_config} <- resolve_runtime_config(data),
          runtime_config = add_config_change_marker(data, runtime_config),
          :ok <- notify_progress(data, "Adding the runtime configuration to the relup"),
-         :ok <- install_runtime_config_hook(data, runtime_config) do
+         :ok <- install_runtime_config_hook(data, runtime_config),
+         :ok <- notify_progress(data, "Adding the version update to the relup"),
+         :ok <- VersionUpdate.add_to_relup(data) do
       # What is on disk now is what install_release/2 runs, so this is the one to keep
       Relup.save(data)
     end
@@ -1239,33 +1251,12 @@ defmodule Deployer.HotUpgrade.Application do
   defp prepend_instruction({from_vsn, descr, script}, instruction),
     do: {from_vsn, descr, [instruction | script]}
 
-  # Abstract forms for:
-  #   application:set_env(persistent_term:get(Key), [{persistent, true}]),
-  #   persistent_term:erase(Key)
+  # The forms of priv/relup/runtime_config.erl, read when DeployEx is compiled.
   #
   # Forms are plain terms, so unlike the configuration they survive the relup file, and
   # erl_eval is in stdlib so nothing has to be compiled or loaded into the target node.
-  #
-  # The hook erases its own stash as its last act. The resolved configuration holds whatever
-  # the Config Providers produced, secrets included, so it must not outlive the upgrade that
-  # needed it.
   @spec runtime_config_hook_forms() :: [tuple()]
-  defp runtime_config_hook_forms do
-    l = 0
-
-    key_form =
-      {:tuple, l,
-       [{:atom, l, elem(@runtime_config_key, 0)}, {:atom, l, elem(@runtime_config_key, 1)}]}
-
-    [
-      {:call, l, {:remote, l, {:atom, l, :application}, {:atom, l, :set_env}},
-       [
-         {:call, l, {:remote, l, {:atom, l, :persistent_term}, {:atom, l, :get}}, [key_form]},
-         {:cons, l, {:tuple, l, [{:atom, l, :persistent}, {:atom, l, true}]}, {nil, l}}
-       ]},
-      {:call, l, {:remote, l, {:atom, l, :persistent_term}, {:atom, l, :erase}}, [key_form]}
-    ]
-  end
+  defp runtime_config_hook_forms, do: @runtime_config_hook_forms
 
   # Run runtime.exs and the Config Providers for the version being installed.
   #

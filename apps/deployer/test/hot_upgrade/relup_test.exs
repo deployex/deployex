@@ -76,6 +76,7 @@ defmodule Deployer.HotUpgrade.RelupTest do
              removed: ["MyElixir.Old"],
              applies: ["supervisor.restart_child/2"],
              runtime_config: true,
+             version_update: false,
              restart_emulator: false,
              instructions: 12
            }

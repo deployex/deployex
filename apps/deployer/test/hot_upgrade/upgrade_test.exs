@@ -3083,6 +3083,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                "Checking release can be installed",
                "Resolving the runtime configuration",
                "Adding the runtime configuration to the relup",
+               "Adding the version update to the relup",
                "Installing release",
                "Making release 0.2.0 permanent",
                "Hot upgrade applied successfully, 0.1.0 -> 0.2.0"

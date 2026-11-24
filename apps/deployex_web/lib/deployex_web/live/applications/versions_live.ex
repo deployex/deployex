@@ -550,6 +550,9 @@ defmodule DeployexWeb.VersionsLive do
       summary.applies != [] && "Calls #{Enum.join(summary.applies, ", ")}",
       summary.runtime_config &&
         "Applies the runtime configuration, with the config_change marker when the release asked for it",
+      # A relup kept before this instruction existed has no such key
+      Map.get(summary, :version_update, false) &&
+        "Moves the version on traces and logs to the new one",
       summary.restart_emulator && "Restarts the VM",
       "#{count(summary.instructions, "instruction")} in all"
     ]

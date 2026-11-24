@@ -105,6 +105,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
           removed: [],
           applies: ["supervisor.restart_child/2"],
           runtime_config: true,
+          version_update: true,
           restart_emulator: false,
           instructions: 31
         },
@@ -150,6 +151,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
     assert html =~ "Suspends the processes of Myphoenixapp.Worker and runs their code_change"
     assert html =~ "Calls supervisor.restart_child/2"
     assert html =~ "Applies the runtime configuration"
+    assert html =~ "Moves the version on traces and logs to the new one"
     assert html =~ "31 instructions in all"
     refute html =~ "Restarts the VM"
 

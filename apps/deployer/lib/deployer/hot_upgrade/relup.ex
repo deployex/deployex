@@ -20,6 +20,8 @@ defmodule Deployer.HotUpgrade.Relup do
     * `applies` - the functions the upgrade calls, as `Module.function/arity`
     * `runtime_config` - whether DeployEx applies the runtime configuration in it, which is
       also what carries the `config_change` marker
+    * `version_update` - whether DeployEx moves the version on traces and logs in it, see
+      `Deployer.HotUpgrade.VersionUpdate`
     * `restart_emulator` - whether the upgrade restarts the VM
     * `instructions` - the number of instructions in the script
   """
@@ -30,6 +32,7 @@ defmodule Deployer.HotUpgrade.Relup do
           removed: [String.t()],
           applies: [String.t()],
           runtime_config: boolean(),
+          version_update: boolean(),
           restart_emulator: boolean(),
           instructions: non_neg_integer()
         }
@@ -67,7 +70,7 @@ defmodule Deployer.HotUpgrade.Relup do
 
   @doc """
   Keeps the relup that is about to be installed, as it is on disk at that moment, with the
-  instruction DeployEx added to it.
+  instructions DeployEx added to it.
 
   It never fails the upgrade: a relup that cannot be read or kept is logged and skipped.
   """
@@ -123,6 +126,7 @@ defmodule Deployer.HotUpgrade.Relup do
         removed: [],
         applies: ["MyApp.Release.after_upgrade/1"],
         runtime_config: false,
+        version_update: false,
         restart_emulator: false,
         instructions: 8
       }
@@ -136,6 +140,7 @@ defmodule Deployer.HotUpgrade.Relup do
       removed: [],
       applies: [],
       runtime_config: false,
+      version_update: false,
       restart_emulator: false,
       instructions: length(script)
     }
@@ -244,7 +249,16 @@ defmodule Deployer.HotUpgrade.Relup do
     do:
       "Added by DeployEx. The upgrade has just reset every application to its build time " <>
         "configuration, so this applies the runtime configuration resolved for the new " <>
-        "version, with the config_change marker when the release asked for it."
+        "version, with the config_change marker when the release asked for it. Its " <>
+        "code is priv/relup/runtime_config.erl of the deployer application."
+
+  def explain(%{key: :version_update}),
+    do:
+      "Added by DeployEx. Every process runs the new code by now, so this moves the " <>
+        "version the node reports to the new one: the service.version of the OpenTelemetry " <>
+        "resource and the version held in the logger filters, formatters and metadata. " <>
+        "Only a value equal to the previous version is replaced, and it never fails. " <>
+        "Its code is priv/relup/version_update.erl of the deployer application."
 
   def explain(%{key: :apply}),
     do:
@@ -313,6 +327,9 @@ defmodule Deployer.HotUpgrade.Relup do
     do: new_step(:code_change, names(modules), [to_string(mode)])
 
   defp step({:code_change, modules}), do: new_step(:code_change, names(modules))
+
+  defp step({:apply, {:erl_eval, :exprs, [_forms, [{:From, from}, {:To, to}]]}}),
+    do: %{new_step(:version_update, [], [], "version #{from} to #{to}") | instruction: "apply"}
 
   defp step({:apply, {:erl_eval, :exprs, _args}}),
     do: %{new_step(:runtime_config, [], [], "runtime configuration") | instruction: "apply"}
@@ -389,6 +406,10 @@ defmodule Deployer.HotUpgrade.Relup do
 
   defp count({:remove, {module, _pre_purge, _post_purge}}, acc),
     do: %{acc | removed: [module_name(module) | acc.removed]}
+
+  # The instruction DeployEx puts at the end of the script, see VersionUpdate
+  defp count({:apply, {:erl_eval, :exprs, [_forms, [{:From, _from}, {:To, _to}]]}}, acc),
+    do: %{acc | version_update: true}
 
   # The instruction DeployEx puts at the head of the script, which applies the configuration
   defp count({:apply, {:erl_eval, :exprs, _args}}, acc), do: %{acc | runtime_config: true}
