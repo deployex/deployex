@@ -78,6 +78,7 @@ defmodule Deployer.HotUpgrade.RelupTest do
              runtime_config: true,
              version_update: false,
              pipelines: false,
+             jobs: false,
              restart_emulator: false,
              instructions: 12
            }

@@ -24,6 +24,8 @@ defmodule Deployer.HotUpgrade.Relup do
       `Deployer.HotUpgrade.VersionUpdate`
     * `pipelines` - whether DeployEx stops the Broadway pipelines while the code is replaced,
       see `Deployer.HotUpgrade.Pipelines`
+    * `jobs` - whether DeployEx pauses the Oban queues and waits for the running jobs, see
+      `Deployer.HotUpgrade.Jobs`
     * `restart_emulator` - whether the upgrade restarts the VM
     * `instructions` - the number of instructions in the script
   """
@@ -36,6 +38,7 @@ defmodule Deployer.HotUpgrade.Relup do
           runtime_config: boolean(),
           version_update: boolean(),
           pipelines: boolean(),
+          jobs: boolean(),
           restart_emulator: boolean(),
           instructions: non_neg_integer()
         }
@@ -131,6 +134,7 @@ defmodule Deployer.HotUpgrade.Relup do
         runtime_config: false,
         version_update: false,
         pipelines: false,
+        jobs: false,
         restart_emulator: false,
         instructions: 8
       }
@@ -146,6 +150,7 @@ defmodule Deployer.HotUpgrade.Relup do
       runtime_config: false,
       version_update: false,
       pipelines: false,
+      jobs: false,
       restart_emulator: false,
       instructions: length(script)
     }
@@ -269,13 +274,25 @@ defmodule Deployer.HotUpgrade.Relup do
     do:
       "Added by DeployEx. Stops the Broadway pipelines of the node through their " <>
         "supervisors, so the messages they are handling finish before any module is " <>
-        "replaced and none is killed half handled. It waits up to 45 seconds, and it never " <>
+        "replaced and none is killed half handled. It waits up to 30 seconds, and it never " <>
         "fails. Its code is priv/relup/pipelines_stop.erl of the deployer application."
 
   def explain(%{key: :pipelines_start}),
     do:
       "Added by DeployEx. Starts the pipelines that were stopped, now on the new code. " <>
         "Its code is priv/relup/pipelines_start.erl of the deployer application."
+
+  def explain(%{key: :jobs_pause}),
+    do:
+      "Added by DeployEx. Pauses the Oban queues of this node and waits for the running " <>
+        "jobs as Oban does when it shuts down: for its shutdown_grace_period, 20 seconds " <>
+        "at most. A job that outlasts it keeps running, and is only killed if its code is " <>
+        "replaced. Its code is priv/relup/jobs_pause.erl of the deployer application."
+
+  def explain(%{key: :jobs_resume}),
+    do:
+      "Added by DeployEx. Resumes the queues that were paused. Its code is " <>
+        "priv/relup/jobs_resume.erl of the deployer application."
 
   def explain(%{key: :apply}),
     do:
@@ -348,6 +365,11 @@ defmodule Deployer.HotUpgrade.Relup do
   defp step({:apply, {:erl_eval, :exprs, [_forms, [{:Pipelines, phase} | _]]}})
        when phase in [:stop, :start] do
     %{new_step(:"pipelines_#{phase}", [], [], "#{phase} the pipelines") | instruction: "apply"}
+  end
+
+  defp step({:apply, {:erl_eval, :exprs, [_forms, [{:Jobs, phase} | _]]}})
+       when phase in [:pause, :resume] do
+    %{new_step(:"jobs_#{phase}", [], [], "#{phase} the job queues") | instruction: "apply"}
   end
 
   defp step({:apply, {:erl_eval, :exprs, [_forms, [{:From, from}, {:To, to}]]}}),
@@ -432,6 +454,9 @@ defmodule Deployer.HotUpgrade.Relup do
   # The two instructions DeployEx puts around the code replacement, see Pipelines
   defp count({:apply, {:erl_eval, :exprs, [_forms, [{:Pipelines, _phase} | _]]}}, acc),
     do: %{acc | pipelines: true}
+
+  defp count({:apply, {:erl_eval, :exprs, [_forms, [{:Jobs, _phase} | _]]}}, acc),
+    do: %{acc | jobs: true}
 
   # The instruction DeployEx puts at the end of the script, see VersionUpdate
   defp count({:apply, {:erl_eval, :exprs, [_forms, [{:From, _from}, {:To, _to}]]}}, acc),

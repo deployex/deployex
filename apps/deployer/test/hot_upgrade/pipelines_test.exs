@@ -271,7 +271,7 @@ defmodule Deployer.HotUpgrade.PipelinesTest do
 
       log = capture_log(fn -> assert :ok = Pipelines.record(ctx.data) end)
       assert log =~ "Pipelines of myelixir 0.1.0 -> 0.2.0: MyElixir.Orders stopped and started"
-      assert log =~ "MyElixir.Emails still stopping after 45 seconds and NOT STARTED"
+      assert log =~ "MyElixir.Emails still stopping after 30 seconds and NOT STARTED"
 
       assert %{
                text: "relup",

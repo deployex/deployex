@@ -35,11 +35,12 @@ try
            end,
     Found = lists:flatmap(fun(Name) -> try [Find(Name)] catch _:_ -> [] end end, Names),
     persistent_term:put(Key, [{N, P, I, pending} || {N, P, I} <- Found]),
-    %% All at once, each one waits for its own messages. 45 seconds for all of them: the
+    %% All at once, each one waits for its own messages. 30 seconds for all of them, which is
+    %% as long as a pipeline gives its own messages unless it was told otherwise: the
     %% release handler is waiting, and so is whoever asked for the upgrade.
     Stops = [{N, P, I, spawn_monitor(fun() -> exit({stopped, supervisor:terminate_child(P, I)}) end)}
              || {N, P, I} <- Found],
-    Deadline = erlang:monotonic_time(millisecond) + 45000,
+    Deadline = erlang:monotonic_time(millisecond) + 30000,
     Stopped =
         [begin
              Left = max(Deadline - erlang:monotonic_time(millisecond), 0),

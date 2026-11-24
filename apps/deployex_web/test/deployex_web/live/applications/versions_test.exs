@@ -107,6 +107,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
           runtime_config: true,
           version_update: true,
           pipelines: true,
+          jobs: true,
           restart_emulator: false,
           instructions: 31
         },
@@ -124,6 +125,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
           ]),
         version_update: %{traces: "left_alone", traces_found: "9.9.9", logs: 2},
         pipelines: [%{name: "Myphoenixapp.Orders", stopped: "stopped", started: "started"}],
+        jobs: [%{name: "Oban", queues: ["default", "mailers"], running: 1, resumed: "resumed"}],
         text: "{\"1.4.2\",[{\"1.4.1\",[],[point_of_no_return]}],[]}.\n",
         inserted_at: ~N[2026-10-28 12:14:00]
       })
@@ -159,6 +161,11 @@ defmodule DeployexWeb.Applications.VersionsTest do
     assert html =~ "Logs: 2 logger settings moved to 1.4.2"
     assert html =~ "Stops the Broadway pipelines while the code is replaced"
     assert html =~ "Pipelines: Myphoenixapp.Orders stopped and started"
+    assert html =~ "Pauses the Oban queues and waits for the running jobs, then resumes them"
+
+    assert html =~
+             "Jobs: Oban paused 2 queues, 1 job was still running after the wait, and resumed"
+
     assert html =~ "31 instructions in all"
     refute html =~ "Restarts the VM"
 

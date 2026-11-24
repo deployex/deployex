@@ -20,7 +20,7 @@ defmodule Deployer.HotUpgrade.Pipelines do
   A pipeline is stopped through the supervisor that started it, which is the graceful
   shutdown of Broadway: the messages being handled finish, and what does not finish in time
   goes back to its queue when the connection closes. The pipelines stop at the same time,
-  and the upgrade waits up to 45 seconds for them.
+  and the upgrade waits up to 30 seconds for them.
 
   As the other instructions DeployEx adds, they carry abstract forms and are evaluated by
   `erl_eval`. The code is in `priv/relup/pipelines_stop.erl` and `pipelines_start.erl`.
@@ -53,7 +53,7 @@ defmodule Deployer.HotUpgrade.Pipelines do
   What happened to one pipeline.
 
     * `name` - the name it is registered under
-    * `stopped` - `"stopped"`, `"timeout"` when it was still stopping after 45 seconds, or
+    * `stopped` - `"stopped"`, `"timeout"` when it was still stopping after 30 seconds, or
       `"failed"`
     * `started` - `"started"` or `"failed"`
   """
@@ -162,7 +162,7 @@ defmodule Deployer.HotUpgrade.Pipelines do
       ...>   %{name: "MyApp.Orders", stopped: "stopped", started: "started"},
       ...>   %{name: "MyApp.Emails", stopped: "timeout", started: "started"}
       ...> ])
-      "MyApp.Orders stopped and started, MyApp.Emails still stopping after 45 seconds and started"
+      "MyApp.Orders stopped and started, MyApp.Emails still stopping after 30 seconds and started"
   """
   @spec describe([result()]) :: String.t()
   def describe([]), do: "no Broadway pipeline was running"
@@ -172,7 +172,7 @@ defmodule Deployer.HotUpgrade.Pipelines do
       stopped =
         case result.stopped do
           "stopped" -> "stopped"
-          "timeout" -> "still stopping after 45 seconds"
+          "timeout" -> "still stopping after 30 seconds"
           _failed -> "not stopped"
         end
 

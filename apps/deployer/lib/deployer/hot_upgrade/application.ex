@@ -112,6 +112,7 @@ defmodule Deployer.HotUpgrade.Application do
   alias Deployer.HotUpgrade.Check
   alias Deployer.HotUpgrade.Execute
   alias Deployer.HotUpgrade.Jellyfish
+  alias Deployer.HotUpgrade.Jobs
   alias Deployer.HotUpgrade.Pipelines
   alias Deployer.HotUpgrade.Progress
   alias Deployer.HotUpgrade.Relup
@@ -281,8 +282,10 @@ defmodule Deployer.HotUpgrade.Application do
          :ok <- install_runtime_config_hook(data, runtime_config),
          :ok <- notify_progress(data, "Adding the version update to the relup"),
          :ok <- VersionUpdate.add_to_relup(data),
-         :ok <- notify_progress(data, "Adding the pipeline stop and start to the relup"),
-         :ok <- Pipelines.add_to_relup(data) do
+         :ok <- notify_progress(data, "Adding the pipeline and job handling to the relup"),
+         :ok <- Pipelines.add_to_relup(data),
+         # Added last, so the jobs are paused before and resumed after everything else
+         :ok <- Jobs.add_to_relup(data) do
       # What is on disk now is what install_release/2 runs, so this is the one to keep
       Relup.save(data)
     end
@@ -295,6 +298,7 @@ defmodule Deployer.HotUpgrade.Application do
          :ok <- install_release(data),
          :ok <- VersionUpdate.record(data),
          :ok <- Pipelines.record(data),
+         :ok <- Jobs.record(data),
          :ok <- notify_make_permanent(data.make_permanent_async, data),
          :ok <- permfy(data),
          :ok <- prune_old_releases(data),

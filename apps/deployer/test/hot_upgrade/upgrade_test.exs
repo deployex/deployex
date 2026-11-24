@@ -3084,7 +3084,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                "Resolving the runtime configuration",
                "Adding the runtime configuration to the relup",
                "Adding the version update to the relup",
-               "Adding the pipeline stop and start to the relup",
+               "Adding the pipeline and job handling to the relup",
                "Installing release",
                "Making release 0.2.0 permanent",
                "Hot upgrade applied successfully, 0.1.0 -> 0.2.0"

@@ -5,6 +5,7 @@ defmodule DeployexWeb.VersionsLive do
   """
   use DeployexWeb, :live_view
 
+  alias Deployer.HotUpgrade.Jobs
   alias Deployer.HotUpgrade.Pipelines
   alias Deployer.HotUpgrade.Relup
   alias Deployer.HotUpgrade.VersionUpdate
@@ -559,6 +560,9 @@ defmodule DeployexWeb.VersionsLive do
       Map.get(summary, :pipelines, false) &&
         "Stops the Broadway pipelines while the code is replaced, and starts them again",
       pipelines_line(kept),
+      Map.get(summary, :jobs, false) &&
+        "Pauses the Oban queues and waits for the running jobs, then resumes them",
+      jobs_line(kept),
       summary.restart_emulator && "Restarts the VM",
       "#{count(summary.instructions, "instruction")} in all"
     ]
@@ -577,6 +581,9 @@ defmodule DeployexWeb.VersionsLive do
     do: "Pipelines: #{Pipelines.describe(results)}"
 
   defp pipelines_line(_kept), do: nil
+
+  defp jobs_line(%{jobs: results}) when is_list(results), do: "Jobs: #{Jobs.describe(results)}"
+  defp jobs_line(_kept), do: nil
 
   defp count(1, noun), do: "1 #{noun}"
   defp count(number, noun), do: "#{number} #{noun}s"

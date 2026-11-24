@@ -93,6 +93,8 @@ defmodule DeployexWeb.AgentApi.Apps do
            version_update: Map.get(relup, :version_update),
            # What happened to the Broadway pipelines the upgrade stopped and started again
            pipelines: Map.get(relup, :pipelines),
+           # What happened to the Oban queues it paused and to the jobs that were running
+           jobs: Map.get(relup, :jobs),
            relup: relup.text
          }}
     end
