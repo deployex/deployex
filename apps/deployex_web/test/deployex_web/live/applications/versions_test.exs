@@ -105,6 +105,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
           removed: [],
           applies: ["supervisor.restart_child/2"],
           runtime_config: true,
+          version_update: true,
           restart_emulator: false,
           instructions: 31
         },
@@ -120,6 +121,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
             {:code_change, :up, [{Myphoenixapp.Worker, []}]},
             {:resume, [Myphoenixapp.Worker]}
           ]),
+        version_update: %{traces: "left_alone", traces_found: "9.9.9", logs: 2},
         text: "{\"1.4.2\",[{\"1.4.1\",[],[point_of_no_return]}],[]}.\n",
         inserted_at: ~N[2026-10-28 12:14:00]
       })
@@ -150,6 +152,9 @@ defmodule DeployexWeb.Applications.VersionsTest do
     assert html =~ "Suspends the processes of Myphoenixapp.Worker and runs their code_change"
     assert html =~ "Calls supervisor.restart_child/2"
     assert html =~ "Applies the runtime configuration"
+    assert html =~ "Moves the version on traces and logs to the new one"
+    assert html =~ "Traces: left alone, service.version was 9.9.9 and not 1.4.1"
+    assert html =~ "Logs: 2 logger settings moved to 1.4.2"
     assert html =~ "31 instructions in all"
     refute html =~ "Restarts the VM"
 

@@ -88,6 +88,9 @@ defmodule DeployexWeb.AgentApi.Apps do
              Enum.map(Map.get(relup, :steps, []), fn step ->
                step |> Map.delete(:key) |> Map.put(:meaning, Relup.explain(step))
              end),
+           # What the instruction that moves the version on traces and logs did on the node.
+           # nil when the relup has no such instruction, or the node could not be asked
+           version_update: Map.get(relup, :version_update),
            relup: relup.text
          }}
     end

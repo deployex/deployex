@@ -27,6 +27,36 @@ What that means in practice:
  * **`config_change/3` can be made to run on every hot upgrade.** OTP only calls it for an application whose environment changed, so a release can ask DeployEx to set one key of its own, see [Telling the application that it was hot-upgraded](#telling-the-application-that-it-was-hot-upgraded).
  * **A changed Config Provider is NOT applied.** Provider modules run on the node in its current version, before the new code is installed, so the old implementation is what resolves the configuration. A fix to a provider only takes effect once a full deployment has made it the running version.
 
+### The version on traces and logs
+
+An application reads its version once, when it boots, and two places keep the value they were given: the OpenTelemetry SDK holds the resource, with its `service.version`, in the state of its processes, and a `:logger` filter or formatter that stamps the version on every event holds it in its configuration.
+A hot upgrade restarts neither, so without help the node runs the new code and keeps reporting the old version.
+
+DeployEx adds a second instruction to the relup for this, at its end, once every process is running the new code again.
+It replaces the value where it is held and restarts nothing, so the spans that are open and the events that are queued are kept:
+
+ * **Traces**: the `service.version` of the resource, in the processes of the OpenTelemetry SDK 1.x that hold it. It is only replaced when it is exactly the version being upgraded from, so a `service.version` that is not the release version is left alone.
+ * **Logs**: every value equal to the version being upgraded from, in the filters and the formatter of each `:logger` handler, and in the filters and the metadata of the primary configuration.
+
+There is nothing to turn on, and nothing to add to the application: an application without OpenTelemetry, or whose logs carry no version, is not changed.
+It runs for every hot upgrade, whether or not the release asks for `config_change/3`.
+
+ * **It only knows the release version.** The version is matched as the text DeployEx deploys, `1.1.0` or `1.1.0-9cad9cd`. A version the application derives from something else, keeps as another type, or holds anywhere else (a metric tag, a `:persistent_term`, the state of one of its own processes) is not seen. That is what `config_change/3`, below, is for.
+ * **It cannot fail the upgrade.** It runs after the point of no return, so every part of it catches its own errors, and a part that fails leaves the value as it was.
+ * **An upgrade that restarts the VM does not carry it.** The node boots on the new version and reads it again.
+ * **What it did is kept too.** The relup says what the node was told to do, not what came of it, so once the release is installed DeployEx asks the node and keeps the answer with the relup. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `version_update`:
+
+   | | |
+   |---|---|
+   | `Traces: service.version moved from 1.0.0 to 1.1.0` | The resource was replaced |
+   | `Traces: left alone, service.version was 2024.11 and not 1.0.0` | The application reports something other than the release version, so it is for its `config_change/3` to update |
+   | `Traces: the OpenTelemetry SDK is not running, nothing to change` | The application has no SDK |
+   | `Traces: service.version could not be replaced in every process that holds it, the node may still report 1.0.0` | One of the processes of the SDK did not answer in time. The process that says which version the node reports is left as it was, so the next hot upgrade says `left alone` rather than claim a version that was not reached. A restart of the application brings it up to date |
+   | `Logs: 1 logger setting moved to 1.1.0` | A filter, a formatter or the metadata held the version |
+   | `Logs: no logger setting held 1.0.0, nothing changed` | The logs carry no version, or not the release version |
+
+ * **It is in the relup DeployEx keeps**, as its last step, see [Seeing what a hot upgrade did](#seeing-what-a-hot-upgrade-did). The code it runs is `apps/deployer/priv/relup/version_update.erl` in the DeployEx repository, next to `runtime_config.erl`, the code of the hook that applies the configuration.
+
 ### Telling the application that it was hot-upgraded
 
 A hot upgrade replaces code without restarting anything, so nothing in the application runs again on its own: whatever it read or cached when it booted stays as it was.
@@ -86,6 +116,47 @@ A version deployed before this field existed shows as `not set`.
  * The callback runs inside `release_handler:install_release/2`, with the new code already running and before the release is made permanent, so the upgrade waits for it. Keep it short and hand anything slow to another process.
  * A callback that fails does not fail the upgrade. One that raises, exits or returns an error leaves the release installed and made permanent, and OTP does not log it, so have the callback report its own failures.
 
+#### What the application does in it
+
+A hot upgrade restarts nothing, so everything the application worked out when it booted is still what it worked out then.
+DeployEx brings the version on traces and logs up to date itself, and `config_change/3` is where the application does the rest:
+
+| What stays as it was | Why | What to do |
+|---|---|---|
+| The version the application reports | A value read at boot, such as an environment variable or `runtime.exs`, still holds the old one. `runtime.exs` is of no help either, it is evaluated before the new code is installed | Read `Application.spec(:my_app, :vsn)` when the callback runs. The value of `:deployex_config_change` is the same version |
+| The version on traces (OpenTelemetry) and on log lines | The SDK keeps its resource in the state of its processes, and a logger filter, formatter or the metadata keeps the copy it was given at boot | Nothing: DeployEx replaces it in the relup, see [The version on traces and logs](#the-version-on-traces-and-logs). Only a version it cannot recognise, one that is not the release version or is kept somewhere else, is left to the application |
+| The static asset manifest (Phoenix, digested assets) | The endpoint reads it when it starts | `MyAppWeb.Endpoint.config_change/2`, see [Phoenix applications](#phoenix-applications) |
+| Pages that are already open (Phoenix) | A hot upgrade disconnects no one | Broadcast, and let the pages that subscribed decide what to show |
+| A value a process took when it started | A database pool keeps the password it connected with, a client keeps the token it was built with | Restart that process. It applies to secrets too, see [Secrets from 1Password](/guides/docs/yaml/README.md#secrets-from-1password) |
+| A cache filled at boot | Nothing ran again to fill it: an ETS table, a `:persistent_term`, a file read once | Fill it again |
+
+Two rules follow from where the callback runs, which is inside the application controller of the node:
+
+ * **It cannot stop or start an application, or change the application environment.** `Application.stop/1`, `Application.ensure_all_started/1` and `Application.put_env/3` are calls to the application controller, which is the process making them, so they exit with `calling_self`. OTP catches that exit and does not log it, and the upgrade goes on as if the work had been done. Reading is fine: `Application.get_env/2` and `Application.spec/2` return the new configuration and the new version.
+ * **It has to return quickly.** While it runs, nothing else on the node can start or stop an application.
+
+Most of the table needs neither: reading the version, asking another process to change its state and a broadcast are not calls to the application controller, and take a few milliseconds.
+So the callback can do them itself:
+
+```elixir
+# lib/my_app/application.ex
+@impl true
+def config_change(changed, new, removed) do
+  MyAppWeb.Endpoint.config_change(changed, removed)
+
+  # In `new` on the first hot upgrade after a boot, in `changed` on the following ones
+  if Keyword.has_key?(changed ++ new, :deployex_config_change) do
+    version = :my_app |> Application.spec(:vsn) |> to_string()
+
+    Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", {:hot_upgraded, version})
+  end
+
+  :ok
+end
+```
+
+Work that does need the application controller is handed to another process: a `spawn/1`, a `Task`, or a process the application supervises.
+
 #### Phoenix applications
 
 **Keep the digested assets, and set `hot_upgrade_config_change` on every release.**
@@ -110,7 +181,7 @@ So the application needs no code change, and two things from its pipeline:
 With both in place, a page rendered after the upgrade links to the new files, and a page that was already open keeps the consistent set it loaded.
 
 Pages that are already open are not told that a new version is running: a hot upgrade does not disconnect anyone, so `Phoenix.LiveView.static_changed?/1` has no reconnect to report on.
-Broadcast from the callback and let the LiveViews that subscribed decide what to show:
+Broadcast from the callback, or from the process it hands the work to, and let the LiveViews that subscribed decide what to show:
 
 ```elixir
 @impl true
@@ -139,7 +210,7 @@ It cannot be misconfigured, and it costs three things:
 This follows the standard `release_handler` sequence described in [How a hot upgrade works](https://github.com/deployex/beam-hotupgrades#how-a-hot-upgrade-works), with DeployEx driving each step remotely:
 
 1. `release_handler:unpack_release/1` registers the new release and puts its code on disk. Nothing is loaded yet.
-2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head.
+2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head, and the instruction that moves the version on traces and logs at its end.
 3. `release_handler:check_install_release/1` evaluates the plan without applying it.
 4. `release_handler:install_release/2` rebuilds the application environments and then runs the plan. From this point the node is running the new code.
 5. `release_handler:make_permanent/1` makes the new version the one the node boots into next time.
@@ -422,7 +493,7 @@ There DeployEx does fall back to a full deployment, which restarts the instance 
 The relup is the plan the node ran: which applications had their code replaced, which modules were loaded, which processes were suspended for a `code_change`, and which functions the upgrade called.
 It is written into the release directory, which DeployEx removes when it prunes older releases, so DeployEx keeps a copy with the version history.
 
- * It is kept just before the release is installed, with the instruction DeployEx adds for the runtime configuration, so it is what the node was given. An upgrade that failed after that point has its relup too.
+ * It is kept just before the release is installed, with the two instructions DeployEx adds, the runtime configuration at its head and the version on traces and logs at its end, so it is what the node was given. An upgrade that failed after that point has its relup too.
  * Only the upgrade is kept. A relup also describes the way back, which DeployEx never applies.
  * It holds instructions, not configuration. The resolved configuration travels separately and is erased once the upgrade has applied it.
  * The newest 20 are kept for each application, one for each pair of versions.
