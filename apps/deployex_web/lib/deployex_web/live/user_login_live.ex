@@ -31,6 +31,7 @@ defmodule DeployexWeb.UserLoginLive do
               <.input
                 field={@form[:username]}
                 type="text"
+                value={@dev_login[:username]}
                 placeholder="Username"
                 autocomplete="username"
                 required
@@ -38,10 +39,14 @@ defmodule DeployexWeb.UserLoginLive do
               <.input
                 field={@form[:password]}
                 type="password"
+                value={@dev_login[:password]}
                 placeholder="Password"
                 autocomplete="current-password"
                 required
               />
+              <p :if={@dev_login != []} id="dev-login-note" class="text-xs text-slate-500">
+                Development: the default credentials are filled in.
+              </p>
 
               <:actions>
                 <.button phx-disable-with="Signing in..." class="w-full">
@@ -77,6 +82,8 @@ defmodule DeployexWeb.UserLoginLive do
       socket
       |> assign(form: form)
       |> assign(oauth_configured?: Config.configured?())
+      # Only set by config/dev.exs, so a developer signs in with one click
+      |> assign(dev_login: Application.get_env(:deployex_web, :dev_login, []))
 
     {:ok, socket, temporary_assigns: [form: form]}
   end
