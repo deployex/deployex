@@ -35,6 +35,12 @@ defmodule Deployer.HotUpgrade.VersionUpdate do
   A version that is derived from something else, or kept anywhere else, is not seen. That is
   what `config_change/3` is for, see the hot upgrades guide.
 
+  ## What it did
+
+  The instruction leaves its result on the node, and `record/1` reads it once the release is
+  installed and keeps it with the relup, see `t:result/0`. So the relup says what the node
+  was told to do, and the result what came of it.
+
   ## It never fails the upgrade
 
   It runs after the point of no return, where an instruction that fails restarts the node, so
@@ -46,6 +52,26 @@ defmodule Deployer.HotUpgrade.VersionUpdate do
   require Logger
 
   alias Deployer.HotUpgrade.Execute
+  alias Foundation.Catalog
+  alias Foundation.Rpc
+
+  @result_key {:deployex, :version_update}
+  @rpc_timeout 10_000
+
+  @typedoc """
+  What the instruction did on the node.
+
+    * `traces` - `"updated"`, `"left_alone"` when the `service.version` was not the version
+      being upgraded from, `"no_sdk"` when the OpenTelemetry SDK is not running, `"failed"`
+      when it could not be replaced
+    * `traces_found` - the `service.version` that was left alone
+    * `logs` - how many logger settings held the version and were changed, or `"failed"`
+  """
+  @type result :: %{
+          traces: String.t(),
+          traces_found: String.t() | nil,
+          logs: non_neg_integer() | String.t()
+        }
 
   # From and To are bound by the instruction, to binaries
   @source_path Path.expand("../../../priv/relup/version_update.erl", __DIR__)
@@ -110,6 +136,80 @@ defmodule Deployer.HotUpgrade.VersionUpdate do
 
   def add_to_relup(_data), do: :ok
 
+  @doc """
+  Reads from the node what the instruction did, and keeps it with the relup of the upgrade,
+  under `version_update`.
+
+  The node is only asked when the relup that was kept has the instruction. It always returns
+  `:ok`: a result that cannot be read or kept is logged, the upgrade is already installed.
+  """
+  @spec record(Execute.t()) :: :ok
+  def record(%Execute{name: name, node: node} = data) when is_binary(name) do
+    from_version = to_string(data.from_version)
+    to_version = to_string(data.to_version)
+
+    with %{summary: %{version_update: true}} = relup <-
+           Catalog.relup(name, from_version, to_version),
+         {:ok, result} <- read_result(node, to_version),
+         :ok <- Catalog.add_relup(name, Map.put(relup, :version_update, result)) do
+      Logger.info(
+        "Version update of #{name} #{from_version} -> #{to_version}: " <>
+          Enum.join(describe(result, from_version, to_version), ". ")
+      )
+    else
+      # No relup kept, or one without the instruction
+      relup when is_map(relup) or is_nil(relup) -> :ok
+      reason -> not_recorded(name, reason)
+    end
+  rescue
+    error -> not_recorded(data.name, error)
+  end
+
+  def record(_data), do: :ok
+
+  @doc """
+  What the instruction did, one sentence for the traces and one for the logs.
+
+  ## Examples
+
+      iex> result = %{traces: "updated", traces_found: nil, logs: 1}
+      iex> Deployer.HotUpgrade.VersionUpdate.describe(result, "0.1.0", "0.2.0")
+      ["Traces: service.version moved from 0.1.0 to 0.2.0",
+       "Logs: 1 logger setting moved to 0.2.0"]
+
+      iex> result = %{traces: "left_alone", traces_found: "7.7.7", logs: 0}
+      iex> Deployer.HotUpgrade.VersionUpdate.describe(result, "0.1.0", "0.2.0")
+      ["Traces: left alone, service.version was 7.7.7 and not 0.1.0",
+       "Logs: no logger setting held 0.1.0, nothing changed"]
+  """
+  @spec describe(result(), String.t(), String.t()) :: [String.t()]
+  def describe(result, from_version, to_version) do
+    traces =
+      case result.traces do
+        "updated" ->
+          "service.version moved from #{from_version} to #{to_version}"
+
+        "left_alone" ->
+          "left alone, service.version was #{result.traces_found} and not #{from_version}"
+
+        "no_sdk" ->
+          "the OpenTelemetry SDK is not running, nothing to change"
+
+        _failed ->
+          "service.version could not be replaced, it is still #{from_version}"
+      end
+
+    logs =
+      case result.logs do
+        0 -> "no logger setting held #{from_version}, nothing changed"
+        1 -> "1 logger setting moved to #{to_version}"
+        count when is_integer(count) -> "#{count} logger settings moved to #{to_version}"
+        _failed -> "the logger settings could not be read or changed"
+      end
+
+    ["Traces: #{traces}", "Logs: #{logs}"]
+  end
+
   ### ==========================================================================
   ### Private functions
   ### ==========================================================================
@@ -127,6 +227,39 @@ defmodule Deployer.HotUpgrade.VersionUpdate do
 
   defp restarts_vm?(script),
     do: Enum.any?(script, &(&1 in [:restart_new_emulator, :restart_emulator]))
+
+  # The result of another upgrade is not the one of this one
+  defp read_result(node, to_version) do
+    case Rpc.call(node, :persistent_term, :get, [@result_key, :undefined], @rpc_timeout) do
+      {^to_version, traces, logs} -> {:ok, result(traces, logs)}
+      other -> {:error, {:no_result, other}}
+    end
+  end
+
+  defp result(traces, logs) do
+    {traces, found} =
+      case traces do
+        :updated -> {"updated", nil}
+        :no_sdk -> {"no_sdk", nil}
+        {:left_alone, found} when is_binary(found) -> {"left_alone", found}
+        {:left_alone, found} -> {"left_alone", inspect(found)}
+        _failed -> {"failed", nil}
+      end
+
+    %{
+      traces: traces,
+      traces_found: found,
+      logs: if(is_integer(logs), do: logs, else: "failed")
+    }
+  end
+
+  defp not_recorded(name, reason) do
+    Logger.warning(
+      "What the version update did on #{name} could not be recorded, reason: #{inspect(reason)}"
+    )
+
+    :ok
+  end
 
   defp not_added(relup_path, reason) do
     Logger.warning(

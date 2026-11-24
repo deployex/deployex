@@ -44,6 +44,16 @@ It runs for every hot upgrade, whether or not the release asks for `config_chang
  * **It only knows the release version.** The version is matched as the text DeployEx deploys, `1.1.0` or `1.1.0-9cad9cd`. A version the application derives from something else, keeps as another type, or holds anywhere else (a metric tag, a `:persistent_term`, the state of one of its own processes) is not seen. That is what `config_change/3`, below, is for.
  * **It cannot fail the upgrade.** It runs after the point of no return, so every part of it catches its own errors, and a part that fails leaves the value as it was.
  * **An upgrade that restarts the VM does not carry it.** The node boots on the new version and reads it again.
+ * **What it did is kept too.** The relup says what the node was told to do, not what came of it, so once the release is installed DeployEx asks the node and keeps the answer with the relup. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `version_update`:
+
+   | | |
+   |---|---|
+   | `Traces: service.version moved from 1.0.0 to 1.1.0` | The resource was replaced |
+   | `Traces: left alone, service.version was 2024.11 and not 1.0.0` | The application reports something other than the release version, so it is for its `config_change/3` to update |
+   | `Traces: the OpenTelemetry SDK is not running, nothing to change` | The application has no SDK |
+   | `Logs: 1 logger setting moved to 1.1.0` | A filter, a formatter or the metadata held the version |
+   | `Logs: no logger setting held 1.0.0, nothing changed` | The logs carry no version, or not the release version |
+
  * **It is in the relup DeployEx keeps**, as its last step, see [Seeing what a hot upgrade did](#seeing-what-a-hot-upgrade-did). The code it runs is `apps/deployer/priv/relup/version_update.erl` in the DeployEx repository, next to `runtime_config.erl`, the code of the hook that applies the configuration.
 
 ### Telling the application that it was hot-upgraded

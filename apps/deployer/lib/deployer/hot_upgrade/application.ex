@@ -290,6 +290,7 @@ defmodule Deployer.HotUpgrade.Application do
   defp install(%Execute{from_version: from_version, to_version: to_version} = data, node) do
     with :ok <- notify_progress(data, "Installing release"),
          :ok <- install_release(data),
+         :ok <- VersionUpdate.record(data),
          :ok <- notify_make_permanent(data.make_permanent_async, data),
          :ok <- permfy(data),
          :ok <- prune_old_releases(data),

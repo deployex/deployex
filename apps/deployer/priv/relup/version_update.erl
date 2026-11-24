@@ -4,6 +4,10 @@
 %% These are expressions and not a module: the relup carries them as abstract forms, which
 %% erl_eval evaluates with From and To bound to the two versions, as binaries.
 %%
+%% What it did is left in persistent_term, with the version it moved to, for DeployEx to read
+%% once the release is installed. It is a few words, so it is not erased: the next upgrade
+%% replaces it.
+%%
 %% It runs after the point of no return, where an instruction that fails restarts the node,
 %% so nothing here may raise.
 Swap = fun Swap(T, Old, New) when T =:= Old -> New;
@@ -53,4 +57,5 @@ Logs =
               K <- [filters, formatter], maps:is_key(K, H)])
     catch _:_ -> failed
     end,
+try persistent_term:put({deployex, version_update}, {To, Traces, Logs}) catch _:_ -> ok end,
 {Traces, Logs}.

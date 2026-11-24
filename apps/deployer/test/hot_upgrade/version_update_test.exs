@@ -2,10 +2,17 @@ defmodule Deployer.HotUpgrade.VersionUpdateTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
+  import Mox
 
   alias Deployer.HotUpgrade.Execute
   alias Deployer.HotUpgrade.Relup
   alias Deployer.HotUpgrade.VersionUpdate
+  alias Foundation.Catalog
+  alias Foundation.Fixture.Catalog, as: FixtureCatalog
+
+  doctest Deployer.HotUpgrade.VersionUpdate
+
+  setup :verify_on_exit!
 
   @up_script [
     {:load_object_code, {:myelixir, ~c"0.2.0", [MyElixir.Web]}},
@@ -161,6 +168,87 @@ defmodule Deployer.HotUpgrade.VersionUpdateTest do
     end
   end
 
+  describe "record/1" do
+    setup %{data: data} do
+      FixtureCatalog.cleanup()
+      data = %{data | name: "myelixir", node: :myelixir@host}
+
+      keep = fn script ->
+        :ok =
+          Catalog.add_relup("myelixir", %{
+            from_version: "0.1.0",
+            to_version: "0.2.0",
+            summary: Relup.summary(script),
+            steps: Relup.steps(script),
+            text: "relup",
+            inserted_at: ~N[2026-10-28 12:14:00]
+          })
+      end
+
+      %{data: data, keep: keep}
+    end
+
+    defp expect_result(result) do
+      expect(Foundation.RpcMock, :call, fn :myelixir@host,
+                                           :persistent_term,
+                                           :get,
+                                           [{:deployex, :version_update}, :undefined],
+                                           _timeout ->
+        result
+      end)
+    end
+
+    test "keeps what the instruction did with the relup", %{data: data, keep: keep} do
+      keep.(@up_script ++ [VersionUpdate.instruction("0.1.0", "0.2.0")])
+
+      for {on_node, kept} <- [
+            {{:updated, 2}, %{traces: "updated", traces_found: nil, logs: 2}},
+            {{{:left_alone, "7.7.7"}, 0},
+             %{traces: "left_alone", traces_found: "7.7.7", logs: 0}},
+            {{:no_sdk, :failed}, %{traces: "no_sdk", traces_found: nil, logs: "failed"}},
+            {{:failed, 1}, %{traces: "failed", traces_found: nil, logs: 1}}
+          ] do
+        {traces, logs} = on_node
+        expect_result({"0.2.0", traces, logs})
+
+        assert capture_log(fn -> assert :ok = VersionUpdate.record(data) end) =~
+                 "Version update of myelixir 0.1.0 -> 0.2.0: Traces: "
+
+        assert %{version_update: ^kept, text: "relup"} =
+                 Catalog.relup("myelixir", "0.1.0", "0.2.0")
+
+        assert [_traces, _logs] = VersionUpdate.describe(kept, "0.1.0", "0.2.0")
+      end
+    end
+
+    test "does not ask the node when the relup has no instruction, or none was kept", %{
+      data: data,
+      keep: keep
+    } do
+      assert :ok = VersionUpdate.record(data)
+
+      keep.(@up_script)
+      assert :ok = VersionUpdate.record(data)
+      refute Map.has_key?(Catalog.relup("myelixir", "0.1.0", "0.2.0"), :version_update)
+    end
+
+    test "keeps nothing for a result that is not the one of this upgrade", %{
+      data: data,
+      keep: keep
+    } do
+      keep.(@up_script ++ [VersionUpdate.instruction("0.1.0", "0.2.0")])
+
+      for answer <- [:undefined, {"0.1.5", :updated, 1}, {:badrpc, :nodedown}] do
+        expect_result(answer)
+
+        assert capture_log(fn -> assert :ok = VersionUpdate.record(data) end) =~
+                 "could not be recorded"
+
+        refute Map.has_key?(Catalog.relup("myelixir", "0.1.0", "0.2.0"), :version_update)
+      end
+    end
+  end
+
   describe "the instruction, on logs" do
     setup do
       primary = :logger.get_primary_config()
@@ -183,6 +271,7 @@ defmodule Deployer.HotUpgrade.VersionUpdateTest do
       :ok = :logger.set_primary_config(:metadata, %{version: "0.1.0", node: "0.1.0@host"})
 
       assert {:no_sdk, 2} = run("0.1.0", "0.2.0")
+      assert :persistent_term.get({:deployex, :version_update}) == {"0.2.0", :no_sdk, 2}
 
       assert {:ok, %{filters: filters}} = :logger.get_handler_config(handler)
 

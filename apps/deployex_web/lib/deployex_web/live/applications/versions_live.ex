@@ -6,6 +6,7 @@ defmodule DeployexWeb.VersionsLive do
   use DeployexWeb, :live_view
 
   alias Deployer.HotUpgrade.Relup
+  alias Deployer.HotUpgrade.VersionUpdate
   alias Deployer.Status
   alias DeployexWeb.ApplicationsLive.Board
   alias DeployexWeb.ApplicationsLive.View
@@ -282,7 +283,7 @@ defmodule DeployexWeb.VersionsLive do
         </ol>
         <h4 class="mt-2 border-t border-(--dx-base-300) pt-3 text-[0.875rem] font-bold">Outcome</h4>
         <ul id="relup-outcome" class="mt-2 flex flex-col gap-1.5 text-[0.875rem]">
-          <li :for={line <- relup_lines(@relup.kept.summary)}>{line}</li>
+          <li :for={line <- relup_lines(@relup.kept)}>{line}</li>
         </ul>
       </div>
 
@@ -537,7 +538,7 @@ defmodule DeployexWeb.VersionsLive do
   defp step_number(%{first: first, last: last}), do: "#{first}–#{last}"
 
   # What the upgrade did, one line for each thing it did
-  defp relup_lines(summary) do
+  defp relup_lines(%{summary: summary} = kept) do
     applications =
       Enum.map_join(summary.applications, ", ", fn {name, version} -> "#{name} #{version}" end)
 
@@ -553,11 +554,19 @@ defmodule DeployexWeb.VersionsLive do
       # A relup kept before this instruction existed has no such key
       Map.get(summary, :version_update, false) &&
         "Moves the version on traces and logs to the new one",
+      version_update_lines(kept),
       summary.restart_emulator && "Restarts the VM",
       "#{count(summary.instructions, "instruction")} in all"
     ]
+    |> List.flatten()
     |> Enum.filter(&is_binary/1)
   end
+
+  # What that instruction did on the node, read back once the release was installed
+  defp version_update_lines(%{version_update: %{} = result} = kept),
+    do: VersionUpdate.describe(result, kept.from_version, kept.to_version)
+
+  defp version_update_lines(_kept), do: []
 
   defp count(1, noun), do: "1 #{noun}"
   defp count(number, noun), do: "#{number} #{noun}s"
