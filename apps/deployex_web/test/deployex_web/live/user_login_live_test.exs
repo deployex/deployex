@@ -25,6 +25,25 @@ defmodule DeployexWeb.UserLoginLiveTest do
     end
 
     @tag :capture_log
+    test "leaves the credentials empty unless the development config fills them in", %{
+      conn: conn
+    } do
+      {:ok, _lv, html} = live(conn, ~p"/users/log_in")
+
+      refute html =~ "dev-login-note"
+      refute html =~ ~s(value="admin")
+
+      Application.put_env(:deployex_web, :dev_login, username: "admin", password: "deployex")
+      on_exit(fn -> Application.delete_env(:deployex_web, :dev_login) end)
+
+      {:ok, _lv, html} = live(conn, ~p"/users/log_in")
+
+      assert html =~ "Development: the default credentials are filled in."
+      assert html =~ ~s(value="admin")
+      assert html =~ ~s(value="deployex")
+    end
+
+    @tag :capture_log
     test "names the credential fields so password managers stay on this form", %{conn: conn} do
       {:ok, _lv, html} = live(conn, ~p"/users/log_in")
 

@@ -115,7 +115,7 @@ Done in 993ms.
 [warning] No versions set yet for myphoenixapp
 ```
 
-Now you can visit [`localhost:5001`](http://localhost:5001) from your browser and enter the credentials for the admin user, _**username: admin password: deployex**_. You should expect the following dashboard:
+Now you can visit [`localhost:5001`](http://localhost:5001) from your browser and sign in as the admin user, _**username: admin password: deployex**_. In development the sign-in page comes with them filled in. If something else on your machine listens on 5001, start DeployEx with `DEPLOYEX_PORT` set to another port. You should expect the following dashboard:
 
 ![Empty Dashboard](guides/static/deployex_no_monitoring_app.png)
 
