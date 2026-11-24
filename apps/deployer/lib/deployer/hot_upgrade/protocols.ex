@@ -1,7 +1,7 @@
 defmodule Deployer.HotUpgrade.Protocols do
   @moduledoc """
-  The instruction DeployEx puts at the end of a relup, which loads the consolidated
-  protocols of the release being installed.
+  The instruction DeployEx puts in a relup, after the last module it loads, which loads
+  the consolidated protocols of the release being installed.
 
   An Elixir release consolidates its protocols: each one is compiled again with the list of
   its implementations, and kept in `releases/<version>/consolidated`, outside of every
@@ -20,10 +20,11 @@ defmodule Deployer.HotUpgrade.Protocols do
 
       {apply, {erl_eval, exprs, [Forms, [{'Protocols', reload}, {'Root', Root}, {'To', <<"0.2.0">>}]]}}
 
-  It goes after the code of the applications is loaded, and before DeployEx starts the
-  pipelines and resumes the queues again. As the other instructions DeployEx adds, it
-  carries abstract forms and is evaluated by `erl_eval`. The code is in
-  `priv/relup/protocols.erl`.
+  It goes right after the last module the script loads, so what the script runs next, a
+  `code_change`, a resumed process or a function the appup calls, already finds the
+  protocols of the release, and before DeployEx starts the pipelines and resumes the queues
+  again. As the other instructions DeployEx adds, it carries abstract forms and is evaluated
+  by `erl_eval`. The code is in `priv/relup/protocols.erl`.
 
   ## What it leaves alone
 
@@ -83,8 +84,9 @@ defmodule Deployer.HotUpgrade.Protocols do
   def instruction?(_instruction), do: false
 
   @doc """
-  Adds the instruction at the end of the script that upgrades from the version the node is
-  running, in the relup of the release being installed.
+  Adds the instruction after the last module loaded by the script that upgrades from the
+  version the node is running, in the relup of the release being installed. A script that
+  loads no module has it at its end.
 
   A script that restarts the VM is left as it is.
 
@@ -183,13 +185,24 @@ defmodule Deployer.HotUpgrade.Protocols do
     restarts_vm? = Enum.any?(script, &(&1 in [:restart_new_emulator, :restart_emulator]))
 
     if to_string(from_vsn) == from_version and not restarts_vm? do
-      {from_vsn, descr, script ++ [instruction]}
+      {from_vsn, descr, place(script, instruction)}
     else
       {from_vsn, descr, script}
     end
   end
 
   defp append(entry, _from_version, _instruction), do: entry
+
+  # Right after the last module the script loads: every implementation is loaded by then,
+  # and what the script runs next, a code_change, a resumed process or a function the appup
+  # calls, already finds the protocols of the release. A script that loads nothing has it
+  # at its end
+  defp place(script, instruction) do
+    case script |> Enum.reverse() |> Enum.split_while(&(not match?({:load, _module}, &1))) do
+      {_script, []} -> script ++ [instruction]
+      {rest, until_load} -> Enum.reverse(until_load) ++ [instruction | Enum.reverse(rest)]
+    end
+  end
 
   # The result of another upgrade is not the one of this one
   defp read_result(node, to_version) do

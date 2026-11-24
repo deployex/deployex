@@ -67,7 +67,7 @@ A release that adds a struct which derives `Jason.Encoder`, or implements `Strin
 The first value of that struct that reaches the protocol raises `Protocol.UndefinedError`, on a node that says it runs the new version.
 A restart makes it go away, which is why a full deployment never shows it.
 
-DeployEx adds an instruction to the relup for this, after the code of the applications is loaded.
+DeployEx adds an instruction to the relup for this, right after the last module it loads, so a `code_change` or a function the appup calls after it already finds them.
 It loads every consolidated protocol of the new release whose code is not the one that is loaded, and moves the code path to the directory of the new release.
 
  * **Nothing to turn on**, and nothing to add to the application. A release that changes no protocol loads none.
@@ -270,7 +270,7 @@ It cannot be misconfigured, and it costs three things:
 This follows the standard `release_handler` sequence described in [How a hot upgrade works](https://github.com/deployex/beam-hotupgrades#how-a-hot-upgrade-works), with DeployEx driving each step remotely:
 
 1. `release_handler:unpack_release/1` registers the new release and puts its code on disk. Nothing is loaded yet.
-2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head, the pause of the Oban queues and the stop of the Broadway pipelines after its point of no return, and at its end the load of the consolidated protocols, the instruction that moves the version on traces and logs, the start of the pipelines and the resume of the queues.
+2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head, the pause of the Oban queues and the stop of the Broadway pipelines after its point of no return, the load of the consolidated protocols after the last module it loads, and at its end the instruction that moves the version on traces and logs, the start of the pipelines and the resume of the queues.
 3. `release_handler:check_install_release/1` evaluates the plan without applying it.
 4. `release_handler:install_release/2` rebuilds the application environments and then runs the plan. From this point the node is running the new code.
 5. `release_handler:make_permanent/1` makes the new version the one the node boots into next time.

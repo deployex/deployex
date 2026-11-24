@@ -158,6 +158,46 @@ defmodule Deployer.HotUpgrade.ProtocolsTest do
       assert %{protocols: false} = Relup.summary(@up_script)
     end
 
+    test "goes before what the script runs after its last load", %{
+      data: data,
+      root: root,
+      relup_path: relup_path
+    } do
+      code_change = {:code_change, :up, [{MyElixir.Worker, []}]}
+      resume = {:resume, [MyElixir.Worker]}
+      apply = {:apply, {MyElixir.Release, :after_upgrade, []}}
+      suspend = {:suspend, [MyElixir.Worker]}
+
+      write_relup!(
+        relup_path,
+        {~c"0.2.0",
+         [{~c"0.1.0", [], [:point_of_no_return, suspend, @load, code_change, resume, apply]}], []}
+      )
+
+      assert :ok = Protocols.add_to_relup(data)
+
+      assert {:ok, [{~c"0.2.0", [{~c"0.1.0", [], script}], []}]} = :file.consult(relup_path)
+
+      assert script == [
+               :point_of_no_return,
+               suspend,
+               @load,
+               Protocols.instruction(root, "0.2.0"),
+               code_change,
+               resume,
+               apply
+             ]
+
+      # A script that loads no module has it at its end
+      write_relup!(relup_path, {~c"0.2.0", [{~c"0.1.0", [], [:point_of_no_return, apply]}], []})
+      assert :ok = Protocols.add_to_relup(data)
+
+      assert {:ok, [{~c"0.2.0", [{~c"0.1.0", [], [:point_of_no_return, ^apply, last]}], []}]} =
+               :file.consult(relup_path)
+
+      assert Protocols.instruction?(last)
+    end
+
     test "leaves a script that restarts the VM as it is", %{data: data, relup_path: relup_path} do
       for script <- [[:restart_new_emulator | @up_script], @up_script ++ [:restart_emulator]] do
         write_relup!(relup_path, {~c"0.2.0", [{~c"0.1.0", [], script}], []})

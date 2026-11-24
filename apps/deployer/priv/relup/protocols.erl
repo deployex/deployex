@@ -1,4 +1,4 @@
-%% The instruction DeployEx puts at the end of a relup, see Deployer.HotUpgrade.Protocols.
+%% The instruction DeployEx puts after the last module a relup loads, see Deployer.HotUpgrade.Protocols.
 %%
 %% An Elixir release consolidates its protocols: each protocol is compiled again with the
 %% list of its implementations, and those modules are kept in releases/<version>/consolidated,
