@@ -57,6 +57,24 @@ It runs for every hot upgrade, whether or not the release asks for `config_chang
 
  * **It is in the relup DeployEx keeps**, as its last step, see [Seeing what a hot upgrade did](#seeing-what-a-hot-upgrade-did). The code it runs is `apps/deployer/priv/relup/version_update.erl` in the DeployEx repository, next to `runtime_config.erl`, the code of the hook that applies the configuration.
 
+### Protocols
+
+An Elixir release consolidates its protocols: each protocol is compiled again with the list of its implementations, which is what makes dispatch fast.
+Those modules are kept in `releases/<version>/consolidated`, outside of every application, and an appup describes one application.
+So no appup covers them, and `release_handler` loads the implementations a release adds and leaves the protocols as they were when the node booted.
+
+A release that adds a struct which derives `Jason.Encoder`, or implements `String.Chars` or `Phoenix.Param`, then installs without an error.
+The first value of that struct that reaches the protocol raises `Protocol.UndefinedError`, on a node that says it runs the new version.
+A restart makes it go away, which is why a full deployment never shows it.
+
+DeployEx adds an instruction to the relup for this, after the code of the applications is loaded.
+It loads every consolidated protocol of the new release whose code is not the one that is loaded, and moves the code path to the directory of the new release.
+
+ * **Nothing to turn on**, and nothing to add to the application. A release that changes no protocol loads none.
+ * **A release without consolidated protocols is left alone**: an Erlang or a Gleam one, or an Elixir one built with `consolidate_protocols: false`. So is an upgrade that restarts the VM.
+ * **It cannot fail the upgrade.** It catches its own errors, protocol by protocol, and a protocol that could not be loaded stays as it was.
+ * **What it loaded is kept**, with the relup. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `protocols`. The code is `apps/deployer/priv/relup/protocols.erl`.
+
 ### Broadway pipelines
 
 A hot upgrade removes the previous version of every module it loads, and a process that is still inside one is killed.
@@ -252,7 +270,7 @@ It cannot be misconfigured, and it costs three things:
 This follows the standard `release_handler` sequence described in [How a hot upgrade works](https://github.com/deployex/beam-hotupgrades#how-a-hot-upgrade-works), with DeployEx driving each step remotely:
 
 1. `release_handler:unpack_release/1` registers the new release and puts its code on disk. Nothing is loaded yet.
-2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head, the pause of the Oban queues and the stop of the Broadway pipelines after its point of no return, and at its end the instruction that moves the version on traces and logs, the start of the pipelines and the resume of the queues.
+2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head, the pause of the Oban queues and the stop of the Broadway pipelines after its point of no return, and at its end the load of the consolidated protocols, the instruction that moves the version on traces and logs, the start of the pipelines and the resume of the queues.
 3. `release_handler:check_install_release/1` evaluates the plan without applying it.
 4. `release_handler:install_release/2` rebuilds the application environments and then runs the plan. From this point the node is running the new code.
 5. `release_handler:make_permanent/1` makes the new version the one the node boots into next time.
@@ -535,7 +553,7 @@ There DeployEx does fall back to a full deployment, which restarts the instance 
 The relup is the plan the node ran: which applications had their code replaced, which modules were loaded, which processes were suspended for a `code_change`, and which functions the upgrade called.
 It is written into the release directory, which DeployEx removes when it prunes older releases, so DeployEx keeps a copy with the version history.
 
- * It is kept just before the release is installed, with the instructions DeployEx adds, the runtime configuration, the version on traces and logs, the stop and start of the Broadway pipelines and the pause and resume of the Oban queues, so it is what the node was given. An upgrade that failed after that point has its relup too.
+ * It is kept just before the release is installed, with the instructions DeployEx adds, the runtime configuration, the consolidated protocols, the version on traces and logs, the stop and start of the Broadway pipelines and the pause and resume of the Oban queues, so it is what the node was given. An upgrade that failed after that point has its relup too.
  * Only the upgrade is kept. A relup also describes the way back, which DeployEx never applies.
  * It holds instructions, not configuration. The resolved configuration travels separately and is erased once the upgrade has applied it.
  * The newest 20 are kept for each application, one for each pair of versions.

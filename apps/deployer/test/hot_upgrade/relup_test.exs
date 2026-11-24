@@ -77,6 +77,7 @@ defmodule Deployer.HotUpgrade.RelupTest do
              applies: ["supervisor.restart_child/2"],
              runtime_config: true,
              version_update: false,
+             protocols: false,
              pipelines: false,
              jobs: false,
              restart_emulator: false,

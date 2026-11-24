@@ -3085,6 +3085,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                "Checking release can be installed",
                "Resolving the runtime configuration",
                "Adding the runtime configuration to the relup",
+               "Adding the protocol reload to the relup",
                "Adding the version update to the relup",
                "Adding the pipeline and job handling to the relup",
                "Installing release",
