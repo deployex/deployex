@@ -129,6 +129,8 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
   ]
 
   @expected_timeout 60_000
+  # install_release/2 is also given the time its instructions wait for jobs and pipelines
+  @install_timeout 125_000
 
   setup do
     FixtureCatalog.cleanup()
@@ -824,7 +826,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                         :release_handler,
                         :install_release,
                         [^to_version, [{:update_paths, true}]],
-                        @expected_timeout ->
+                        @install_timeout ->
       {:ok, :any, :any}
     end)
 
@@ -848,7 +850,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       function = @function
 
       Foundation.RpcMock
-      |> expect(:call, fn ^node, :release_handler, ^function, _params, @expected_timeout ->
+      |> expect(:call, fn ^node, :release_handler, ^function, _params, _timeout ->
         {:badrpc, :nodedown}
       end)
 
@@ -868,7 +870,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                         :release_handler,
                         :install_release,
                         [^to_version, [{:update_paths, true}]],
-                        @expected_timeout ->
+                        @install_timeout ->
       {:error, :badrpc}
     end)
 
@@ -1537,7 +1539,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -1709,7 +1711,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, _module, :load, [_cfg, _arg], @expected_timeout ->
         {:badrpc, {:EXIT, {{:badmatch, {:error, {:already_started, self()}}}, []}}}
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         flunk("install_release must not run once the configuration cannot be resolved")
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -1864,7 +1866,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -1968,7 +1970,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -2062,7 +2064,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -2156,7 +2158,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -2256,7 +2258,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -2584,7 +2586,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
         ^node, :persistent_term, :put, _params, @expected_timeout ->
           :ok
 
-        ^node, :release_handler, :install_release, _params, @expected_timeout ->
+        ^node, :release_handler, :install_release, _params, @install_timeout ->
           {:ok, :any, :any}
 
         ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -2654,7 +2656,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
         ^node, :persistent_term, :put, _params, @expected_timeout ->
           :ok
 
-        ^node, :release_handler, :install_release, _params, @expected_timeout ->
+        ^node, :release_handler, :install_release, _params, @install_timeout ->
           {:ok, :any, :any}
 
         ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -3084,6 +3086,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                "Resolving the runtime configuration",
                "Adding the runtime configuration to the relup",
                "Adding the version update to the relup",
+               "Adding the pipeline and job handling to the relup",
                "Installing release",
                "Making release 0.2.0 permanent",
                "Hot upgrade applied successfully, 0.1.0 -> 0.2.0"
@@ -3185,7 +3188,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->

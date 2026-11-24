@@ -57,6 +57,48 @@ It runs for every hot upgrade, whether or not the release asks for `config_chang
 
  * **It is in the relup DeployEx keeps**, as its last step, see [Seeing what a hot upgrade did](#seeing-what-a-hot-upgrade-did). The code it runs is `apps/deployer/priv/relup/version_update.erl` in the DeployEx repository, next to `runtime_config.erl`, the code of the hook that applies the configuration.
 
+### Broadway pipelines
+
+A hot upgrade removes the previous version of every module it loads, and a process that is still inside one is killed.
+For a [Broadway](https://hexdocs.pm/broadway) pipeline that is a message half handled, and with a producer that waits for an acknowledgement, such as RabbitMQ, it is worse than a lost message.
+Broadway starts the processor again and not the connection, so the message stays delivered and never acknowledged, and a consumer with a prefetch of 1 is sent nothing else until it is restarted.
+Nothing is logged: the consumer looks connected and receives nothing.
+
+So DeployEx keeps the pipelines out of the way while the code is replaced, with two more instructions in the relup:
+
+ * **Right after the point of no return**, before any module is loaded, it stops each running pipeline through the supervisor that started it. That is Broadway's graceful shutdown: the messages being handled finish, and what does not finish in time goes back to its queue when the connection closes.
+ * **At the end**, once every process runs the new code, it starts them again.
+
+There is nothing to turn on, and nothing to add to the application.
+
+ * **The upgrade waits for the messages in flight**, up to 30 seconds for all the pipelines together, which stop at the same time. Consumers that handle a message in milliseconds add nothing noticeable. A pipeline that is still stopping after 30 seconds is no longer waited for: the upgrade goes on, a message it is still handling can be killed as before, and it is started again at the end, or as soon as it has stopped: the start is waited for up to 10 seconds.
+ * **Nothing is consumed on that node meanwhile.** The other nodes keep consuming.
+ * **A pipeline DeployEx could not start again is left alone**: one that was not started under a name, or by a supervisor that keeps no child to start again, such as a `DynamicSupervisor`, one that is a `temporary` child, or one started by a process that is not a supervisor. So is an application without Broadway, or with a version of it that does not list its pipelines.
+ * **An upgrade that restarts the VM does not carry them**, it stops everything anyway.
+ * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be started again is written down before anything is stopped.
+ * **What happened is kept**, with the relup: each pipeline, whether it stopped in time and whether it started. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `pipelines`. The code is `apps/deployer/priv/relup/pipelines_stop.erl` and `pipelines_start.erl`.
+
+### Background jobs
+
+A job that is running when a module it is inside of is replaced is killed too.
+[Oban](https://hexdocs.pm/oban) treats that as any other failure: the job is recorded with `killed` as its error and tried again on the new code, so nothing is stuck. The job still loses an attempt and the work it had done.
+
+When Oban shuts down it does better for the jobs that are almost done: it starts no new job and waits for the running ones, for its `shutdown_grace_period`.
+DeployEx gives a hot upgrade the same, with two more instructions in the relup:
+
+ * **Right after the point of no return**, it pauses the Oban queues of this node and waits for the running jobs, for the `shutdown_grace_period` of the instance: 15 seconds unless the application sets another, and 20 seconds at most.
+ * **At the end**, it resumes them.
+
+There is nothing to turn on, and nothing to add to the application.
+
+ * **A job that outlasts the wait keeps running.** It is killed only when a module it is inside of is replaced by this upgrade, and Oban then tries it again, a few seconds later. A job whose code did not change is not touched, which a deployment that stops the node cannot offer.
+ * **The rules for a job are the ones a deployment already asks for**: more than one attempt, since a kill uses one and a job with a single attempt is not tried again, and safe to run again from the start.
+ * **Only this node is paused**, and no job starts on it during the upgrade. A queue that was already paused is left paused.
+ * **The upgrade takes that much longer** when jobs are running, and no longer when the queues are idle. With the pipelines, an upgrade waits 65 seconds at most: 20 for the jobs, and 5, 30 and 10 to find, stop and start the pipelines.
+ * **An application without Oban is not changed**, nor is one with a version of it that cannot pause a queue on one node. An upgrade that restarts the VM does not carry the instructions.
+ * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be resumed is written down before any queue is paused.
+ * **What happened is kept**, with the relup: the queues that were paused, how many jobs were still running when the wait ended (`null` when the queues could not be checked), and whether the queues were resumed. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `jobs`. The code is `apps/deployer/priv/relup/jobs_pause.erl` and `jobs_resume.erl`.
+
 ### Telling the application that it was hot-upgraded
 
 A hot upgrade replaces code without restarting anything, so nothing in the application runs again on its own: whatever it read or cached when it booted stays as it was.
@@ -210,7 +252,7 @@ It cannot be misconfigured, and it costs three things:
 This follows the standard `release_handler` sequence described in [How a hot upgrade works](https://github.com/deployex/beam-hotupgrades#how-a-hot-upgrade-works), with DeployEx driving each step remotely:
 
 1. `release_handler:unpack_release/1` registers the new release and puts its code on disk. Nothing is loaded yet.
-2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head, and the instruction that moves the version on traces and logs at its end.
+2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head, the pause of the Oban queues and the stop of the Broadway pipelines after its point of no return, and at its end the instruction that moves the version on traces and logs, the start of the pipelines and the resume of the queues.
 3. `release_handler:check_install_release/1` evaluates the plan without applying it.
 4. `release_handler:install_release/2` rebuilds the application environments and then runs the plan. From this point the node is running the new code.
 5. `release_handler:make_permanent/1` makes the new version the one the node boots into next time.
@@ -493,7 +535,7 @@ There DeployEx does fall back to a full deployment, which restarts the instance 
 The relup is the plan the node ran: which applications had their code replaced, which modules were loaded, which processes were suspended for a `code_change`, and which functions the upgrade called.
 It is written into the release directory, which DeployEx removes when it prunes older releases, so DeployEx keeps a copy with the version history.
 
- * It is kept just before the release is installed, with the two instructions DeployEx adds, the runtime configuration at its head and the version on traces and logs at its end, so it is what the node was given. An upgrade that failed after that point has its relup too.
+ * It is kept just before the release is installed, with the instructions DeployEx adds, the runtime configuration, the version on traces and logs, the stop and start of the Broadway pipelines and the pause and resume of the Oban queues, so it is what the node was given. An upgrade that failed after that point has its relup too.
  * Only the upgrade is kept. A relup also describes the way back, which DeployEx never applies.
  * It holds instructions, not configuration. The resolved configuration travels separately and is erased once the upgrade has applied it.
  * The newest 20 are kept for each application, one for each pair of versions.
