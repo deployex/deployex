@@ -106,6 +106,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
           applies: ["supervisor.restart_child/2"],
           runtime_config: true,
           version_update: true,
+          protocols: true,
           pipelines: true,
           jobs: true,
           restart_emulator: false,
@@ -124,6 +125,7 @@ defmodule DeployexWeb.Applications.VersionsTest do
             {:resume, [Myphoenixapp.Worker]}
           ]),
         version_update: %{traces: "left_alone", traces_found: "9.9.9", logs: 2},
+        protocols: %{reloaded: ["Jason.Encoder"], failed: [], consolidated: true},
         pipelines: [%{name: "Myphoenixapp.Orders", stopped: "stopped", started: "started"}],
         jobs: [%{name: "Oban", queues: ["default", "mailers"], running: 1, resumed: "resumed"}],
         text: "{\"1.4.2\",[{\"1.4.1\",[],[point_of_no_return]}],[]}.\n",
@@ -159,6 +161,8 @@ defmodule DeployexWeb.Applications.VersionsTest do
     assert html =~ "Moves the version on traces and logs to the new one"
     assert html =~ "Traces: left alone, service.version was 9.9.9 and not 1.4.1"
     assert html =~ "Logs: 2 logger settings moved to 1.4.2"
+    assert html =~ "Loads the consolidated protocols of the release that changed"
+    assert html =~ "Protocols: 1 consolidated protocol loaded: Jason.Encoder"
     assert html =~ "Stops the Broadway pipelines while the code is replaced"
     assert html =~ "Pipelines: Myphoenixapp.Orders stopped and started"
     assert html =~ "Pauses the Oban queues and waits for the running jobs, then resumes them"

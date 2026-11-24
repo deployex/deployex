@@ -7,6 +7,7 @@ defmodule DeployexWeb.VersionsLive do
 
   alias Deployer.HotUpgrade.Jobs
   alias Deployer.HotUpgrade.Pipelines
+  alias Deployer.HotUpgrade.Protocols
   alias Deployer.HotUpgrade.Relup
   alias Deployer.HotUpgrade.VersionUpdate
   alias Deployer.Status
@@ -551,18 +552,7 @@ defmodule DeployexWeb.VersionsLive do
         "Suspends the processes of #{Enum.join(summary.updated, ", ")} and runs their code_change",
       summary.removed != [] && "Removes #{Enum.join(summary.removed, ", ")}",
       summary.applies != [] && "Calls #{Enum.join(summary.applies, ", ")}",
-      summary.runtime_config &&
-        "Applies the runtime configuration, with the config_change marker when the release asked for it",
-      # A relup kept before this instruction existed has no such key
-      Map.get(summary, :version_update, false) &&
-        "Moves the version on traces and logs to the new one",
-      version_update_lines(kept),
-      Map.get(summary, :pipelines, false) &&
-        "Stops the Broadway pipelines while the code is replaced, and starts them again",
-      pipelines_line(kept),
-      Map.get(summary, :jobs, false) &&
-        "Pauses the Oban queues and waits for the running jobs, then resumes them",
-      jobs_line(kept),
+      added_lines(kept),
       summary.restart_emulator && "Restarts the VM",
       "#{count(summary.instructions, "instruction")} in all"
     ]
@@ -570,11 +560,36 @@ defmodule DeployexWeb.VersionsLive do
     |> Enum.filter(&is_binary/1)
   end
 
+  # What the instructions DeployEx adds do, each followed by what it did on the node. A relup
+  # kept before an instruction existed has no key for it
+  defp added_lines(%{summary: summary} = kept) do
+    [
+      summary.runtime_config &&
+        "Applies the runtime configuration, with the config_change marker when the release asked for it",
+      added?(summary, :version_update) && "Moves the version on traces and logs to the new one",
+      version_update_lines(kept),
+      added?(summary, :protocols) &&
+        "Loads the consolidated protocols of the release that changed",
+      protocols_line(kept),
+      added?(summary, :pipelines) &&
+        "Stops the Broadway pipelines while the code is replaced, and starts them again",
+      pipelines_line(kept),
+      added?(summary, :jobs) &&
+        "Pauses the Oban queues and waits for the running jobs, then resumes them",
+      jobs_line(kept)
+    ]
+  end
+
+  defp added?(summary, key), do: Map.get(summary, key, false)
+
   # What that instruction did on the node, read back once the release was installed
   defp version_update_lines(%{version_update: %{} = result} = kept),
     do: VersionUpdate.describe(result, kept.from_version, kept.to_version)
 
   defp version_update_lines(_kept), do: []
+
+  defp protocols_line(%{protocols: %{} = result}), do: "Protocols: #{Protocols.describe(result)}"
+  defp protocols_line(_kept), do: nil
 
   # What happened to each pipeline, read back once the release was installed
   defp pipelines_line(%{pipelines: results}) when is_list(results),

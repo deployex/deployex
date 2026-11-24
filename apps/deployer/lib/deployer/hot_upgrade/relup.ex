@@ -22,6 +22,8 @@ defmodule Deployer.HotUpgrade.Relup do
       also what carries the `config_change` marker
     * `version_update` - whether DeployEx moves the version on traces and logs in it, see
       `Deployer.HotUpgrade.VersionUpdate`
+    * `protocols` - whether DeployEx loads the consolidated protocols of the release, see
+      `Deployer.HotUpgrade.Protocols`
     * `pipelines` - whether DeployEx stops the Broadway pipelines while the code is replaced,
       see `Deployer.HotUpgrade.Pipelines`
     * `jobs` - whether DeployEx pauses the Oban queues and waits for the running jobs, see
@@ -37,6 +39,7 @@ defmodule Deployer.HotUpgrade.Relup do
           applies: [String.t()],
           runtime_config: boolean(),
           version_update: boolean(),
+          protocols: boolean(),
           pipelines: boolean(),
           jobs: boolean(),
           restart_emulator: boolean(),
@@ -133,6 +136,7 @@ defmodule Deployer.HotUpgrade.Relup do
         applies: ["MyApp.Release.after_upgrade/1"],
         runtime_config: false,
         version_update: false,
+        protocols: false,
         pipelines: false,
         jobs: false,
         restart_emulator: false,
@@ -149,6 +153,7 @@ defmodule Deployer.HotUpgrade.Relup do
       applies: [],
       runtime_config: false,
       version_update: false,
+      protocols: false,
       pipelines: false,
       jobs: false,
       restart_emulator: false,
@@ -270,6 +275,14 @@ defmodule Deployer.HotUpgrade.Relup do
         "Only a value equal to the previous version is replaced, and it never fails. " <>
         "Its code is priv/relup/version_update.erl of the deployer application."
 
+  def explain(%{key: :protocols}),
+    do:
+      "Added by DeployEx. Loads the consolidated protocols of the new release that " <>
+        "changed. They are kept outside of every application, so no appup covers them, " <>
+        "and without this a protocol does not know the implementations the release adds " <>
+        "until the node restarts. Its code is priv/relup/protocols.erl of the deployer " <>
+        "application."
+
   def explain(%{key: :pipelines_stop}),
     do:
       "Added by DeployEx. Stops the Broadway pipelines of the node through their " <>
@@ -362,6 +375,9 @@ defmodule Deployer.HotUpgrade.Relup do
 
   defp step({:code_change, modules}), do: new_step(:code_change, names(modules))
 
+  defp step({:apply, {:erl_eval, :exprs, [_forms, [{:Protocols, :reload} | _]]}}),
+    do: %{new_step(:protocols, [], [], "consolidated protocols") | instruction: "apply"}
+
   defp step({:apply, {:erl_eval, :exprs, [_forms, [{:Pipelines, phase} | _]]}})
        when phase in [:stop, :start] do
     %{new_step(:"pipelines_#{phase}", [], [], "#{phase} the pipelines") | instruction: "apply"}
@@ -450,6 +466,9 @@ defmodule Deployer.HotUpgrade.Relup do
 
   defp count({:remove, {module, _pre_purge, _post_purge}}, acc),
     do: %{acc | removed: [module_name(module) | acc.removed]}
+
+  defp count({:apply, {:erl_eval, :exprs, [_forms, [{:Protocols, :reload} | _]]}}, acc),
+    do: %{acc | protocols: true}
 
   # The two instructions DeployEx puts around the code replacement, see Pipelines
   defp count({:apply, {:erl_eval, :exprs, [_forms, [{:Pipelines, _phase} | _]]}}, acc),

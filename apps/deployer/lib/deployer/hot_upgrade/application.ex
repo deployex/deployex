@@ -118,6 +118,7 @@ defmodule Deployer.HotUpgrade.Application do
   alias Deployer.HotUpgrade.Jobs
   alias Deployer.HotUpgrade.Pipelines
   alias Deployer.HotUpgrade.Progress
+  alias Deployer.HotUpgrade.Protocols
   alias Deployer.HotUpgrade.Relup
   alias Deployer.HotUpgrade.VersionUpdate
   alias Foundation.Rpc
@@ -283,6 +284,8 @@ defmodule Deployer.HotUpgrade.Application do
          runtime_config = add_config_change_marker(data, runtime_config),
          :ok <- notify_progress(data, "Adding the runtime configuration to the relup"),
          :ok <- install_runtime_config_hook(data, runtime_config),
+         :ok <- notify_progress(data, "Adding the protocol reload to the relup"),
+         :ok <- Protocols.add_to_relup(data),
          :ok <- notify_progress(data, "Adding the version update to the relup"),
          :ok <- VersionUpdate.add_to_relup(data),
          :ok <- notify_progress(data, "Adding the pipeline and job handling to the relup"),
@@ -299,6 +302,7 @@ defmodule Deployer.HotUpgrade.Application do
   defp install(%Execute{from_version: from_version, to_version: to_version} = data, node) do
     with :ok <- notify_progress(data, "Installing release"),
          :ok <- install_release(data),
+         :ok <- Protocols.record(data),
          :ok <- VersionUpdate.record(data),
          :ok <- Pipelines.record(data),
          :ok <- Jobs.record(data),
