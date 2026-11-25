@@ -276,6 +276,7 @@ Learn how to run DeployEx locally and configure your application for mTLS, hot u
 - [Elixir Umbrella Application - No Ecto](guides/docs/local-elixir-umbrella/README.md)
 - [Gleam Application](guides/docs/local-gleam/README.md)
 - [Erlang Application](guides/docs/local-erlang/README.md)
+- [DeployEx in a container, with nginx in front](guides/docs/docker/README.md)
 
 ### Recommended Supporting Repositories
 

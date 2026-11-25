@@ -10,6 +10,7 @@ defmodule Sentinel.Logs.Server do
   alias Foundation.Catalog
   alias Host.Terminal
   alias Sentinel.Logs.Message
+  alias Sentinel.Logs.Output
 
   @logs_storage_table :logs_storage_table
   @logs_types "log-types"
@@ -117,6 +118,9 @@ defmodule Sentinel.Logs.Server do
       if persist_data?, do: ets_append_to_list(sname_log_table, timed_log_type_key, data)
 
       notify_new_log_data(reporter, log_key, data)
+
+      # After the dashboard, and without waiting: the output is written by another server
+      Output.Server.forward(reporter, log_key, message)
 
       if log_key not in log_keys do
         :ets.insert(sname_log_table, {@logs_types, [log_key] ++ log_keys})

@@ -7,6 +7,7 @@ defmodule Sentinel.Logs.ServerTest do
   alias Foundation.Catalog
   alias Host.Terminal
   alias Sentinel.Logs.Message
+  alias Sentinel.Logs.Output
   alias Sentinel.Logs.Server
 
   setup [
@@ -35,6 +36,78 @@ defmodule Sentinel.Logs.ServerTest do
 
     # Validate by inspection
     Server.unsubscribe_for_new_logs(sname, log_type)
+  end
+
+  describe "monitored_app_log_stdout" do
+    setup do
+      # The output is written by its own server. What it writes is kept here
+      {:ok, output} = StringIO.open("")
+      output_pid = start_supervised!(Output.Server)
+      Process.group_leader(output_pid, output)
+
+      on_exit(fn -> Application.delete_env(:foundation, :monitored_app_log_stdout) end)
+
+      {:ok, output: output, output_pid: output_pid}
+    end
+
+    defp send_log(context, log_type, message) do
+      %{pid: pid, sname: sname} = context
+      Server.subscribe_for_new_logs(sname, log_type)
+
+      send(
+        pid,
+        {:terminal_update,
+         %{
+           metadata: %{context: :terminal_logs, sname: sname, type: log_type},
+           source_pid: self(),
+           message: message
+         }}
+      )
+
+      # The dashboard gets it whatever the option says
+      assert_receive {:logs_new_data, ^sname, ^log_type, %Message{log: ^message}}, 1_000
+
+      # Both servers are done with it
+      :sys.get_state(pid)
+      :sys.get_state(context.output_pid)
+    end
+
+    test "hands what the application wrote to the server of the output", context do
+      Application.put_env(:foundation, :monitored_app_log_stdout, true)
+      message = ~s({"message":"one"}\n{"message":"two µs 🔥"}\n)
+
+      send_log(context, "stdout", message)
+
+      assert {"", ^message} = StringIO.contents(context.output)
+    end
+
+    test "writes nothing to the output when it is off", context do
+      send_log(context, "stdout", "[info] simple log\n")
+
+      assert {"", ""} = StringIO.contents(context.output)
+    end
+
+    test "keeps the logs of the dashboard when the server of the output is not running",
+         context do
+      Application.put_env(:foundation, :monitored_app_log_stdout, true)
+      stop_supervised!(Output.Server)
+
+      %{pid: pid, sname: sname} = context
+      Server.subscribe_for_new_logs(sname, "stdout")
+
+      send(
+        pid,
+        {:terminal_update,
+         %{
+           metadata: %{context: :terminal_logs, sname: sname, type: "stdout"},
+           source_pid: self(),
+           message: "[info] simple log\n"
+         }}
+      )
+
+      assert_receive {:logs_new_data, ^sname, "stdout", %Message{}}, 1_000
+      assert Process.alive?(pid)
+    end
   end
 
   test "get_types_by_sname/1 valid sname", %{sname: sname, pid: pid} do

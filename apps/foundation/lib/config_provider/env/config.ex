@@ -115,6 +115,15 @@ defmodule Foundation.ConfigProvider.Env.Config do
             ]
           )
 
+        # The output of the applications on the output of DeployEx too, for a container.
+        # Only set when it is on, the default is in the code that reads it.
+        updated_config =
+          if yaml_config.monitored_app_log_stdout do
+            Config.Reader.merge(updated_config, foundation: [monitored_app_log_stdout: true])
+          else
+            updated_config
+          end
+
         # GitHub release check. Without the key, the release config stays.
         updated_config =
           case yaml_config.enable_release_check do

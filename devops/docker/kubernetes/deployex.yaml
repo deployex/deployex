@@ -1,0 +1,104 @@
+# One pod: DeployEx, which runs and upgrades the application, and nginx in front of it.
+# The ConfigMap deployex-config and the Secret deployex-secrets are made by up.sh from the
+# files of devops/docker.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployex
+spec:
+  replicas: 1
+  # Never two pods at once: each would run its own DeployEx on the same bucket
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: deployex
+  template:
+    metadata:
+      labels:
+        app: deployex
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: deployex
+          image: deployex-trial:latest
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef:
+                name: deployex-secrets
+          ports:
+            - containerPort: 5001
+          volumeMounts:
+            - name: config
+              mountPath: /etc/deployex
+            - name: bucket
+              mountPath: /bucket
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1536Mi
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: nginx
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+          # The pod is ready when the application answers through nginx. The dashboard
+          # has a Service of its own, which does not wait for that
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 2
+      volumes:
+        - name: config
+          configMap:
+            name: deployex-config
+            items:
+              - key: deployex.yaml
+                path: deployex.yaml
+        - name: nginx
+          configMap:
+            name: deployex-config
+            items:
+              - key: nginx.conf
+                path: nginx.conf
+        - name: bucket
+          hostPath:
+            path: /bucket
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: deployex
+spec:
+  type: NodePort
+  selector:
+    app: deployex
+  ports:
+    - name: app
+      port: 80
+      targetPort: 8080
+      nodePort: 30080
+---
+# The dashboard has to answer when the application does not: before one is published, and
+# when a release is bad. A Service sends nothing to a pod that is not ready unless it
+# publishes the addresses that are not
+apiVersion: v1
+kind: Service
+metadata:
+  name: deployex-dashboard
+spec:
+  type: NodePort
+  publishNotReadyAddresses: true
+  selector:
+    app: deployex
+  ports:
+    - name: dashboard
+      port: 5001
+      targetPort: 5001
+      nodePort: 30501

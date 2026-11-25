@@ -1,0 +1,8 @@
+# Builds the release of an application for the same OS and OTP as the DeployEx image
+ARG BUILDER_IMAGE=hexpm/elixir:1.19.5-erlang-28.5.0.5-ubuntu-noble-20260810
+FROM ${BUILDER_IMAGE}
+RUN apt-get update -y && apt-get install -y build-essential git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+ENV MIX_ENV=prod
+RUN mix local.hex --force && mix local.rebar --force
+WORKDIR /app

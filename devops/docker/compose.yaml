@@ -1,0 +1,28 @@
+# One "pod": DeployEx and nginx share a network, as two containers of a Kubernetes pod do.
+# See guides/docs/docker/README.md
+services:
+  deployex:
+    # Named here so the Kubernetes trial loads the same image whatever the compose project is
+    image: deployex-trial:latest
+    build:
+      context: ../..
+      dockerfile: devops/docker/Dockerfile
+    environment:
+      DEPLOYEX_SECRET_KEY_BASE: "e4CXwPpjrAJp9NbRobS8dXmOHfn0EBpFdhZlPmZo1y3N/BzW9Z/k7iP7FjMk+chi"
+      DEPLOYEX_ERLANG_COOKIE: "cookie"
+      # The hash of "deployex", the password of the admin user. Each $ is doubled for compose
+      DEPLOYEX_ADMIN_HASHED_PASSWORD: '$$2b$$12$$vNAn.RJezPdQF7Dcy4c9Q.p34hdeNnkIaGTk80xdc/Rk18vWjUOC.'
+    volumes:
+      - ./deployex.yaml:/etc/deployex/deployex.yaml:ro
+      - ./bucket:/bucket
+    ports:
+      - "8080:8080" # the application, through nginx
+      - "5001:5001" # the DeployEx dashboard
+    stop_grace_period: 60s
+  nginx:
+    image: nginx:1.27-alpine
+    network_mode: "service:deployex"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - deployex
