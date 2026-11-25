@@ -32,7 +32,10 @@ ${RELEASE_SSL_OPTIONS}
 
 +K true
 +A30
++Q 65536
 ```
+
+`+Q` is the number of ports of the VM. Without it the VM sizes its table of ports from the limit of open files of its process, which in a Kubernetes pod, or under a systemd unit with `LimitNOFILE=infinity`, can be about a billion: the VM then asks for gigabytes of memory when it boots. See [Running DeployEx in a container](../docker/README.md#on-kubernetes).
 
 Add the modules `inets` and `ssl` in the `apps/myerlangapp/src/myerlangapp.erl` file. They are required for distribution:
 

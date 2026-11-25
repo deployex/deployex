@@ -57,6 +57,19 @@ fi
 # save the file :wq
 ```
 
+### Set the number of ports of the VM (recommended)
+
+The Erlang VM sizes its table of ports from the limit of open files of its process, unless it is told how many it needs. On most hosts that limit is modest. In a Kubernetes pod, or under a systemd unit with `LimitNOFILE=infinity`, it can be about a billion, and the VM then asks for gigabytes of memory when it boots. Give it a number in `rel/vm.args.eex`:
+
+```bash
+vi rel/vm.args.eex
+# Add the following line:
+
++Q 65536
+```
+
+65536 is the default of the VM where the limit is low, and what DeployEx itself runs with. It is read when the VM boots, so it takes a full deployment to apply, not a hot upgrade. See [Running DeployEx in a container](../docker/README.md#on-kubernetes) for what it looks like without it.
+
 ## 4. Configuring your app to allow Hot upgrades (optional)
 Add [Jellyfish](https://github.com/deployex/jellyfish) library __ONLY__ if the application will need hotupgrades
 ```elixir

@@ -138,4 +138,6 @@ What was seen, with four requests a second through the Service:
 
 One thing only a cluster showed. The first pod was killed for its memory every time the application started, with the limit at 1.5 GB. A pod on containerd has a limit of open files of about a billion, where Docker gives a million, and the Erlang VM sizes its table of ports from that limit unless it is started with `+Q`. DeployEx is, the applications it starts usually are not, and their VM asked for gigabytes when it booted. `entrypoint.sh` now lowers the limit to 65536 before it starts DeployEx, which the applications inherit, `DEPLOYEX_MAX_OPEN_FILES` to change it.
 
+The application can say it itself, which is the fix wherever it runs: `+Q 65536` in its `rel/vm.args.eex`, as in [Elixir Application - No Ecto](../local-elixir/README.md). With a limit of 1048576 open files the sample application reported a limit of 1048576 ports without it, and 65536 with it, once the pod had restarted: a hot upgrade does not apply a flag of the VM.
+
 Still open, and what more than one pod will show: each pod has its own DeployEx and reads `current.json` by itself, so every pod acts on a new version within the same few seconds. Nothing orders them, the way the instances of one DeployEx are upgraded one after the other.
