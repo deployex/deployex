@@ -90,7 +90,9 @@ So DeployEx keeps the pipelines out of the way while the code is replaced, with 
 There is nothing to turn on, and nothing to add to the application.
 
  * **The upgrade waits for the messages in flight**, up to 30 seconds for all the pipelines together, which stop at the same time. Consumers that handle a message in milliseconds add nothing noticeable. A pipeline that is still stopping after 30 seconds is no longer waited for: the upgrade goes on, a message it is still handling can be killed as before, and it is started again at the end, or as soon as it has stopped: the start is waited for up to 10 seconds.
- * **Nothing is consumed on that node meanwhile.** The other nodes keep consuming.
+ * **Pipelines of one supervisor stop one after the other.** A supervisor stops one child at a time, so two pipelines it started are not stopped together: the second waits for the first. A message that kept the first one for 50 seconds had both reported as `still stopping after 30 seconds`, although the second had nothing to handle. Both were running again a few seconds after the upgrade.
+ * **A message that outlasts the wait is not lost.** It is killed when the previous code is removed, never acknowledged, and the broker delivers it again once the connection of the pipeline closes: to this node on the new code, or to another node that consumes the same queue, whichever asks first.
+ * **Nothing is consumed on that node meanwhile.** The other nodes keep consuming. A broker that is down during the upgrade changes nothing: the pipelines are stopped and started all the same, and connect again when it is back.
  * **A pipeline DeployEx could not start again is left alone**: one that was not started under a name, or by a supervisor that keeps no child to start again, such as a `DynamicSupervisor`, one that is a `temporary` child, or one started by a process that is not a supervisor. So is an application without Broadway, or with a version of it that does not list its pipelines.
  * **An upgrade that restarts the VM does not carry them**, it stops everything anyway.
  * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be started again is written down before anything is stopped.
@@ -111,6 +113,7 @@ There is nothing to turn on, and nothing to add to the application.
 
  * **A job that outlasts the wait keeps running.** It is killed only when a module it is inside of is replaced by this upgrade, and Oban then tries it again, a few seconds later. A job whose code did not change is not touched, which a deployment that stops the node cannot offer.
  * **The rules for a job are the ones a deployment already asks for**: more than one attempt, since a kill uses one and a job with a single attempt is not tried again, and safe to run again from the start.
+ * **A job that is queued for a worker the release removes fails** when it comes due, with `module is not a worker`, on each of its attempts, and is discarded. It is the same after a full deployment. Stop enqueueing a worker in one release and remove it in a later one, once its queue is empty.
  * **Only this node is paused**, and no job starts on it during the upgrade. A queue that was already paused is left paused.
  * **The upgrade takes that much longer** when jobs are running, and no longer when the queues are idle. With the pipelines, an upgrade waits 65 seconds at most: 20 for the jobs, and 5, 30 and 10 to find, stop and start the pipelines.
  * **An application without Oban is not changed**, nor is one with a version of it that cannot pause a queue on one node. An upgrade that restarts the VM does not carry the instructions.
