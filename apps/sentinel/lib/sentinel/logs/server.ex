@@ -116,6 +116,8 @@ defmodule Sentinel.Logs.Server do
 
       if persist_data?, do: ets_append_to_list(sname_log_table, timed_log_type_key, data)
 
+      forward_to_output(log_key, message)
+
       notify_new_log_data(reporter, log_key, data)
 
       if log_key not in log_keys do
@@ -360,6 +362,31 @@ defmodule Sentinel.Logs.Server do
       {:logs_new_data, reporter, log_type, data}
     )
   end
+
+  # In a container, what collects the logs reads the output of its main process, which is
+  # DeployEx, and the applications write to files. With monitored_app_log_stdout, each
+  # piece that is read from those files is also written to the output of DeployEx, as it
+  # is: a prefix would break the lines of an application that logs JSON, and a piece is
+  # not always a whole line. The files, the dashboard and what is kept are not changed.
+  defp forward_to_output(log_key, message) when is_binary(message) do
+    if Application.get_env(:foundation, :monitored_app_log_stdout, false) do
+      device = if log_key == "stderr", do: :stderr, else: :stdio
+
+      # The output takes characters: bytes written as they are would be read as Latin-1
+      # and encoded again. A piece cut in the middle of a character is not valid UTF-8,
+      # and is written as bytes so the rest of it is not lost
+      if String.valid?(message),
+        do: IO.write(device, message),
+        else: IO.binwrite(device, message)
+    end
+
+    :ok
+  rescue
+    # A closed output must not stop the logs of the dashboard
+    _error -> :ok
+  end
+
+  defp forward_to_output(_log_key, _message), do: :ok
 
   defp maybe_init_log_table(sname) do
     create_terminal = fn log_type ->

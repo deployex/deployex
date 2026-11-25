@@ -37,6 +37,63 @@ defmodule Sentinel.Logs.ServerTest do
     Server.unsubscribe_for_new_logs(sname, log_type)
   end
 
+  describe "monitored_app_log_stdout" do
+    setup %{pid: pid} do
+      # What the server writes to its output, kept here
+      {:ok, output} = StringIO.open("")
+      previous = Process.info(pid, :group_leader) |> elem(1)
+      Process.group_leader(pid, output)
+
+      on_exit(fn ->
+        Application.delete_env(:foundation, :monitored_app_log_stdout)
+        if Process.alive?(pid), do: Process.group_leader(pid, previous)
+      end)
+
+      {:ok, output: output}
+    end
+
+    defp send_log(pid, sname, log_type, message) do
+      Server.subscribe_for_new_logs(sname, log_type)
+
+      send(
+        pid,
+        {:terminal_update,
+         %{
+           metadata: %{context: :terminal_logs, sname: sname, type: log_type},
+           source_pid: self(),
+           message: message
+         }}
+      )
+
+      # The dashboard gets it whatever the option says
+      assert_receive {:logs_new_data, ^sname, ^log_type, %Message{log: ^message}}, 1_000
+    end
+
+    test "writes what the application wrote to the output, as it is", context do
+      Application.put_env(:foundation, :monitored_app_log_stdout, true)
+      message = ~s({"message":"one"}\n{"message":"two"}\n{"mess)
+
+      send_log(context.pid, context.sname, "stdout", message)
+
+      assert {"", ^message} = StringIO.contents(context.output)
+    end
+
+    test "keeps the characters that are not ASCII", context do
+      Application.put_env(:foundation, :monitored_app_log_stdout, true)
+      message = "[info] Sent 200 in 300µs 🔥\n"
+
+      send_log(context.pid, context.sname, "stdout", message)
+
+      assert {"", ^message} = StringIO.contents(context.output)
+    end
+
+    test "writes nothing to the output when it is off", context do
+      send_log(context.pid, context.sname, "stdout", "[info] simple log\n")
+
+      assert {"", ""} = StringIO.contents(context.output)
+    end
+  end
+
   test "get_types_by_sname/1 valid sname", %{sname: sname, pid: pid} do
     log_type = "new-log-type"
     message = "[info] simple log"

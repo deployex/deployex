@@ -19,6 +19,10 @@ os_target: "ubuntu-24.04"
 otp_tls_certificates: "/certs"
 enable_release_check: false
 
+# What the applications print goes to the output of the container too, where
+# docker logs, kubectl logs and a log collector read it
+monitored_app_log_stdout: true
+
 applications:
   - name: "myphoenixapp"
     language: "elixir"

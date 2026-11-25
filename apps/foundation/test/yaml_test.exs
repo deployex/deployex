@@ -32,6 +32,8 @@ defmodule Foundation.YamlTest do
   @yaml_endpoint_origin_empty_error "#{@file_paths}/deployex-endpoint-origin-empty-error.yaml"
   @yaml_release_check_off "#{@file_paths}/deployex-release-check-off.yaml"
   @yaml_release_check_error "#{@file_paths}/deployex-release-check-error.yaml"
+  @yaml_app_log_stdout "#{@file_paths}/deployex-app-log-stdout.yaml"
+  @yaml_app_log_stdout_error "#{@file_paths}/deployex-app-log-stdout-error.yaml"
   @yaml_notifications_all "#{@file_paths}/deployex-notifications-all.yaml"
   @yaml_self_upgrade "#{@file_paths}/deployex-self-upgrade.yaml"
   @yaml_auth "#{@file_paths}/deployex-auth.yaml"
@@ -880,6 +882,39 @@ defmodule Foundation.YamlTest do
         {:ok, config} = Yaml.load()
         assert config.scheme == nil
         assert config.check_origin == nil
+      end
+    end
+  end
+
+  describe "monitored_app_log_stdout" do
+    test "parses true" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_app_log_stdout end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.monitored_app_log_stdout == true
+      end
+    end
+
+    test "is off when absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.monitored_app_log_stdout == false
+      end
+    end
+
+    test "rejects a value that is not a boolean" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_app_log_stdout_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(monitored_app_log_stdout "yes" not supported, expected true or false),
+                     fn -> Yaml.load() end
       end
     end
   end

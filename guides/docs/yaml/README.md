@@ -65,6 +65,7 @@ install_path: "/opt/deployex"                            # DeployEx installation
 var_path: "/var/lib/deployex"                            # DeployEx managed data path (default: /var/lib/deployex)
 log_path: "/var/log/deployex"                            # DeployEx logs path (default: /var/log/deployex)
 monitored_app_log_path: "/var/log/monitored-apps"        # Monitored apps log path (default: /var/log/monitored-apps)
+monitored_app_log_stdout: false                          # Also write the output of the apps to the output of DeployEx, for a container (optional, default: false)
 
 # Data Retention (optional with defaults)
 metrics_retention_time_ms: 3600000                       # Metrics retention: 1 hour (default: 3600000)
@@ -565,6 +566,7 @@ These fields require a **full DeployEx restart**:
 - `var_path` - Managed data directory
 - `log_path` - DeployEx logs directory
 - `monitored_app_log_path` - Monitored apps logs directory
+- `monitored_app_log_stdout` - Also writes what the applications print to the output of DeployEx itself, unchanged: their stdout to its stdout and their stderr to its stderr. For DeployEx in a container, where the logs are collected from the output of the main process. The files and the logs of the dashboard stay as they are
 
 ### How Runtime Upgrades Work
 
