@@ -526,6 +526,13 @@ During that window some replicas run the new version and some the old, which is 
 ### When a monitored application upgrade fails
 
 A release only reaches the hot upgrade path when it shipped the `.appup` or `jellyfish.json` files saying it supports one.
+A release that ships them and also brings another runtime is not one: a different ERTS, or a new version of an application that has no `.appup` for the version that is running, as Elixir itself when the release was built with a newer one. No relup can be built for it, so DeployEx deploys it in full, and says why:
+
+```bash
+[warning] HOT UPGRADE version NOT DETECTED, full deployment required, reason: {:no_appup, ["eex 1.19.5 -> 1.19.6", "elixir 1.19.5 -> 1.19.6", "iex 1.19.5 -> 1.19.6", "logger 1.19.5 -> 1.19.6"]}
+[warning] HOT UPGRADE version NOT DETECTED, full deployment required, reason: {:runtime_changed, "erts 16.3 -> 16.4.0.6"}
+```
+
 What DeployEx does when that upgrade fails depends on whether the running node was already changed.
 
 If it failed before the release was installed, nothing on the node was touched, so there is nothing to recover and no reason to restart it.
