@@ -87,13 +87,13 @@ Modify/Add the profiles to prepare the release:
 
 ```erlang
 {profiles, [
-    %% prod is the default mode when prod
-    %% profile is used, so does not have
-    %% to be explicitly included like this
     {prod, [
         {relx, [
-            {dev_mode, false},
-            {include_erts, true},
+            %% The release rebar3 generates sets {mode, dev} for every profile,
+            %% which links the libraries instead of copying them. prod copies
+            %% them and includes ERTS, and has to be said here: without it
+            %% `rebar3 as prod tar` fails on a link that leads nowhere
+            {mode, prod},
 
             %% use minimal mode to exclude ERTS
             %% {mode, minimal}

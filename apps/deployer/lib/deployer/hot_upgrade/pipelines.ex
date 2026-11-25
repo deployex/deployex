@@ -142,7 +142,25 @@ defmodule Deployer.HotUpgrade.Pipelines do
     with %{summary: %{pipelines: true}} = relup <- Catalog.relup(name, from_version, to_version),
          {:ok, results} <- read_results(node, to_version),
          :ok <- Catalog.add_relup(name, Map.put(relup, :pipelines, results)) do
-      Logger.info("Pipelines of #{name} #{from_version} -> #{to_version}: #{describe(results)}")
+      message = "Pipelines of #{name} #{from_version} -> #{to_version}: #{describe(results)}"
+
+      # One that is still starting gets there by itself. One that could not be started stays
+      # down, with the upgrade reported as a success, until somebody is told
+      case for %{started: "failed", name: pipeline} <- results, do: pipeline do
+        [] ->
+          Logger.info(message)
+
+        not_started ->
+          Logger.warning(message)
+
+          Foundation.Notifications.notify("pipeline_not_started", %{
+            node: Node.self(),
+            sname: data.sname,
+            name: name,
+            version: to_version,
+            pipelines: not_started
+          })
+      end
     else
       # No relup kept, or one without the instructions
       relup when is_map(relup) or is_nil(relup) -> :ok

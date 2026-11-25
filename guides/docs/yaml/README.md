@@ -103,6 +103,7 @@ notifications:
       - "config_change_applied"                          # Pending config changes successfully applied
       - "pre_command_failed"                             # A pre-command failed. Retries report each command once
       - "version_ghosted"                                # A version was ghosted, this host does not deploy it again
+      - "pipeline_not_started"                           # A Broadway pipeline is down after a hot upgrade that succeeded
       - "deployment_rollback"                            # An instance starts to go back from a version ghosted here
 
   # Slack Incoming Webhook adapter

@@ -96,6 +96,7 @@ There is nothing to turn on, and nothing to add to the application.
  * **A pipeline DeployEx could not start again is left alone**: one that was not started under a name, or by a supervisor that keeps no child to start again, such as a `DynamicSupervisor`, one that is a `temporary` child, or one started by a process that is not a supervisor. So is an application without Broadway, or with a version of it that does not list its pipelines.
  * **An upgrade that restarts the VM does not carry them**, it stops everything anyway.
  * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be started again is written down before anything is stopped.
+ * **A pipeline that could not be started is reported.** The upgrade is still a success, the code is installed, so it is logged as a warning and sent as the `pipeline_not_started` notification: the consumer is down until it is started again, or the application restarted.
  * **What happened is kept**, with the relup: each pipeline, whether it stopped in time and whether it started. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `pipelines`. The code is `apps/deployer/priv/relup/pipelines_stop.erl` and `pipelines_start.erl`.
 
 ### Background jobs
@@ -526,6 +527,13 @@ During that window some replicas run the new version and some the old, which is 
 ### When a monitored application upgrade fails
 
 A release only reaches the hot upgrade path when it shipped the `.appup` or `jellyfish.json` files saying it supports one.
+A release that ships them and also brings another runtime is not one: a different ERTS, or a new version of an application that has no `.appup` for the version that is running, as Elixir itself when the release was built with a newer one. No relup can be built for it, so DeployEx deploys it in full, and says why:
+
+```bash
+[warning] HOT UPGRADE version NOT DETECTED, full deployment required, reason: {:no_appup, ["eex 1.19.5 -> 1.19.6", "elixir 1.19.5 -> 1.19.6", "iex 1.19.5 -> 1.19.6", "logger 1.19.5 -> 1.19.6"]}
+[warning] HOT UPGRADE version NOT DETECTED, full deployment required, reason: {:runtime_changed, "erts 16.3 -> 16.4.0.6"}
+```
+
 What DeployEx does when that upgrade fails depends on whether the running node was already changed.
 
 If it failed before the release was installed, nothing on the node was touched, so there is nothing to recover and no reason to restart it.

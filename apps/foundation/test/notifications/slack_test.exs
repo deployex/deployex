@@ -239,6 +239,19 @@ defmodule Foundation.Notifications.SlackTest do
           node: :n@h,
           sname: "s-1",
           name: "myapp",
+          version: "1.1.0",
+          pipelines: ["MyApp.Orders", "MyApp.Emails"]
+        }
+
+        assert :ok = Slack.notify("pipeline_not_started", payload, @config)
+        assert_receive {:text, text}
+        assert text =~ "*pipeline_not_started* — `s-1` on `n@h`"
+        assert text =~ "*1.1.0*: MyApp.Orders, MyApp.Emails"
+
+        payload = %{
+          node: :n@h,
+          sname: "s-1",
+          name: "myapp",
           from_version: "1.1.0",
           to_version: "1.0.0",
           reason: "1.1.0 is ghosted on this host"

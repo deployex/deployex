@@ -362,6 +362,101 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       assert log =~ "reason: :no_match_versions"
     end
 
+    test "a release built with another ERTS is a full deployment", context do
+      File.write!(
+        "#{context.new_path}/releases/#{context.to_version}/#{context.app_name}.rel",
+        rel(
+          context.app_name,
+          context.to_version,
+          [{context.app_name, context.to_version}, {"cowboy", "0.2.0"}],
+          "14.2"
+        )
+      )
+
+      log = capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :full_deployment}}
+      assert log =~ ~s(reason: {:runtime_changed, "erts 14.1.1 -> 14.2"})
+    end
+
+    test "an application that changes version with no appup is a full deployment", context do
+      write_rels!(context, {"elixir", "1.19.5"}, {"elixir", "1.19.6"})
+
+      log = capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :full_deployment}}
+      assert log =~ ~s(reason: {:no_appup, ["elixir 1.19.5 -> 1.19.6"]})
+    end
+
+    test "an appup that does not upgrade from the running version is a full deployment",
+         context do
+      write_rels!(context, {"kernel", "9.9"}, {"kernel", "10.0"})
+      write_appup!(context.new_path, "kernel", "10.0", ~s({"10.0",[{"9.8",[]}],[{"9.8",[]}]}.))
+
+      capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :full_deployment}}
+    end
+
+    test "an appup that names the running version, as it is or as an expression, is a hot upgrade",
+         context do
+      write_rels!(context, {"kernel", "9.9"}, {"kernel", "10.0"})
+
+      for upgrade_from <- [~s("9.9"), ~S(<<"^9\\.9$">>)] do
+        write_appup!(
+          context.new_path,
+          "kernel",
+          "10.0",
+          "{\"10.0\",[{#{upgrade_from},[]}],[{#{upgrade_from},[]}]}."
+        )
+
+        capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+        assert_received {:checked, %Check{deploy: :hot_upgrade}}
+      end
+    end
+
+    test "an application the release adds needs no appup", context do
+      File.write!(
+        "#{context.new_path}/releases/#{context.to_version}/#{context.app_name}.rel",
+        rel(context.app_name, context.to_version, [
+          {context.app_name, context.to_version},
+          {"cowboy", "0.2.0"},
+          {"added", "1.0.0"}
+        ])
+      )
+
+      capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :hot_upgrade}}
+    end
+
+    # The running release and the new one, each with one more application
+    defp write_rels!(context, running, new) do
+      File.write!(
+        "#{context.current_path}/releases/#{context.app_name}-#{context.from_version}.rel",
+        rel(context.app_name, context.from_version, [
+          {context.app_name, context.from_version},
+          {"cowboy", "0.2.0"},
+          running
+        ])
+      )
+
+      File.write!(
+        "#{context.new_path}/releases/#{context.to_version}/#{context.app_name}.rel",
+        rel(context.app_name, context.to_version, [
+          {context.app_name, context.to_version},
+          {"cowboy", "0.2.0"},
+          new
+        ])
+      )
+    end
+
+    defp write_appup!(new_path, app, version, appup) do
+      ebin = "#{new_path}/lib/#{app}-#{version}/ebin"
+      File.mkdir_p!(ebin)
+      File.write!("#{ebin}/#{app}.appup", appup)
+    end
+
     defp check_upgrade(context) do
       result =
         UpgradeApp.check(%Check{
@@ -386,9 +481,9 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       File.write!("#{ebin}/jellyfish.json", jellyfish)
     end
 
-    defp rel(name, version, libs) do
+    defp rel(name, version, libs, erts \\ "14.1.1") do
       apps = Enum.map_join(libs, ",", fn {app, vsn} -> "{#{app},\"#{vsn}\"}" end)
-      "{release,{\"#{name}\",\"#{version}\"},{erts,\"14.1.1\"},[#{apps}]}.\n"
+      "{release,{\"#{name}\",\"#{version}\"},{erts,\"#{erts}\"},[#{apps}]}.\n"
     end
   end
 

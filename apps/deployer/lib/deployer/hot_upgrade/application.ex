@@ -364,7 +364,12 @@ defmodule Deployer.HotUpgrade.Application do
       |> Path.wildcard()
       |> jellyfish_files_of_upgrade(check)
 
-    case check_jellyfish_files(jellyfish_files, from_version, to_version) do
+    with {:ok, jellyfish_info} <-
+           check_jellyfish_files(jellyfish_files, from_version, to_version),
+         :ok <- check_runtime(check) do
+      {:ok, jellyfish_info}
+    end
+    |> case do
       {:ok, jellyfish_info} ->
         Logger.warning("HOT UPGRADE version DETECTED - #{inspect(jellyfish_info)}")
 
@@ -1331,11 +1336,79 @@ defmodule Deployer.HotUpgrade.Application do
     _error -> false
   end
 
-  # The "<app>-<vsn>" libraries of a release, from its .rel. It is in the directory of the
+  # A release that says it can be hot-upgraded, and brings another runtime: a different
+  # ERTS, or a new version of an application nobody wrote an appup for, as Elixir itself when
+  # the release was built with a newer one. No relup can be built for it, and finding that
+  # out while installing would ghost the version and leave every instance where it is. It
+  # is a full deployment, and is told so here.
+  #
+  # An application the release adds needs no appup. A release whose .rel cannot be read is
+  # not judged, and takes the path it always took
+  @spec check_runtime(Check.t()) :: :ok | {:error, {:runtime_changed | :no_appup, any()}}
+  defp check_runtime(%Check{} = check) do
+    with %{} = new <- release_contents(check.new_path, check.name, check.to_version),
+         %{} = running <- release_contents(check.current_path, check.name, check.from_version) do
+      cond do
+        new.erts != running.erts ->
+          {:error, {:runtime_changed, "erts #{running.erts} -> #{new.erts}"}}
+
+        (missing = applications_without_appup(check.new_path, running.apps, new.apps)) != [] ->
+          {:error, {:no_appup, missing}}
+
+        true ->
+          :ok
+      end
+    else
+      _unreadable -> :ok
+    end
+  end
+
+  defp applications_without_appup(new_path, running_apps, new_apps) do
+    for {app, to} <- Enum.sort(new_apps),
+        from = running_apps[app],
+        from not in [nil, to],
+        not appup_from?("#{new_path}/lib/#{app}-#{to}/ebin/#{app}.appup", from),
+        do: "#{app} #{from} -> #{to}"
+  end
+
+  # An appup names the versions it upgrades from as they are, or as a regular expression,
+  # which is what the applications of OTP do
+  defp appup_from?(appup, from) do
+    case :file.consult(appup) do
+      {:ok, [{_to, upgrade_from, _downgrade_to}]} when is_list(upgrade_from) ->
+        Enum.any?(upgrade_from, fn
+          {version, _script} when is_binary(version) ->
+            Regex.match?(Regex.compile!(version), from)
+
+          {version, _script} ->
+            to_string(version) == from
+
+          _other ->
+            false
+        end)
+
+      _no_appup ->
+        false
+    end
+  rescue
+    _error -> false
+  end
+
+  # The "<app>-<vsn>" libraries of a release, see release_contents/3
+  @spec release_libs(String.t() | nil, String.t() | nil, any()) :: MapSet.t() | nil
+  defp release_libs(path, name, version) do
+    case release_contents(path, name, version) do
+      %{apps: apps} -> MapSet.new(apps, fn {app, app_version} -> "#{app}-#{app_version}" end)
+      nil -> nil
+    end
+  end
+
+  # The ERTS and the applications of a release, from its .rel. It is in the directory of the
   # version in a release as it is built, and next to it, with the version in its name,
   # once DeployEx has installed it. nil when there is none that is the one of this version
-  @spec release_libs(String.t() | nil, String.t() | nil, any()) :: MapSet.t() | nil
-  defp release_libs(path, name, version) when is_binary(path) and is_binary(name) do
+  @spec release_contents(String.t() | nil, String.t() | nil, any()) ::
+          %{erts: String.t(), apps: %{String.t() => String.t()}} | nil
+  defp release_contents(path, name, version) when is_binary(path) and is_binary(name) do
     version = to_string(version)
 
     Enum.find_value(
@@ -1345,9 +1418,13 @@ defmodule Deployer.HotUpgrade.Application do
         "#{path}/releases/#{name}.rel"
       ],
       fn rel_file ->
-        with {:ok, [{:release, {_name, rel_version}, _erts, apps}]} <- :file.consult(rel_file),
+        with {:ok, [{:release, {_name, rel_version}, {:erts, erts}, apps}]} <-
+               :file.consult(rel_file),
              true <- to_string(rel_version) == version do
-          MapSet.new(apps, fn app -> "#{elem(app, 0)}-#{elem(app, 1)}" end)
+          %{
+            erts: to_string(erts),
+            apps: Map.new(apps, fn app -> {to_string(elem(app, 0)), to_string(elem(app, 1))} end)
+          }
         else
           _unreadable -> nil
         end
@@ -1355,7 +1432,7 @@ defmodule Deployer.HotUpgrade.Application do
     )
   end
 
-  defp release_libs(_path, _name, _version), do: nil
+  defp release_contents(_path, _name, _version), do: nil
 
   defp check_jellyfish_files(files, from_version, to_version) do
     response =

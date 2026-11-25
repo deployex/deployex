@@ -797,6 +797,7 @@ defmodule Foundation.YamlTest do
           config_change_applied
           pre_command_failed
           version_ghosted
+          pipeline_not_started
           deployment_rollback
         )
 

@@ -51,6 +51,7 @@ defmodule Foundation.Notifications.PagerDuty do
   | `config_change_applied`       | `info`             |
   | `pre_command_failed`          | `error`            |
   | `version_ghosted`             | `error`            |
+  | `pipeline_not_started`        | `error`            |
   | `deployment_rollback`         | `warning`          |
 
   ## Payload sent to PagerDuty
@@ -182,6 +183,11 @@ defmodule Foundation.Notifications.PagerDuty do
     do:
       "version_ghosted — #{payload.name} #{payload.version} on #{payload.node}: #{payload.reason}"
 
+  defp format_summary("pipeline_not_started", payload),
+    do:
+      "pipeline_not_started — #{payload.sname} on #{payload.node}: " <>
+        Enum.join(payload.pipelines, ", ")
+
   defp format_summary("deployment_rollback", payload),
     do:
       "deployment_rollback — #{payload.sname} on #{payload.node} from #{payload.from_version} to #{payload.to_version}: #{payload.reason}"
@@ -205,6 +211,7 @@ defmodule Foundation.Notifications.PagerDuty do
   defp event_severity("config_change_applied", _payload), do: "info"
   defp event_severity("pre_command_failed", _payload), do: "error"
   defp event_severity("version_ghosted", _payload), do: "error"
+  defp event_severity("pipeline_not_started", _payload), do: "error"
   defp event_severity("deployment_rollback", _payload), do: "warning"
   defp event_severity(_event, _payload), do: "info"
 
