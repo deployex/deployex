@@ -96,6 +96,7 @@ There is nothing to turn on, and nothing to add to the application.
  * **A pipeline DeployEx could not start again is left alone**: one that was not started under a name, or by a supervisor that keeps no child to start again, such as a `DynamicSupervisor`, one that is a `temporary` child, or one started by a process that is not a supervisor. So is an application without Broadway, or with a version of it that does not list its pipelines.
  * **An upgrade that restarts the VM does not carry them**, it stops everything anyway.
  * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be started again is written down before anything is stopped.
+ * **A pipeline that could not be started is reported.** The upgrade is still a success, the code is installed, so it is logged as a warning and sent as the `pipeline_not_started` notification: the consumer is down until it is started again, or the application restarted.
  * **What happened is kept**, with the relup: each pipeline, whether it stopped in time and whether it started. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `pipelines`. The code is `apps/deployer/priv/relup/pipelines_stop.erl` and `pipelines_start.erl`.
 
 ### Background jobs
