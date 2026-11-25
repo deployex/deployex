@@ -293,7 +293,7 @@ echo "{\"version\":\"0.1.1\",\"pre_commands\": [],\"hash\":\"local\"}" | jq > /t
 
 DeployEx is capable of executing hot upgrades using the `.appup` and `jellyfish.json` files [rebar3_jellyfish_plugin](https://github.com/deployex/rebar3_jellyfish_plugin) generates - the same `jellyfish.json` contract [Jellyfish](https://github.com/deployex/jellyfish) writes for Elixir releases, so DeployEx checks hot-upgrade support the same way regardless of language.
 
-Unlike the old Rebar3 appup plugin, there's no separate profile or `priv/appup` staging step: the plugin writes both files straight into the release's `lib/<app>-<vsn>/ebin/` the moment a previous version is found on disk, through the `{overlay, ...}` rule added above. Build the release for the version you want to upgrade *from* first:
+There is no separate profile or staging step: the plugin writes both files straight into the release's `lib/<app>-<vsn>/ebin/` the moment a previous version is found on disk, through the `{overlay, ...}` rule added above. Build the release for the version you want to upgrade *from* first:
 ```bash
 export app_name=myerlangapp
 rm -rf _build/

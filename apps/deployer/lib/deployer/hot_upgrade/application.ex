@@ -427,9 +427,9 @@ defmodule Deployer.HotUpgrade.Application do
 
   @impl Deployer.HotUpgrade.Adapter
   def prepare_new_path(name, "erlang", to_version, new_path) do
-    # rebar3_jellyfish_plugin writes the .appup and jellyfish.json straight into
-    # lib/<app>-<vsn>/ebin/ at build time (via a relx overlay), so unlike the old
-    # rebar3_appup_plugin workflow there is nothing left to copy out of priv/ here.
+    # The release already has its .appup and jellyfish.json in lib/<app>-<vsn>/ebin/, where
+    # rebar3_jellyfish_plugin writes them at build time through a relx overlay. What is
+    # left to do is to name the .rel file after the version, as release_handler expects.
     releases = "#{new_path}/releases"
 
     if File.exists?("#{releases}/#{name}.rel") do
@@ -529,9 +529,8 @@ defmodule Deployer.HotUpgrade.Application do
          },
          root
        ) do
-    # rebar3_jellyfish_plugin writes the .appup straight into lib/<app>-<vsn>/ebin/ at
-    # build time, so unlike the old rebar3_appup_plugin workflow there is nothing to
-    # copy out of priv/ here, only the .rel rename that rebar3/relx releases need.
+    # The .appup is already in lib/<app>-<vsn>/ebin/, where rebar3_jellyfish_plugin writes
+    # it at build time. Only the .rel rename that rebar3/relx releases need is done here.
     add_version_to_rel_file = fn ->
       releases = "#{current_path}/releases"
 
