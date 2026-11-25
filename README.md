@@ -16,6 +16,32 @@ Upon deployment, the following dashboard becomes available, providing easy acces
 
 ![Deployex Monitoring](guides/static/deployex_monitoring_app_tls.png)
 
+## 🧭 Is it for your project?
+
+DeployEx runs the release of a BEAM application on a host and keeps it running: it starts it, watches it, restarts it, deploys the next version and goes back when that one does not hold.
+It takes the place of the container and the orchestrator for applications that are better served by the node staying up.
+
+**It fits when**
+
+ * the application holds something a restart loses: LiveView pages, WebSockets, state in memory, jobs and messages in progress;
+ * you release often, and each release should not disconnect everyone;
+ * you run on hosts or virtual machines you control, in a cloud or not;
+ * you want one place for the logs, a shell, the processes and the versions of every node.
+
+**It does not fit when**
+
+ * the application is stateless and a rolling restart behind a load balancer is already invisible;
+ * the platform has to be a container orchestrator: DeployEx manages releases on a host, it does not schedule containers;
+ * the nodes of one application are spread over many hosts and have to form one cluster. DeployEx connects the nodes of a host, and connecting hosts is left to the application.
+
+**Hot upgrades are a choice for each release, not a commitment.**
+Every release can be deployed in full, and that is what DeployEx does unless the release carries what a hot upgrade needs.
+When it does, DeployEx applies it to the running node, and falls back to a full deployment when it cannot.
+A release with a new Erlang or Elixir, or a library with native code, is always a full deployment.
+
+What a hot upgrade asks of an application, what one real release looked like and the questions that come first are in [Before you decide](https://github.com/deployex/beam-hotupgrades#before-you-decide), in the guide that covers the mechanism for any tool.
+What DeployEx adds to it is in [Hot-Upgrades](guides/docs/hot-upgrades/README.md).
+
 ## 🔉 Features
 
 - Monitors multiple Beam application nodes (Elixir/Erlang/Gleam) and automatically restarts them if they crash for any reason.
@@ -27,7 +53,7 @@ Upon deployment, the following dashboard becomes available, providing easy acces
 - Supports hot code reloading for:
   - Elixir application (and libraries) using the [Jellyfish][jyf] library.
   - Elixir umbrella applications (and libraries) using the [Jellyfish][jyf] library.
-  - Erlang application using the [rebar3_appup_plugin](https://github.com/lrascao/rebar3_appup_plugin) plugin.
+  - Erlang application, umbrella application, and libraries using the [rebar3_jellyfish_plugin][r3jyf] plugin.
   - DeployEx (and libraries) itself (Isn't that awesome?)
 - Supports the following cloud providers (with terraform files):
   - Amazon Web Services (AWS)
@@ -360,4 +386,5 @@ Copyright (c) 2024-2026, Thiago Esteves.
 DeployEx source code is licensed under the [MIT License](LICENSE.md).
 
 [jyf]: https://github.com/deployex/jellyfish
+[r3jyf]: https://github.com/deployex/rebar3_jellyfish_plugin
 [owb]: https://github.com/deployex/observer_web

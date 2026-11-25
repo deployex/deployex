@@ -7,7 +7,12 @@ defmodule Deployer.HotUpgrade.Application do
      when updating from an older version. Deployer was designed to consume appup files generated
      by these libraries:
        a. [Jellyfish](https://github.com/deployex/jellyfish) (For Elixir apps)
-       a. [Rebar3 appup plugin](https://github.com/lrascao/rebar3_appup_plugin) (For Erlang apps)
+       a. [rebar3_jellyfish_plugin](https://github.com/deployex/rebar3_jellyfish_plugin) (For Erlang apps)
+
+     Both write the same `jellyfish.json` sidecar file next to every `.appup` they generate, so
+     this module checks for hot-upgrade support the same way regardless of language: see
+     `check_jellyfish_files/3`. A bare `.appup` with no `jellyfish.json` next to it is not trusted
+     on its own, a dependency can ship one for unrelated reasons.
 
   2. During deployment, the release app-new-version.tar.gz is copied to a directory named
      after the version under the current/releases folder, for example:
@@ -78,8 +83,8 @@ defmodule Deployer.HotUpgrade.Application do
 
   * https://learnyousomeerlang.com/relups
   * https://www.erlang.org/doc/system/appup_cookbook.html
-  * https://github.com/lrascao/rebar3_appup_plugin
-  * https://lrascao.github.io/automatic-release-upgrades-in-erlang/
+  * https://github.com/deployex/rebar3_jellyfish_plugin
+  * https://github.com/deployex/jellyfish
   * https://rebar3.org/docs/deployment/releases/
   * https://rebar3.org/docs/configuration/plugins/
   * https://github.com/erlware/relx/blob/main/priv/templates/install_upgrade_escript
@@ -341,15 +346,19 @@ defmodule Deployer.HotUpgrade.Application do
   def do_check(
         %Check{
           name: name,
-          language: "elixir",
+          language: language,
           current_path: current_path,
           new_path: new_path,
           download_path: download_path,
           from_version: from_version,
           to_version: to_version
         } = check
-      ) do
-    # NOTE: Single file for single elixir app or multiple files for umbrella
+      )
+      when language in ["elixir", "erlang"] do
+    # NOTE: Single file for a single app, multiple files for an umbrella and/or
+    # dependencies that were hot-upgraded alongside it. The glob is the same
+    # for both languages: Jellyfish and rebar3_jellyfish_plugin write the same
+    # jellyfish.json shape at the same lib/<app>-<vsn>/ebin/ location.
     jellyfish_files = Path.wildcard("#{new_path}/lib/*-*/ebin/jellyfish.json")
 
     case check_jellyfish_files(jellyfish_files, from_version, to_version) do
@@ -370,42 +379,6 @@ defmodule Deployer.HotUpgrade.Application do
       {:error, reason} ->
         Logger.warning(
           "HOT UPGRADE version NOT DETECTED, full deployment required, reason: #{inspect(reason)}"
-        )
-
-        {:ok, %{check | deploy: :full_deployment}}
-    end
-  end
-
-  def do_check(
-        %Check{
-          name: name,
-          language: "erlang",
-          current_path: current_path,
-          new_path: new_path,
-          download_path: download_path,
-          from_version: from_version,
-          to_version: to_version
-        } = check
-      ) do
-    with [file_path] <-
-           Path.wildcard("#{new_path}/lib/#{name}-*/ebin/*.appup"),
-         :ok <- check_app_up(file_path, from_version, to_version) do
-      Logger.warning("HOT UPGRADE version DETECTED, from: #{from_version} to: #{to_version}")
-
-      # Copy binary to the release folder under the version directory
-      dest_dir = "#{current_path}/releases/#{to_version}"
-
-      File.rm_rf(dest_dir)
-
-      File.mkdir_p!(dest_dir)
-
-      File.cp!(download_path, "#{dest_dir}/#{name}.tar.gz")
-
-      {:ok, %{check | deploy: :hot_upgrade}}
-    else
-      result ->
-        Logger.warning(
-          "HOT UPGRADE version NOT DETECTED, full deployment required, result: #{inspect(result)}"
         )
 
         {:ok, %{check | deploy: :full_deployment}}
@@ -454,16 +427,9 @@ defmodule Deployer.HotUpgrade.Application do
 
   @impl Deployer.HotUpgrade.Adapter
   def prepare_new_path(name, "erlang", to_version, new_path) do
-    priv_app_up_file =
-      "#{new_path}/lib/#{name}-#{to_version}/priv/appup/#{name}.appup"
-
-    ebin_app_up_file =
-      "#{new_path}/lib/#{name}-#{to_version}/ebin/#{name}.appup"
-
-    if File.exists?(priv_app_up_file) do
-      File.cp(priv_app_up_file, ebin_app_up_file)
-    end
-
+    # rebar3_jellyfish_plugin writes the .appup and jellyfish.json straight into
+    # lib/<app>-<vsn>/ebin/ at build time (via a relx overlay), so unlike the old
+    # rebar3_appup_plugin workflow there is nothing left to copy out of priv/ here.
     releases = "#{new_path}/releases"
 
     if File.exists?("#{releases}/#{name}.rel") do
@@ -558,22 +524,14 @@ defmodule Deployer.HotUpgrade.Application do
            name: name,
            language: language,
            current_path: current_path,
-           new_path: new_path,
            from_version: from_version,
            to_version: to_version
          },
          root
        ) do
-    cp_appup_priv_to_ebin = fn ->
-      priv_app_up_file = "#{new_path}/lib/#{name}-#{to_version}/priv/appup/#{name}.appup"
-
-      ebin_app_up_file = "#{current_path}/lib/#{name}-#{to_version}/ebin/#{name}.appup"
-
-      if File.exists?(priv_app_up_file) do
-        File.cp!(priv_app_up_file, ebin_app_up_file)
-      end
-    end
-
+    # rebar3_jellyfish_plugin writes the .appup straight into lib/<app>-<vsn>/ebin/ at
+    # build time, so unlike the old rebar3_appup_plugin workflow there is nothing to
+    # copy out of priv/ here, only the .rel rename that rebar3/relx releases need.
     add_version_to_rel_file = fn ->
       releases = "#{current_path}/releases"
 
@@ -583,7 +541,6 @@ defmodule Deployer.HotUpgrade.Application do
     end
 
     if language == "erlang" do
-      cp_appup_priv_to_ebin.()
       add_version_to_rel_file.()
     end
 
