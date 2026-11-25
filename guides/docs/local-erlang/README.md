@@ -47,40 +47,28 @@ Add the modules `inets` and `ssl` in the `apps/myerlangapp/src/myerlangapp.erl` 
 ...
 ```
 
-### Add required plugin for hot upgrades
+### Modify rebar.config
 
-Integrate the [rebar3 appup plugin](https://github.com/lrascao/rebar3_appup_plugin) adding the following commands at `rebar.config`:
+Open the file `rebar.config` and apply the following configurations:
+
+#### Add required plugin for hot upgrades
+
+Integrate the [rebar3_jellyfish_plugin](https://github.com/deployex/rebar3_jellyfish_plugin) adding the following to `rebar.config`:
 ```erlang
-{plugins, [rebar3_appup_plugin]}.
+{project_plugins, [
+    {rebar3_jellyfish_plugin, "0.1.5"}
+]}.
 
 {provider_hooks, [
-    {pre, [{tar, {appup, tar}}]},
-    {post, [{compile, {appup, compile}},
-            {clean, {appup, clean}}]}
+    {post, [{compile, {jellyfish, appup}}]}
 ]}.
 ```
 
-### Modify profile
+#### relx
 
-Change the `prod` profile at `rebar.config`. This is required for rebar3 appup plugin:
-```erlang
-{profiles, [
-    %% prod is the default mode when prod
-    %% profile is used, so does not have
-    %% to be explicitly included like this
-    {prod, [
-        {relx, [
-            {dev_mode, false},
-            {include_erts, true}
-
-            %% use minimal mode to exclude ERTS
-            %% {mode, minimal}
-        ]}
-    ]}
-]}.
-```
-
-Also, make sure you have added the `runtime_tools` to the release so DeployEx can have access to tracing via Observer Web:
+Make sure you have added: 
+ 1. `runtime_tools` to the release so DeployEx can have access to tracing via Observer Web:
+ 2. `sasl` to allow access to release_handler for hotupgrades
 ```erlang
     {release, {myerlangapp, "0.1.0"}, [
         myerlangapp,
@@ -89,6 +77,34 @@ Also, make sure you have added the `runtime_tools` to the release so DeployEx ca
     ]},
     ...
 ```
+
+#### profiles
+
+Modify/Add the profiles to prepare the release:
+
+```erlang
+{profiles, [
+    %% prod is the default mode when prod
+    %% profile is used, so does not have
+    %% to be explicitly included like this
+    {prod, [
+        {relx, [
+            {dev_mode, false},
+            {include_erts, true},
+
+            %% use minimal mode to exclude ERTS
+            %% {mode, minimal}
+
+            %% Required so relx carries the appup/jellyfish.json files
+            %% rebar3_jellyfish_plugin generates into the release. This
+            %% rule never needs to change as versions change.
+            {overlay, [{copy, "rel/appups/lib", "lib"}]}
+        ]}
+    ]}
+]}.
+```
+
+
 
 ### Add gen_server for testing
 
@@ -275,17 +291,14 @@ echo "{\"version\":\"0.1.1\",\"pre_commands\": [],\"hash\":\"local\"}" | jq > /t
 
 #### Generating Appup Files
 
-DeployEx is capable of executing hot upgrades using only the appup files. The Rebar3 appup plugin is capable of generating appup and relup files, but for compatibility, we are going to generate only the application appup files (excluding OTP, libraries, etc) and save the `appup` file in the `priv/appup` folder.
+DeployEx is capable of executing hot upgrades using the `.appup` and `jellyfish.json` files [rebar3_jellyfish_plugin](https://github.com/deployex/rebar3_jellyfish_plugin) generates - the same `jellyfish.json` contract [Jellyfish](https://github.com/deployex/jellyfish) writes for Elixir releases, so DeployEx checks hot-upgrade support the same way regardless of language.
 
-> [!ATTENTION]
-> The Rebar3 appup plugin is not fully operation when using different profiles like `prod`, for this reason, we are going to use the default profile ONLY for creating the appup file and copy it to the `priv/appup` folder which will then be packed with the `prod` profile.
-
-Create the folder (if doesn't exist) where the appup file will be stored and build the `default` release for the version `0.1.1` (This is the version where you want to upgrade from):
+Unlike the old Rebar3 appup plugin, there's no separate profile or `priv/appup` staging step: the plugin writes both files straight into the release's `lib/<app>-<vsn>/ebin/` the moment a previous version is found on disk, through the `{overlay, ...}` rule added above. Build the release for the version you want to upgrade *from* first:
 ```bash
 export app_name=myerlangapp
-mkdir -p "apps/${app_name}/priv/appup"
 rm -rf _build/
-rebar3 release # Creating release for the version that will be upgrade from (default profile)
+rebar3 as prod release
+rebar3 as prod tar
 ```
 
 Update the project repository and/or make the changes for your app. Afterward, increment the version in both the `apps/myerlangapp/src/myerlangapp.app.src` and `rebar.config` files to `0.1.2`. As suggestion, you can add the following print in the `code_change` function of the `gen_server` at `apps/myerlangapp/src/myerlangapp.erl`:
@@ -297,14 +310,11 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 ```
 
-Let's then generate the `0.1.2` release with the appup file:
+Build the `0.1.2` release. Since the previous version's `lib/myerlangapp-0.1.1/` is still on disk under `_build`, the plugin picks it up automatically and generates the appup as part of the normal build - no extra command:
 ```bash
 export app_name=myerlangapp
 rebar3 as prod release
-rebar3 as prod appup generate --previous "${PWD}/_build/default/rel/${app_name}"  --target_dir "${PWD}/apps/${app_name}/priv/appup"
-# ===> current base dir: "/home/ubuntu/myerlangapp/_build/default"
-# ===> app myerlangapp ebin dir: "/home/ubuntu/myerlangapp/_build/default/lib/myerlangapp/ebin"
-# ===> Generated appup ("0.1.1" <-> "0.1.2") for myerlangapp in "/home/ubuntu/myerlangapp/apps/myerlangapp/priv/appup/myerlangapp.appup"
+# ===> jellyfish: [myerlangapp] versions: [0.1.1, 0.1.2] - appup: .../rel/appups/lib/myerlangapp-0.1.2/ebin/myerlangapp.appup
 rebar3 as prod tar
 ```
 
