@@ -48,6 +48,10 @@ Every release can be deployed in full, and that is what DeployEx does unless the
 When it does, DeployEx applies it to the running node, and falls back to a full deployment when it cannot.
 A release with a new Erlang or Elixir, or a library with native code, is always a full deployment.
 
+**Preparing a release as an upgrade is work a coding agent can do.**
+Reading what changed in the code and in each dependency, and writing the few instructions the generator cannot, is what the [skills of the guide](https://github.com/deployex/beam-hotupgrades#skills-for-coding-agents) are for.
+What it produces does not have to be taken on trust: the upgrade is applied to a real node in CI, and DeployEx keeps the relup of every upgrade and what each step did, on the Versions page.
+
 What a hot upgrade asks of an application, what one real release looked like and the questions that come first are in [Before you decide](https://github.com/deployex/beam-hotupgrades#before-you-decide), in the guide that covers the mechanism for any tool.
 What DeployEx adds to it is in [Hot-Upgrades](guides/docs/hot-upgrades/README.md).
 
