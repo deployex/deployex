@@ -542,6 +542,7 @@ defmodule Deployer.Monitor.Application do
     # runs with a non-default cookie. It goes before app_env, so a RELEASE_COOKIE in the
     # app's env still wins.
     """
+    #{limit_open_files()}
     unset $(env | grep -E '^(RELEASE|DEPLOYEX)_' | awk -F'=' '{print $1}')
     unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
     export RELEASE_COOKIE=#{Common.shell_quote(cookie)}
@@ -575,6 +576,7 @@ defmodule Deployer.Monitor.Application do
       end
 
     """
+    #{limit_open_files()}
     unset $(env | grep -E '^(RELEASE|DEPLOYEX)_' | awk -F'=' '{print $1}')
     unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
     #{app_env}
@@ -611,6 +613,7 @@ defmodule Deployer.Monitor.Application do
       end
 
     """
+    #{limit_open_files()}
     unset $(env | grep -E '^(RELEASE|DEPLOYEX)_' | awk -F'=' '{print $1}')
     unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
     #{app_env}
@@ -634,6 +637,19 @@ defmodule Deployer.Monitor.Application do
 
     Logger.warning(msg)
     "echo \"#{msg}\""
+  end
+
+  # The Erlang VM sizes its table of ports from the limit of open files, unless it is
+  # started with +Q. Where that limit is about a billion, in a Kubernetes pod on containerd
+  # or under a systemd unit with LimitNOFILE=infinity on a recent kernel, the VM of an
+  # application that has no +Q asks for gigabytes when it boots, and is killed where
+  # memory is limited. A limit above the cap is lowered to it for the application and what
+  # it starts. One that is at or below it is kept, so a host as it was is not changed.
+  @max_open_files 1_048_576
+
+  defp limit_open_files do
+    ~s(if [ "$\(ulimit -n\)" = "unlimited" ] || [ "$\(ulimit -n\)" -gt #{@max_open_files} ]; ) <>
+      "then ulimit -n #{@max_open_files}; fi"
   end
 
   defp ports_to_env(ports), do: Enum.map(ports, fn port -> "#{port.key}=#{port.base}" end)
