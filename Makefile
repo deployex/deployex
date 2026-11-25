@@ -30,7 +30,8 @@ TLS_OPTIONS := -proto_dist inet_tls -ssl_dist_optfile $(TLS_CONF)
 
 .DEFAULT_GOAL := help
 .PHONY: help preflight setup start stop test format-check credo dialyzer check dev-app dev-app-clean dev-tls \
-	dev-fake-apps dev-fake-apps-off docker-up docker-app docker-logs docker-down docker-clean
+	dev-fake-apps dev-fake-apps-off docker-up docker-app docker-logs docker-down docker-clean \
+	k8s-up k8s-logs k8s-down
 
 preflight: ## Verify the local toolchain (.tool-versions) + tools for dev/test
 	@fail=0; \
@@ -147,3 +148,13 @@ docker-down: ## Stop and remove the containers. The bucket and the build volumes
 docker-clean: docker-down ## Remove the containers, the bucket and the build volumes of the app
 	rm -rf devops/docker/bucket
 	-docker volume rm "$(APP_NAME)_build" "$(APP_NAME)_deps"
+
+k8s-up: ## Create a local kind cluster and run DeployEx and nginx in one pod: dashboard on :5011, the app on :8090
+	devops/docker/kubernetes/up.sh
+
+k8s-logs: ## Follow the output of the DeployEx container of the pod, which has the logs of the app too
+	KUBECONFIG=devops/docker/kubernetes/kubeconfig kubectl logs -f deployment/deployex -c deployex
+
+k8s-down: ## Delete the kind cluster of the trial
+	kind delete cluster --name deployex-trial --kubeconfig devops/docker/kubernetes/kubeconfig
+	rm -f devops/docker/kubernetes/kubeconfig

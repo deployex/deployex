@@ -2,7 +2,7 @@
 
 DeployEx is made for a host it shares with the applications it runs. This guide puts both in one container, so that a team that deploys with containers can try hot upgrades without changing how it deploys: the container is still what the platform schedules, restarts and replaces, and DeployEx changes the code of the application inside it.
 
-It is a trial setup, with one container of DeployEx and one of nginx that share a network, the way two containers of a Kubernetes pod do. What it was run with, what was seen and what is still open are at the end.
+It is a trial setup, with one container of DeployEx and one of nginx that share a network, the way two containers of a Kubernetes pod do. It runs with Docker alone, and as one pod on a local Kubernetes cluster, which is the last section. What it was run with, what was seen and what is still open are in each.
 
 ### How it is put together
 
@@ -80,6 +80,7 @@ The instance and its OS process are the same as before. A release with no appups
 | `make docker-logs` | Follows the output of the DeployEx container |
 | `make docker-down` | Stops and removes the containers |
 | `make docker-clean` | Also removes the bucket and the build volumes of the application |
+| `make k8s-up`, `k8s-logs`, `k8s-down` | The same as one pod on a local Kubernetes cluster, see [On Kubernetes](#on-kubernetes) |
 
 ### What was seen
 
@@ -106,8 +107,35 @@ With the sample application, on Docker 29 and an arm64 host, four requests a sec
 
 ### On Kubernetes
 
-Not run yet: this is where the trial above leads, and nothing below was tried on a cluster.
+The same two containers as one pod, on a local cluster made with [kind](https://kind.sigs.k8s.io). It needs `kind` and `kubectl` installed.
 
-The two containers of `compose.yaml` are the two containers of a pod, which share `localhost` the same way. The Service points at the port of nginx, the readiness probe of the pod at a path of the application through nginx, and the bucket is `release_adapter: "s3"` or `"gcp-storage"` in `deployex.yaml`, which then comes from a ConfigMap, with the three secrets of DeployEx from a Secret.
+```bash
+make k8s-up        # the cluster, the image, the ConfigMap, the Secret and the pod
+make docker-app    # publishes to the same bucket, which the node mounts
+make k8s-logs
+make k8s-down
+```
 
-What a single pod does not show, and more than one will: each pod has its own DeployEx and reads `current.json` by itself, so every pod acts on a new version within the same few seconds. Nothing orders them, the way the instances of one DeployEx are upgraded one after the other.
+The dashboard is at [http://localhost:5011](http://localhost:5011) and the application at [http://localhost:8090](http://localhost:8090), through a NodePort Service. The cluster has a kubeconfig of its own, `devops/docker/kubernetes/kubeconfig`, so the contexts of your `kubectl` are not read or changed: `export KUBECONFIG=$PWD/devops/docker/kubernetes/kubeconfig` to look at it.
+
+What is in [`devops/docker/kubernetes`](https://github.com/deployex/deployex/tree/main/devops/docker/kubernetes):
+
+ * **One Deployment with one replica and the `Recreate` strategy**, so there are never two pods, each with its own DeployEx, on the same bucket.
+ * **`deployex.yaml` and `nginx.conf` in a ConfigMap, the three secrets of DeployEx in a Secret.**
+ * **The readiness probe is on nginx**, a request to the application through it: the pod is ready when the application answers, and not before one is published.
+ * **A memory limit of 1.5 GB** on the DeployEx container, which covers DeployEx, the application and a second instance of it during a full deployment. DeployEx used 275 MB and the sample application 200 MB.
+ * **The bucket is a directory of the node**, for the trial. On a real cluster it is `release_adapter: "s3"` or `"gcp-storage"`.
+
+What was seen, with four requests a second through the Service:
+
+| Step | Result |
+|---|---|
+| The pod starts with a version in the bucket | Ready, 2 of 2 containers, 16 seconds later |
+| Hot upgrade | No request failed. The pod stayed ready and was not restarted |
+| Full deployment | No request failed. The pod stayed ready and was not restarted |
+| `kubectl logs` of the DeployEx container | Has the lines of the application |
+| The pod deleted | Gone in 12 seconds, the new one ready 16 seconds after the delete. No answer for 15 seconds in between, there is one pod |
+
+One thing only a cluster showed. The first pod was killed for its memory every time the application started, with the limit at 1.5 GB. A pod on containerd has a limit of open files of about a billion, where Docker gives a million, and the Erlang VM sizes its table of ports from that limit unless it is started with `+Q`. DeployEx is, the applications it starts usually are not, and their VM asked for gigabytes when it booted. `entrypoint.sh` now lowers the limit to 65536 before it starts DeployEx, which the applications inherit, `DEPLOYEX_MAX_OPEN_FILES` to change it.
+
+Still open, and what more than one pod will show: each pod has its own DeployEx and reads `current.json` by itself, so every pod acts on a new version within the same few seconds. Nothing orders them, the way the instances of one DeployEx are upgraded one after the other.
