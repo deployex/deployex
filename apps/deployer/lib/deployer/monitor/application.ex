@@ -21,6 +21,9 @@ defmodule Deployer.Monitor.Application do
   @max_backoff_ms :timer.minutes(5)
   # The restarts each instance keeps, for the dashboard
   @restart_history 10
+
+  # What a restart says of an application that exited with no error
+  @stopped_by_itself "stopped by itself"
   @readiness_check_interval :timer.seconds(1)
 
   ### ==========================================================================
@@ -85,7 +88,9 @@ defmodule Deployer.Monitor.Application do
     #       and the bin/beam.smp process
     cleanup_beam_process(state.sname)
 
-    {:reply, :ok, state}
+    # Without a current pid, the exit of the application that was just stopped is not taken
+    # for one it decided by itself, which starts it again
+    {:reply, :ok, %{state | current_pid: nil}}
   end
 
   def handle_call({:restart, _restart}, _from, state) when is_nil(state.current_pid) do
@@ -268,6 +273,19 @@ defmodule Deployer.Monitor.Application do
   # A pre-command that was cancelled, or another erlexec process that ended
   def handle_info({:DOWN, _os_pid, :process, _pid, _reason}, state), do: {:noreply, state}
 
+  # The application ended by itself and with no error: it called System.stop/0, or the host
+  # sent it a SIGTERM, which a node answers by shutting down and exiting with 0. Nobody
+  # asked DeployEx for it, which clears the current pid before it stops the application
+  # itself, so it is started again as after a crash
+  def handle_info({:EXIT, pid, :normal}, %{current_pid: current_pid} = state)
+      when is_pid(pid) and current_pid == pid do
+    Logger.error(
+      "Application sname: #{state.sname} with pid: #{inspect(pid)} stopped by itself, application being restarted"
+    )
+
+    {:noreply, restart_after_exit(state, @stopped_by_itself)}
+  end
+
   def handle_info({:EXIT, _pid, :normal}, state) do
     # Ignore any erl_exec application that terminates normally, as this
     # occurs because the process is trapping all exits, including those
@@ -281,39 +299,7 @@ defmodule Deployer.Monitor.Application do
       "Unexpected exit message received for sname: #{state.sname} from pid: #{inspect(pid)}, application being restarted"
     )
 
-    cleanup_beam_process(state.sname)
-
-    # Update the number of crash restarts
-    crash_restart_count = state.crash_restart_count + 1
-
-    # Crashes since the application was last seen running. The backoff and the engine worker's
-    # crash-loop check for a hot upgrade read it
-    consecutive_crash_count = state.consecutive_crash_count + 1
-
-    Foundation.Notifications.notify("crash_restart", %{
-      node: Node.self(),
-      sname: state.sname,
-      name: state.name,
-      language: state.language,
-      crash_restart_count: crash_restart_count
-    })
-
-    # Retry with backoff pattern, capped to avoid unbounded growth
-    backoff = min(2 * consecutive_crash_count * 1000, @max_backoff_ms)
-    trigger_run_service(state.sname, backoff)
-
-    # Map.put, since a state that missed code_change on a relup has no last_crash_at key
-    state =
-      %{
-        state
-        | current_pid: nil,
-          crash_restart_count: crash_restart_count,
-          consecutive_crash_count: consecutive_crash_count
-      }
-      |> Map.put(:last_crash_at, DateTime.utc_now(:second))
-      |> add_restart({:crash, nil})
-
-    {:noreply, update_non_blocking_state(state)}
+    {:noreply, restart_after_exit(state, nil)}
   end
 
   def handle_info({:EXIT, pid, reason}, state) do
@@ -950,6 +936,44 @@ defmodule Deployer.Monitor.Application do
       command: command,
       reason: inspect(reason)
     })
+  end
+
+  # The application is down and nobody asked for it: it is started again, after a backoff
+  # that grows with the crashes in a row
+  defp restart_after_exit(state, detail) do
+    cleanup_beam_process(state.sname)
+
+    # Update the number of crash restarts
+    crash_restart_count = state.crash_restart_count + 1
+
+    # Crashes since the application was last seen running. The backoff and the engine worker's
+    # crash-loop check for a hot upgrade read it
+    consecutive_crash_count = state.consecutive_crash_count + 1
+
+    Foundation.Notifications.notify("crash_restart", %{
+      node: Node.self(),
+      sname: state.sname,
+      name: state.name,
+      language: state.language,
+      crash_restart_count: crash_restart_count
+    })
+
+    # Retry with backoff pattern, capped to avoid unbounded growth
+    backoff = min(2 * consecutive_crash_count * 1000, @max_backoff_ms)
+    trigger_run_service(state.sname, backoff)
+
+    # Map.put, since a state that missed code_change on a relup has no last_crash_at key
+    state =
+      %{
+        state
+        | current_pid: nil,
+          crash_restart_count: crash_restart_count,
+          consecutive_crash_count: consecutive_crash_count
+      }
+      |> Map.put(:last_crash_at, DateTime.utc_now(:second))
+      |> add_restart({:crash, detail})
+
+    update_non_blocking_state(state)
   end
 
   defp do_restart(state, {cause, _detail} = restart) do

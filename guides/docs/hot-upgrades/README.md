@@ -90,7 +90,9 @@ So DeployEx keeps the pipelines out of the way while the code is replaced, with 
 There is nothing to turn on, and nothing to add to the application.
 
  * **The upgrade waits for the messages in flight**, up to 30 seconds for all the pipelines together, which stop at the same time. Consumers that handle a message in milliseconds add nothing noticeable. A pipeline that is still stopping after 30 seconds is no longer waited for: the upgrade goes on, a message it is still handling can be killed as before, and it is started again at the end, or as soon as it has stopped: the start is waited for up to 10 seconds.
- * **Nothing is consumed on that node meanwhile.** The other nodes keep consuming.
+ * **Pipelines of one supervisor stop one after the other.** A supervisor stops one child at a time, so two pipelines it started are not stopped together: the second waits for the first. A message that kept the first one for 50 seconds had both reported as `still stopping after 30 seconds`, although the second had nothing to handle. Both were running again a few seconds after the upgrade.
+ * **A message that outlasts the wait is not lost.** It is killed when the previous code is removed, never acknowledged, and the broker delivers it again once the connection of the pipeline closes: to this node on the new code, or to another node that consumes the same queue, whichever asks first.
+ * **Nothing is consumed on that node meanwhile.** The other nodes keep consuming. A broker that is down during the upgrade changes nothing: the pipelines are stopped and started all the same, and connect again when it is back.
  * **A pipeline DeployEx could not start again is left alone**: one that was not started under a name, or by a supervisor that keeps no child to start again, such as a `DynamicSupervisor`, one that is a `temporary` child, or one started by a process that is not a supervisor. So is an application without Broadway, or with a version of it that does not list its pipelines.
  * **An upgrade that restarts the VM does not carry them**, it stops everything anyway.
  * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be started again is written down before anything is stopped.
@@ -111,11 +113,26 @@ There is nothing to turn on, and nothing to add to the application.
 
  * **A job that outlasts the wait keeps running.** It is killed only when a module it is inside of is replaced by this upgrade, and Oban then tries it again, a few seconds later. A job whose code did not change is not touched, which a deployment that stops the node cannot offer.
  * **The rules for a job are the ones a deployment already asks for**: more than one attempt, since a kill uses one and a job with a single attempt is not tried again, and safe to run again from the start.
+ * **A job that is queued for a worker the release removes fails** when it comes due, with `module is not a worker`, on each of its attempts, and is discarded. It is the same after a full deployment. Stop enqueueing a worker in one release and remove it in a later one, once its queue is empty.
  * **Only this node is paused**, and no job starts on it during the upgrade. A queue that was already paused is left paused.
  * **The upgrade takes that much longer** when jobs are running, and no longer when the queues are idle. With the pipelines, an upgrade waits 65 seconds at most: 20 for the jobs, and 5, 30 and 10 to find, stop and start the pipelines.
  * **An application without Oban is not changed**, nor is one with a version of it that cannot pause a queue on one node. An upgrade that restarts the VM does not carry the instructions.
  * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be resumed is written down before any queue is paused.
  * **What happened is kept**, with the relup: the queues that were paused, how many jobs were still running when the wait ended (`null` when the queues could not be checked), and whether the queues were resumed. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `jobs`. The code is `apps/deployer/priv/relup/jobs_pause.erl` and `jobs_resume.erl`.
+
+### What is left to the application
+
+DeployEx keeps the configuration, the version, the protocols, the pipelines and the job queues in step with an upgrade.
+Six things it cannot do, because only the application knows what they are. Each is a rule of [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades#good-practices-for-a-project-that-can-be-hot-upgraded), and each was seen on a running application.
+
+ * **The state of its processes.** A struct that gains a field is a change of shape: a process that held the previous one fails on its next message with a `KeyError`, is started again by its supervisor, and has lost what it held. It needs a `code_change/3`, written with a struct literal and not with a call into the module that defines the struct, which may still be the previous version when the migration runs.
+ * **Requests in flight.** The process serving a request is inside the application's code, and is killed when a module it is running through is replaced: the client gets no response, or part of one. It only concerns requests that last, a download, an upload, an export, and only an upgrade that changes their modules. Keep long work in a job, which is tried again.
+ * **Database connections.** The pool is kept, and each connection keeps the statements it has prepared. A migration that changes the type of a column makes each of those fail once, with `cached plan must not change result type`. Change a type in two releases: add the new column, then drop the old one.
+ * **Long-lived tasks.** DeployEx makes the release permanent as soon as it is installed, and that is when the previous code of a module is purged: a process still inside it is killed. A task started with an anonymous function of a module the release changes, `Task.start(fn -> ... end)`, `Task.async`, `start_async` in a LiveView, is one, whatever it loops on, and a database transaction it holds open is rolled back. Start it with a module, a function and arguments, have it loop through the module, and it goes on with the new code, unless it is blocked for the whole of the upgrade.
+ * **Connections held by a dependency.** A library that changes what the process of a connection holds loses the connections that are open. The upgrade of Bandit from 1.14 to 1.15 closed each HTTP/2 connection on its next request, with a `GOAWAY`, and the client opened a new one. Read what a dependency changed in its connection processes, and not only in the ones it starts once.
+ * **What the node read when it booted.** The flags in `vm.args`, the environment of the release script, a file the application loads into memory in `start/2`: the new release is on disk, and the node goes on with what it read until it restarts. Nothing reports it.
+
+One of these is worth a step of its own. A release checks, when it boots, that the values its code was compiled with are the ones of its runtime configuration, and refuses to start when they differ. A hot upgrade boots nothing, so such a release is installed, runs, and fails at its next restart, whenever that is. A [pre-command](#hot-upgrading-monitored-applications) that boots the new release, such as the migrations run with `eval`, fails first: DeployEx refuses the upgrade and the previous version keeps serving. An application with no migrations can have one that does nothing, `eval :ok`, for that reason alone.
 
 ### Telling the application that it was hot-upgraded
 
@@ -189,6 +206,8 @@ DeployEx brings the version on traces and logs up to date itself, and `config_ch
 | Pages that are already open (Phoenix) | A hot upgrade disconnects no one | Broadcast, and let the pages that subscribed decide what to show |
 | A value a process took when it started | A database pool keeps the password it connected with, a client keeps the token it was built with | Restart that process. It applies to secrets too, see [Secrets from 1Password](/guides/docs/yaml/README.md#secrets-from-1password) |
 | A cache filled at boot | Nothing ran again to fill it: an ETS table, a `:persistent_term`, a file read once | Fill it again |
+| What a library was given once at boot | The metrics of a reporter, such as a PromEx plugin, the queues and the schedule of a job library: the library keeps the list it was started with, and a metric a release adds is not exported. It is so even for what comes from the configuration: after a release that adds a queue to Oban, the application environment has it and Oban, which read it when it started, does not | Restart the process that holds the list, from a process of its own as said below |
+| A telemetry handler attached with `&handle/4` | The capture belongs to the version of the module that attached it. After an upgrade of that module the handler fails on its first event and Telemetry detaches it | Attach `&__MODULE__.handle/4`, which needs nothing afterwards |
 
 Two rules follow from where the callback runs, which is inside the application controller of the node:
 
@@ -507,6 +526,13 @@ During that window some replicas run the new version and some the old, which is 
 ### When a monitored application upgrade fails
 
 A release only reaches the hot upgrade path when it shipped the `.appup` or `jellyfish.json` files saying it supports one.
+A release that ships them and also brings another runtime is not one: a different ERTS, or a new version of an application that has no `.appup` for the version that is running, as Elixir itself when the release was built with a newer one. No relup can be built for it, so DeployEx deploys it in full, and says why:
+
+```bash
+[warning] HOT UPGRADE version NOT DETECTED, full deployment required, reason: {:no_appup, ["eex 1.19.5 -> 1.19.6", "elixir 1.19.5 -> 1.19.6", "iex 1.19.5 -> 1.19.6", "logger 1.19.5 -> 1.19.6"]}
+[warning] HOT UPGRADE version NOT DETECTED, full deployment required, reason: {:runtime_changed, "erts 16.3 -> 16.4.0.6"}
+```
+
 What DeployEx does when that upgrade fails depends on whether the running node was already changed.
 
 If it failed before the release was installed, nothing on the node was touched, so there is nothing to recover and no reason to restart it.
