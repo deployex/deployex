@@ -28,7 +28,7 @@ It is a trial setup, with one container of DeployEx and one of nginx that share 
 From the root of this repository:
 
 ```bash
-docker compose -f devops/docker/compose.yaml up -d --build
+make docker-up
 ```
 
 The first build compiles DeployEx from the source, which takes a few minutes. The dashboard is then at [http://localhost:5001](http://localhost:5001), user `admin` and password `deployex`. It has no application yet, the bucket is empty.
@@ -39,13 +39,13 @@ The application needs what any application managed by DeployEx needs, see [Elixi
 
 ```bash
 git clone https://github.com/thiagoesteves/myphoenixapp ../myphoenixapp
-devops/docker/publish-app.sh ../myphoenixapp myphoenixapp 0.5.1
+make docker-app
 ```
 
-The version is the one in its `mix.exs`. The script builds the release in a container, for the OS and the OTP of the DeployEx image, copies the tarball to `devops/docker/bucket` and writes `current.json`. DeployEx sees it within a few seconds and deploys it:
+It publishes the version in the `mix.exs` of the application. `APP_DIR`, `APP_NAME` and `VERSION` name another one: `make docker-app APP_DIR=../myapp APP_NAME=myapp`. The script behind it, `devops/docker/publish-app.sh`, builds the release in a container, for the OS and the OTP of the DeployEx image, copies the tarball to `devops/docker/bucket` and writes `current.json`. DeployEx sees it within a few seconds and deploys it:
 
 ```bash
-docker compose -f devops/docker/compose.yaml logs -f deployex
+make docker-logs
 # Update is needed at sname:  from: <no current set> to: 0.5.1
 # Full deploy instance: 1 sname: myphoenixapp-xi0vd1
 # Application sname: myphoenixapp-xi0vd1 is running
@@ -58,7 +58,7 @@ The application answers through nginx at [http://localhost:8080](http://localhos
 Change the application, set the next version in its `mix.exs`, and publish it:
 
 ```bash
-devops/docker/publish-app.sh ../myphoenixapp myphoenixapp 0.5.2
+make docker-app
 ```
 
 The build directory is kept in a volume, so this build finds 0.5.1 and Jellyfish writes the appups:
@@ -70,6 +70,16 @@ The build directory is kept in a volume, so this build finds 0.5.1 and Jellyfish
 ```
 
 The instance and its OS process are the same as before. A release with no appups, the first one built in a clean directory for instance, is a full deployment: a new instance on the other port, and the previous one stopped once the new one is running.
+
+### The commands
+
+| Command | What it does |
+|---|---|
+| `make docker-up` | Builds the image and starts DeployEx and nginx |
+| `make docker-app` | Builds the application for the image and publishes it |
+| `make docker-logs` | Follows the output of the DeployEx container |
+| `make docker-down` | Stops and removes the containers |
+| `make docker-clean` | Also removes the bucket and the build volumes of the application |
 
 ### What was seen
 
@@ -87,7 +97,7 @@ With the sample application, on Docker 29 and an arm64 host, four requests a sec
 
  * **Both versions answer during a full deployment.** The new instance accepts connections a couple of seconds after it starts, and DeployEx waits for it to be ready, 30 seconds in the run above, before it stops the previous one. nginx sends requests to both meanwhile. Nothing failed, and a release that is bad would get half of the requests for that long. A proxy that checks a readiness path of the application before it sends traffic closes that window.
  * **The logs of the application are in the output of the container** because `deployex.yaml` sets `monitored_app_log_stdout: true`. An application writes to files under `/var/log/monitored-apps`, which DeployEx follows for its dashboard, and without that option `docker logs` and `kubectl logs` show DeployEx only. With it, each piece DeployEx reads is also written to its own output, unchanged, so the lines of an application that logs JSON stay JSON. The lines of DeployEx itself are in the same output, as text.
- * **The log files grow in the container.** Put `/var/log/monitored-apps` on a volume with a size limit.
+ * **The log files are rotated by logrotate**, which the image installs, with the rule the cloud guides put on a host: 20 MB a file, seven kept, `copytruncate` since the application keeps its file open. A container has no cron, so `entrypoint.sh` runs it every five minutes next to DeployEx, `LOGROTATE_INTERVAL_SECONDS` to change that.
  * **`SHELL` has to be set.** erlexec, which runs the applications, does not start without it, and a container sets none. The `Dockerfile` sets it.
  * **The certificates are made when the image is built.** They are for the TLS distribution between DeployEx and the applications, and are enough for a trial. Mount your own at `/certs` for anything else.
  * **The state is in the container.** `/var/lib/deployex` holds the releases that were installed, the history and the ghosted versions. It is gone with the container, which then starts from `current.json`. Mount a volume there to keep it.

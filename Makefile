@@ -19,13 +19,18 @@ export PRE_COMMANDS
 # Fake apps that make dev-fake-apps shows on a running make start, e.g. make dev-fake-apps FAKE_APPS=40
 FAKE_APPS ?= 19
 
+# DeployEx in a container, see guides/docs/docker/README.md. The version that docker-app
+# publishes is the one in the mix.exs of the application, or: make docker-app VERSION=0.5.2
+DOCKER_COMPOSE := docker compose -f devops/docker/compose.yaml
+VERSION ?= $(shell sed -n 's/.*version: "\([^"]*\)".*/\1/p' "$(APP_DIR)/mix.exs" 2>/dev/null | head -1)
+
 # TLS distribution, as in section 9 of guides/docs/local-elixir/README.md
 TLS_CONF := /tmp/inet_tls.conf
 TLS_OPTIONS := -proto_dist inet_tls -ssl_dist_optfile $(TLS_CONF)
 
 .DEFAULT_GOAL := help
 .PHONY: help preflight setup start stop test format-check credo dialyzer check dev-app dev-app-clean dev-tls \
-	dev-fake-apps dev-fake-apps-off
+	dev-fake-apps dev-fake-apps-off docker-up docker-app docker-logs docker-down docker-clean
 
 preflight: ## Verify the local toolchain (.tool-versions) + tools for dev/test
 	@fail=0; \
@@ -118,3 +123,27 @@ dev-tls: ## Create TLS distribution certificates and /tmp/inet_tls.conf for make
 	fi
 	@DEPLOYEX_OTP_TLS_CERT_PATH=/tmp sh -c "$$(sed -n '/^test -f \/tmp\/inet_tls.conf/,/^)$$/p' rel/env.sh.eex)"
 	@test -f $(TLS_CONF) && echo "TLS distribution ready: $(TLS_CONF). make start now uses it."
+
+
+docker-up: ## Build and start DeployEx and nginx in containers: dashboard on :5001, the app on :8080
+	$(DOCKER_COMPOSE) up -d --build
+	@echo "DeployEx: http://localhost:5001 (admin / deployex). Publish an app with: make docker-app"
+
+docker-app: ## Build the sample app for the container and publish it, as a hot upgrade when a version was published before
+	@test -d "$(APP_DIR)" || { \
+		echo "APP_DIR '$(APP_DIR)' not found. Clone the sample app or pass APP_DIR=/path/to/app."; \
+		echo "  git clone https://github.com/thiagoesteves/myphoenixapp $(APP_DIR)"; \
+		exit 1; }
+	@test -n "$(VERSION)" || { echo "No version found in $(APP_DIR)/mix.exs, pass VERSION=x.y.z"; exit 1; }
+	devops/docker/publish-app.sh "$(APP_DIR)" "$(APP_NAME)" "$(VERSION)"
+	@echo "The app answers on http://localhost:8080 once DeployEx has deployed it: make docker-logs"
+
+docker-logs: ## Follow the output of the DeployEx container, which has the logs of the app too
+	$(DOCKER_COMPOSE) logs -f deployex
+
+docker-down: ## Stop and remove the containers. The bucket and the build volumes of the app stay
+	$(DOCKER_COMPOSE) down
+
+docker-clean: docker-down ## Remove the containers, the bucket and the build volumes of the app
+	rm -rf devops/docker/bucket
+	-docker volume rm "$(APP_NAME)_build" "$(APP_NAME)_deps"
