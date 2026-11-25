@@ -124,6 +124,15 @@ defmodule Foundation.ConfigProvider.Env.Config do
             updated_config
           end
 
+        # The logs of DeployEx as JSON. Only set when it is not text, which is the default
+        # of the code that reads it, see Foundation.LogFormat.
+        updated_config =
+          if yaml_config.log_format == "text" do
+            updated_config
+          else
+            Config.Reader.merge(updated_config, foundation: [log_format: yaml_config.log_format])
+          end
+
         # GitHub release check. Without the key, the release config stays.
         updated_config =
           case yaml_config.enable_release_check do

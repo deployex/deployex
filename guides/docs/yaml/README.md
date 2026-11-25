@@ -58,6 +58,7 @@ version: "0.10.0"                                        # DeployEx version
 otp_version: 28                                          # OTP version (must match monitored apps)
 os_target: "ubuntu-24.04"                                # Target OS server. The installer picks the amd64 or arm64 build
 enable_release_check: true                               # Hourly GitHub check for a newer DeployEx (optional, default: true)
+log_format: "text"                                       # Logs of DeployEx: text, json, datadog, gcp or elastic (optional, default: text)
 
 # Path Configuration (optional with defaults)
 otp_tls_certificates: "/usr/local/share/ca-certificates" # Path to TLS certificates
@@ -561,6 +562,7 @@ These fields require a **full DeployEx restart**:
 - `otp_tls_certificates` - TLS certificate path
 - `os_target` - Target operating system
 - `enable_release_check` - GitHub check for a newer DeployEx release
+- `log_format` - The format of the logs DeployEx writes to its output. `text` is the default. `json`, `datadog`, `gcp` and `elastic` write one JSON object a line, in the shape of the [LoggerJSON](https://hexdocs.pm/logger_json) formatter of that name, each with `service: "deployex"`. For DeployEx in a container, where a collector reads the output: with `monitored_app_log_stdout` the lines of the applications are in the same output, and their `service` tells them apart. The few lines the VM logs while it boots, before the YAML is read, stay text
 
 #### Installation Paths
 - `install_path` - DeployEx installation directory
