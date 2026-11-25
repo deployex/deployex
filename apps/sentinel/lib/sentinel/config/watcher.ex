@@ -214,7 +214,7 @@ defmodule Sentinel.Config.Watcher do
   end
 
   defp check_for_changes(state) do
-    case Yaml.load(%Yaml{config_checksum: state.current_config.config_checksum}) do
+    case load_yaml(state) do
       {:ok, %Yaml{} = yaml_config} ->
         handle_yaml_change(state, yaml_config)
 
@@ -232,6 +232,14 @@ defmodule Sentinel.Config.Watcher do
         Logger.error("ConfigWatcher: Failed to load YAML configuration: #{inspect(reason)}")
         state
     end
+  end
+
+  # A value the YAML does not take raises when it is parsed. That stops DeployEx when it
+  # starts, and here it is an error like any other: the file is read again at the next check
+  defp load_yaml(state) do
+    Yaml.load(%Yaml{config_checksum: state.current_config.config_checksum})
+  rescue
+    error -> {:error, Exception.message(error)}
   end
 
   defp handle_yaml_change(state, yaml_config) do

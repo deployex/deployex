@@ -49,6 +49,9 @@ defmodule DeployexWeb.LogLines do
 
   @doc """
   Returns the color of a line's message: stderr and errors red, warnings amber.
+
+  The level of a line is `[error]` or `[warning]` in text, and the level field of a line that
+  is a JSON object, as DeployEx writes with `log_format`.
   """
   @spec color(map()) :: String.t()
   def color(%{type: "stderr"}), do: "var(--dx-error-text)"
@@ -63,9 +66,25 @@ defmodule DeployexWeb.LogLines do
     cond do
       String.contains?(text, "[error]") -> "var(--dx-error-text)"
       String.contains?(text, "[warning]") -> "var(--dx-warning-text)"
-      true -> "var(--dx-base-content)"
+      true -> json_color(text)
     end
   end
+
+  # "severity" is the field of the json, datadog and gcp formats, "log.level" of elastic
+  defp json_color("{" <> _rest = text) do
+    case Regex.run(~r/"(?:severity|log\.level|level)"\s*:\s*"(\w+)"/, text) do
+      [_field, level] -> level_color(String.downcase(level))
+      nil -> "var(--dx-base-content)"
+    end
+  end
+
+  defp json_color(_text), do: "var(--dx-base-content)"
+
+  defp level_color(level) when level in ["error", "critical", "alert", "emergency"],
+    do: "var(--dx-error-text)"
+
+  defp level_color(level) when level in ["warning", "warn"], do: "var(--dx-warning-text)"
+  defp level_color(_level), do: "var(--dx-base-content)"
 
   @doc """
   Reads the stored messages of each instance and stream with the log server's options. Returns them, and

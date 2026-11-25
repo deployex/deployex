@@ -449,6 +449,42 @@ defmodule Sentinel.Config.WatcherTest do
       end
     end
 
+    test "handles a yaml value that raises when it is parsed" do
+      test_pid = self()
+      ref = make_ref()
+
+      with_mocks([
+        {Upgradable, [],
+         [
+           from_app_env: fn -> @default_upgradable end,
+           from_yaml: fn _config -> @default_upgradable end
+         ]},
+        {Yaml, [],
+         [
+           load: fn %Yaml{config_checksum: "current_checksum"} ->
+             send(test_pid, {:handle_ref_event, ref})
+             raise ~s(log_format "xml" not supported)
+           end
+         ]}
+      ]) do
+        log =
+          capture_log(fn ->
+            {:ok, pid} = Watcher.start_link(name: :raising_yaml, check_interval_ms: 10)
+
+            assert_receive {:handle_ref_event, ^ref}, 1_000
+            # It is still there for the next check
+            assert_receive {:handle_ref_event, ^ref}, 1_000
+
+            state = :sys.get_state(:raising_yaml)
+            assert state.pending_config == nil
+            assert Process.alive?(pid)
+          end)
+
+        assert log =~ "Failed to load YAML configuration"
+        assert log =~ ~s(log_format \\"xml\\" not supported)
+      end
+    end
+
     test "handles yaml load error" do
       test_pid = self()
       ref = make_ref()
