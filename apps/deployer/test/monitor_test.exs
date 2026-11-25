@@ -501,6 +501,14 @@ defmodule Deployer.MonitorTest do
           do: assert(command =~ "-setcookie 'cookie'"),
           else: assert(command =~ "export RELEASE_COOKIE='cookie'\n")
 
+        # The limit of open files is capped before anything else of the command. Run in a
+        # real shell, the line keeps a limit that is below the cap
+        [limit_line | _rest] = command |> String.split("\n") |> Enum.map(&String.trim/1)
+        assert limit_line =~ "ulimit -n 1048576"
+
+        {output, 0} = System.cmd("sh", ["-c", "ulimit -n 256; #{limit_line}; ulimit -n"])
+        assert String.trim(output) == "256"
+
         assert :ok = MonitorApp.stop_service(name, sname)
       end
     end
