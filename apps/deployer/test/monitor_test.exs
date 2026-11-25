@@ -1233,6 +1233,52 @@ defmodule Deployer.MonitorTest do
     end
 
     @tag :capture_log
+    test "An application that stops by itself, with no error, is started again", context do
+      test_pid = self()
+      monitor = start_running_monitor(context, fn _command -> exit_pre_command(:normal) end)
+      %{current_pid: app_pid} = :sys.get_state(monitor)
+
+      Host.CommanderMock
+      |> stub(:run_link, fn _command, _options ->
+        send(test_pid, :started_again)
+        {:ok, test_pid, 654_321}
+      end)
+
+      # What a node that called System.stop/0, or was sent a SIGTERM, leaves behind
+      send(monitor, {:EXIT, app_pid, :normal})
+
+      assert_receive :started_again, 5_000
+
+      assert %{
+               crash_restart_count: 1,
+               force_restart_count: 0,
+               restarts: [%{cause: :crash, detail: "stopped by itself"}]
+             } = :sys.get_state(monitor)
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
+    test "An application that DeployEx stopped is not started again when it exits", context do
+      test_pid = self()
+      monitor = start_running_monitor(context, fn _command -> exit_pre_command(:normal) end)
+      %{current_pid: app_pid} = :sys.get_state(monitor)
+
+      Host.CommanderMock
+      |> stub(:run_link, fn _command, _options ->
+        send(test_pid, :started_again)
+        {:ok, test_pid, 654_321}
+      end)
+
+      # The request alone, without the supervisor ending the monitor as stop_service/2 does
+      assert :ok = GenServer.call(monitor, :stop_service)
+      send(monitor, {:EXIT, app_pid, :normal})
+
+      refute_receive :started_again, 3_000
+      assert %{current_pid: nil, crash_restart_count: 0} = :sys.get_state(monitor)
+
+      assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
+    end
+
     test "A restart does not count the stopped application as a crash", context do
       test_pid = self()
       monitor = start_running_monitor(context, fn _command -> exit_pre_command(:normal) end)
