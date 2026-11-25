@@ -21,18 +21,20 @@ Upon deployment, the following dashboard becomes available, providing easy acces
 DeployEx runs the release of a BEAM application on a host and keeps it running: it starts it, watches it, restarts it, deploys the next version and goes back when that one does not hold.
 It takes the place of the container and the orchestrator for applications that are better served by the node staying up.
 
-**It fits when**
+What a restart costs is the same for every team: the connections that were open, what the node held in memory, the work it was doing.
+How often you release decides what you get back.
 
- * the application holds something a restart loses: LiveView pages, WebSockets, state in memory, jobs and messages in progress;
- * you release often, and each release should not disconnect everyone;
- * you run on hosts or virtual machines you control, in a cloud or not;
- * you want one place for the logs, a shell, the processes and the versions of every node.
+ * **You release many times a week, because the code moves fast.** Each release is a restart today, so availability goes down as the team gets faster. With hot upgrades most releases are not restarts, and shipping more stops costing more.
+ * **You release once a week, or less.** Each release carries more, and leaves you the time to prepare it as an upgrade: read what changes, write the instructions the generator cannot, apply it on staging first. The release of the week goes out in the middle of the day, without a maintenance window.
 
-**It does not fit when**
+Either way you also get one place for the logs, a shell, the processes and the versions of every node, and a node that is restarted when it crashes and taken back to the previous version when a new one does not hold.
 
- * the application is stateless and a rolling restart behind a load balancer is already invisible;
- * the platform has to be a container orchestrator: DeployEx manages releases on a host, it does not schedule containers;
- * the nodes of one application are spread over many hosts and have to form one cluster. DeployEx connects the nodes of a host, and connecting hosts is left to the application.
+What it asks for:
+
+ * **Hosts or virtual machines**, in a cloud or not. DeployEx runs the release on the host, and a hot upgrade changes the code of the node that was running. Where a deployment replaces the instance, as with containers, every release is a restart.
+ * **Your own clustering across hosts.** DeployEx connects the nodes of a host to each other, and connecting hosts is left to the application.
+
+An application that holds nothing, where a rolling restart behind a load balancer is already invisible, has little to gain from hot upgrades, and still gets the rest.
 
 **Hot upgrades are a choice for each release, not a commitment.**
 Every release can be deployed in full, and that is what DeployEx does unless the release carries what a hot upgrade needs.
