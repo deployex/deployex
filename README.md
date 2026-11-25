@@ -27,7 +27,14 @@ How often you release decides what you get back.
  * **You release many times a week, because the code moves fast.** Each release is a restart today, so availability goes down as the team gets faster. With hot upgrades most releases are not restarts, and shipping more stops costing more.
  * **You release once a week, or less.** Each release carries more, and leaves you the time to prepare it as an upgrade: read what changes, write the instructions the generator cannot, apply it on staging first. The release of the week goes out in the middle of the day, without a maintenance window.
 
+ * **You have a fix that cannot wait for the next release.** Every team ships hotfixes, whatever its cadence, and a hotfix is the smallest release there is. As a hot upgrade it is loaded into the running nodes in seconds, when it is needed, without restarting everything to change a few lines.
+
 Either way you also get one place for the logs, a shell, the processes and the versions of every node, and a node that is restarted when it crashes and taken back to the previous version when a new one does not hold.
+
+**It does not replace your observability tools.**
+Datadog, Honeycomb, Grafana and the like keep doing what they are for: history, alerts, traces across services.
+DeployEx gives you the fast view that sits next to the deployment, with nothing to instrument and nothing to set up: the memory, processes, ports and atoms of each node, its applications and its processes, the live logs, a shell.
+It is what you open to see what a node is doing right now, and it works with those tools: a hot upgrade moves the version on traces and logs, so they keep telling one release from the next.
 
 What it asks for:
 
