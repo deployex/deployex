@@ -368,9 +368,18 @@ defmodule Deployer.HotUpgrade.PipelinesTest do
         {"0.2.0", [{MyElixir.Orders, :stopped, :started}, {MyElixir.Emails, :timeout, :failed}]}
       )
 
+      Phoenix.PubSub.subscribe(
+        Foundation.PubSub,
+        Foundation.Notifications.topic("pipeline_not_started")
+      )
+
       log = capture_log(fn -> assert :ok = Pipelines.record(ctx.data) end)
+      assert log =~ "[warning]"
       assert log =~ "Pipelines of myelixir 0.1.0 -> 0.2.0: MyElixir.Orders stopped and started"
       assert log =~ "MyElixir.Emails still stopping after 30 seconds and NOT STARTED"
+
+      assert_receive {"pipeline_not_started",
+                      %{name: "myelixir", version: "0.2.0", pipelines: ["MyElixir.Emails"]}}
 
       assert %{
                text: "relup",
@@ -379,6 +388,20 @@ defmodule Deployer.HotUpgrade.PipelinesTest do
                  %{name: "MyElixir.Emails", stopped: "timeout", started: "failed"}
                ]
              } = Catalog.relup("myelixir", "0.1.0", "0.2.0")
+    end
+
+    test "one that is still starting is not reported as down", ctx do
+      ctx.keep.(ctx.with_instructions)
+      expect_result({"0.2.0", [{MyElixir.Orders, :timeout, :timeout}]})
+
+      Phoenix.PubSub.subscribe(
+        Foundation.PubSub,
+        Foundation.Notifications.topic("pipeline_not_started")
+      )
+
+      log = capture_log(fn -> assert :ok = Pipelines.record(ctx.data) end)
+      assert log =~ "[info]"
+      refute_receive {"pipeline_not_started", _payload}, 100
     end
 
     test "keeps an empty list for an application without pipelines", ctx do

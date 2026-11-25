@@ -210,6 +210,9 @@ defmodule Foundation.Notifications.PagerDutyTest do
          "error"},
         {"version_ghosted",
          %{node: :n@h, sname: "s", name: "app", version: "1.0", reason: "not running"}, "error"},
+        {"pipeline_not_started",
+         %{node: :n@h, sname: "s", name: "app", version: "1.0", pipelines: ["App.Orders"]},
+         "error"},
         {"deployment_rollback",
          %{
            node: :n@h,
