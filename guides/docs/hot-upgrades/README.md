@@ -120,11 +120,13 @@ There is nothing to turn on, and nothing to add to the application.
 ### What is left to the application
 
 DeployEx keeps the configuration, the version, the protocols, the pipelines and the job queues in step with an upgrade.
-Three things it cannot do, because only the application knows what they are. Each is a rule of [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades#good-practices-for-a-project-that-can-be-hot-upgraded), and each was seen on a running application.
+Five things it cannot do, because only the application knows what they are. Each is a rule of [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades#good-practices-for-a-project-that-can-be-hot-upgraded), and each was seen on a running application.
 
  * **The state of its processes.** A struct that gains a field is a change of shape: a process that held the previous one fails on its next message with a `KeyError`, is started again by its supervisor, and has lost what it held. It needs a `code_change/3`, written with a struct literal and not with a call into the module that defines the struct, which may still be the previous version when the migration runs.
  * **Requests in flight.** The process serving a request is inside the application's code, and is killed when a module it is running through is replaced: the client gets no response, or part of one. It only concerns requests that last, a download, an upload, an export, and only an upgrade that changes their modules. Keep long work in a job, which is tried again.
  * **Database connections.** The pool is kept, and each connection keeps the statements it has prepared. A migration that changes the type of a column makes each of those fail once, with `cached plan must not change result type`. Change a type in two releases: add the new column, then drop the old one.
+ * **Long-lived tasks.** DeployEx makes the release permanent as soon as it is installed, and that is when the previous code of a module is purged: a process still inside it is killed. A task started with an anonymous function of a module the release changes, `Task.start(fn -> ... end)`, `Task.async`, `start_async` in a LiveView, is one, whatever it loops on, and a database transaction it holds open is rolled back. Start it with a module, a function and arguments, have it loop through the module, and it goes on with the new code, unless it is blocked for the whole of the upgrade.
+ * **Connections held by a dependency.** A library that changes what the process of a connection holds loses the connections that are open. The upgrade of Bandit from 1.14 to 1.15 closed each HTTP/2 connection on its next request, with a `GOAWAY`, and the client opened a new one. Read what a dependency changed in its connection processes, and not only in the ones it starts once.
 
 ### Telling the application that it was hot-upgraded
 
@@ -198,7 +200,7 @@ DeployEx brings the version on traces and logs up to date itself, and `config_ch
 | Pages that are already open (Phoenix) | A hot upgrade disconnects no one | Broadcast, and let the pages that subscribed decide what to show |
 | A value a process took when it started | A database pool keeps the password it connected with, a client keeps the token it was built with | Restart that process. It applies to secrets too, see [Secrets from 1Password](/guides/docs/yaml/README.md#secrets-from-1password) |
 | A cache filled at boot | Nothing ran again to fill it: an ETS table, a `:persistent_term`, a file read once | Fill it again |
-| What a library was given once at boot | The metrics of a reporter, such as a PromEx plugin, the queues and the schedule of a job library: the library keeps the list it was started with, and a metric a release adds is not exported | Restart the process that holds the list, from a process of its own as said below |
+| What a library was given once at boot | The metrics of a reporter, such as a PromEx plugin, the queues and the schedule of a job library: the library keeps the list it was started with, and a metric a release adds is not exported. It is so even for what comes from the configuration: after a release that adds a queue to Oban, the application environment has it and Oban, which read it when it started, does not | Restart the process that holds the list, from a process of its own as said below |
 | A telemetry handler attached with `&handle/4` | The capture belongs to the version of the module that attached it. After an upgrade of that module the handler fails on its first event and Telemetry detaches it | Attach `&__MODULE__.handle/4`, which needs nothing afterwards |
 
 Two rules follow from where the callback runs, which is inside the application controller of the node:
