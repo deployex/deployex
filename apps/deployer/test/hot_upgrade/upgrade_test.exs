@@ -272,6 +272,126 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
              "HOT UPGRADE version DETECTED - [%Deployer.HotUpgrade.Jellyfish{name: \"cowboy\", type: \"dependency\", from: \"0.1.0\", to: \"0.2.0\"}]"
   end
 
+  describe "check/1 with the files of another upgrade in the release" do
+    setup %{
+      app_name: app_name,
+      current_path: current_path,
+      new_path: new_path,
+      from_version: from_version,
+      to_version: to_version,
+      var_path: var_path
+    } do
+      File.mkdir_p!("#{current_path}/releases/#{to_version}")
+      File.write!("#{var_path}/#{app_name}-#{to_version}.tar.gz", "")
+
+      # The upgrade of the project itself, from the running version to the new one
+      write_upgrade!(new_path, "#{app_name}-#{to_version}", app_name, @valid_jellyfish_file)
+
+      # The release that is running, as DeployEx keeps its .rel once installed
+      File.write!(
+        "#{current_path}/releases/#{app_name}-#{from_version}.rel",
+        rel(app_name, from_version, [{app_name, from_version}, {"cowboy", "0.2.0"}])
+      )
+
+      # The new one, as it is built
+      File.mkdir_p!("#{new_path}/releases/#{to_version}")
+
+      File.write!(
+        "#{new_path}/releases/#{to_version}/#{app_name}.rel",
+        rel(app_name, to_version, [{app_name, to_version}, {"cowboy", "0.2.0"}])
+      )
+
+      :ok
+    end
+
+    test "ignores a dependency that the running release already has at that version", context do
+      # cowboy went from 0.1.0 to 0.2.0 in an earlier release, and has not moved since
+      write_upgrade!(context.new_path, "cowboy-0.2.0", "cowboy", @valid_jellyfish_library_file)
+
+      log = capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :hot_upgrade, jellyfish_info: [info]}}
+      assert %{name: "testapp", type: "project"} = info
+      assert log =~ "Ignoring the jellyfish.json of another upgrade: lib/cowboy-0.2.0/ebin/"
+    end
+
+    test "keeps a dependency that the running release has at another version", context do
+      File.write!(
+        "#{context.current_path}/releases/#{context.app_name}-#{context.from_version}.rel",
+        rel(context.app_name, context.from_version, [
+          {context.app_name, context.from_version},
+          {"cowboy", "0.1.0"}
+        ])
+      )
+
+      write_upgrade!(context.new_path, "cowboy-0.2.0", "cowboy", @valid_jellyfish_library_file)
+
+      capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :hot_upgrade, jellyfish_info: infos}}
+      assert ["cowboy", "testapp"] = infos |> Enum.map(& &1.name) |> Enum.sort()
+    end
+
+    test "ignores the upgrade of a previous version of the project, packed with the release",
+         context do
+      # What a rebar3 release built in the same directory carries: 0.0.9 to 0.1.0
+      previous = """
+        {"name": "testapp", "type": "project", "from": "0.0.9", "to": "0.1.0"}
+      """
+
+      write_upgrade!(context.new_path, "#{context.app_name}-0.1.0", context.app_name, previous)
+
+      capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :hot_upgrade, jellyfish_info: [info]}}
+      assert %{from: "0.1.0", to: "0.2.0"} = info
+    end
+
+    test "checks every file when the release has no .rel", context do
+      File.rm!("#{context.new_path}/releases/#{context.to_version}/#{context.app_name}.rel")
+
+      previous = """
+        {"name": "testapp", "type": "project", "from": "0.0.9", "to": "0.1.0"}
+      """
+
+      write_upgrade!(context.new_path, "#{context.app_name}-0.1.0", context.app_name, previous)
+
+      log = capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :full_deployment}}
+      assert log =~ "reason: :no_match_versions"
+    end
+
+    defp check_upgrade(context) do
+      result =
+        UpgradeApp.check(%Check{
+          sname: context.sname,
+          name: context.app_name,
+          language: "elixir",
+          download_path: "#{context.var_path}/#{context.app_name}-#{context.to_version}.tar.gz",
+          current_path: context.current_path,
+          new_path: context.new_path,
+          from_version: context.from_version,
+          to_version: context.to_version
+        })
+
+      with {:ok, check} <- result, do: send(self(), {:checked, check})
+      result
+    end
+
+    defp write_upgrade!(new_path, lib, app, jellyfish) do
+      ebin = "#{new_path}/lib/#{lib}/ebin"
+      File.mkdir_p!(ebin)
+      File.write!("#{ebin}/#{app}.appup", @valid_appup_file)
+      File.write!("#{ebin}/jellyfish.json", jellyfish)
+    end
+
+    defp rel(name, version, libs) do
+      apps = Enum.map_join(libs, ",", fn {app, vsn} -> "{#{app},\"#{vsn}\"}" end)
+      "{release,{\"#{name}\",\"#{version}\"},{erts,\"14.1.1\"},[#{apps}]}.\n"
+    end
+  end
+
   @tag :capture_log
   test "check/1 Elixir invalid appup version, return hot upgrade not detected", %{
     sname: sname,

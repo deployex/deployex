@@ -359,7 +359,10 @@ defmodule Deployer.HotUpgrade.Application do
     # dependencies that were hot-upgraded alongside it. The glob is the same
     # for both languages: Jellyfish and rebar3_jellyfish_plugin write the same
     # jellyfish.json shape at the same lib/<app>-<vsn>/ebin/ location.
-    jellyfish_files = Path.wildcard("#{new_path}/lib/*-*/ebin/jellyfish.json")
+    jellyfish_files =
+      "#{new_path}/lib/*-*/ebin/jellyfish.json"
+      |> Path.wildcard()
+      |> jellyfish_files_of_upgrade(check)
 
     case check_jellyfish_files(jellyfish_files, from_version, to_version) do
       {:ok, jellyfish_info} ->
@@ -1275,6 +1278,84 @@ defmodule Deployer.HotUpgrade.Application do
   rescue
     _ -> inspect(term)
   end
+
+  # A release can carry the jellyfish.json of an upgrade that is not this one, when it was
+  # built in a directory that built others before:
+  #
+  #   * under the library of a previous version, which a rebar3 release packs with its own.
+  #     One of the project would not match the versions of this upgrade, and turn it into
+  #     a full deployment
+  #   * for a dependency that moved in an earlier release and not since, which would be
+  #     reported as moving in every release
+  #
+  # Only the libraries the new release lists count, and among those, a dependency the
+  # running release does not already have at that version. A release whose .rel cannot be
+  # read is checked as it always was, with every file
+  defp jellyfish_files_of_upgrade(files, %Check{} = check) do
+    new_libs = release_libs(check.new_path, check.name, check.to_version)
+    running_libs = release_libs(check.current_path, check.name, check.from_version)
+
+    {kept, ignored} =
+      Enum.split_with(files, fn file ->
+        in_release?(file, new_libs) and not already_running?(file, running_libs)
+      end)
+
+    if ignored != [] do
+      Logger.info(
+        "Ignoring the jellyfish.json of another upgrade: " <>
+          Enum.map_join(ignored, ", ", &Path.relative_to(&1, check.new_path))
+      )
+    end
+
+    kept
+  end
+
+  defp in_release?(_file, nil), do: true
+
+  # .../lib/<app>-<vsn>/ebin/jellyfish.json
+  defp in_release?(file, libs),
+    do: MapSet.member?(libs, file |> Path.dirname() |> Path.dirname() |> Path.basename())
+
+  defp already_running?(_file, nil), do: false
+
+  defp already_running?(file, libs) do
+    case Jellyfish.decode_jellyfish_file(file) do
+      %{type: "dependency", name: name, to: to} when is_binary(name) and is_binary(to) ->
+        MapSet.member?(libs, "#{name}-#{to}")
+
+      _project ->
+        false
+    end
+  rescue
+    # A file that cannot be read is left to check_jellyfish_files/3
+    _error -> false
+  end
+
+  # The "<app>-<vsn>" libraries of a release, from its .rel. It is in the directory of the
+  # version in a release as it is built, and next to it, with the version in its name,
+  # once DeployEx has installed it. nil when there is none that is the one of this version
+  @spec release_libs(String.t() | nil, String.t() | nil, any()) :: MapSet.t() | nil
+  defp release_libs(path, name, version) when is_binary(path) and is_binary(name) do
+    version = to_string(version)
+
+    Enum.find_value(
+      [
+        "#{path}/releases/#{version}/#{name}.rel",
+        "#{path}/releases/#{name}-#{version}.rel",
+        "#{path}/releases/#{name}.rel"
+      ],
+      fn rel_file ->
+        with {:ok, [{:release, {_name, rel_version}, _erts, apps}]} <- :file.consult(rel_file),
+             true <- to_string(rel_version) == version do
+          MapSet.new(apps, fn app -> "#{elem(app, 0)}-#{elem(app, 1)}" end)
+        else
+          _unreadable -> nil
+        end
+      end
+    )
+  end
+
+  defp release_libs(_path, _name, _version), do: nil
 
   defp check_jellyfish_files(files, from_version, to_version) do
     response =
