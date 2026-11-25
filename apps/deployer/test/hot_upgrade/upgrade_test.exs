@@ -429,8 +429,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
     var_path: var_path
   } do
     # rebar3_jellyfish_plugin writes both files straight into lib/<app>-<vsn>/ebin/ at
-    # build time (via a relx overlay), so unlike the old rebar3_appup_plugin workflow
-    # there is no priv/appup staging step for this test to simulate.
+    # build time (via a relx overlay), so that is where this test puts them.
     new_lib_ebin_path = "#{new_path}/lib/#{app_name}-#{to_version}/ebin"
     new_releases_path = "#{new_path}/releases"
     current_releases_path = "#{current_path}/releases/#{to_version}"
@@ -619,11 +618,10 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
   } do
     root = ~c"/tmp/deployex/varlib/service/#{app_name}/1/current"
 
-    # do_make_relup's only erlang-specific behavior left is the .rel rename below -
+    # The only erlang-specific behavior of do_make_relup is the .rel rename below:
     # rebar3_jellyfish_plugin writes the .appup straight into lib/<app>-<vsn>/ebin/ at
     # build time, and release_handler:unpack_release/1 carries it into current_path
-    # as-is, so there is no priv/appup copy step left here to exercise or seed a
-    # fixture file for, unlike the old rebar3_appup_plugin flow.
+    # as-is, so there is no fixture file to seed for it.
     current_releases_path = "#{current_path}/releases"
 
     File.mkdir_p!(current_releases_path)
