@@ -117,6 +117,15 @@ There is nothing to turn on, and nothing to add to the application.
  * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be resumed is written down before any queue is paused.
  * **What happened is kept**, with the relup: the queues that were paused, how many jobs were still running when the wait ended (`null` when the queues could not be checked), and whether the queues were resumed. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `jobs`. The code is `apps/deployer/priv/relup/jobs_pause.erl` and `jobs_resume.erl`.
 
+### What is left to the application
+
+DeployEx keeps the configuration, the version, the protocols, the pipelines and the job queues in step with an upgrade.
+Three things it cannot do, because only the application knows what they are. Each is a rule of [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades#good-practices-for-a-project-that-can-be-hot-upgraded), and each was seen on a running application.
+
+ * **The state of its processes.** A struct that gains a field is a change of shape: a process that held the previous one fails on its next message with a `KeyError`, is started again by its supervisor, and has lost what it held. It needs a `code_change/3`, written with a struct literal and not with a call into the module that defines the struct, which may still be the previous version when the migration runs.
+ * **Requests in flight.** The process serving a request is inside the application's code, and is killed when a module it is running through is replaced: the client gets no response, or part of one. It only concerns requests that last, a download, an upload, an export, and only an upgrade that changes their modules. Keep long work in a job, which is tried again.
+ * **Database connections.** The pool is kept, and each connection keeps the statements it has prepared. A migration that changes the type of a column makes each of those fail once, with `cached plan must not change result type`. Change a type in two releases: add the new column, then drop the old one.
+
 ### Telling the application that it was hot-upgraded
 
 A hot upgrade replaces code without restarting anything, so nothing in the application runs again on its own: whatever it read or cached when it booted stays as it was.
@@ -189,6 +198,8 @@ DeployEx brings the version on traces and logs up to date itself, and `config_ch
 | Pages that are already open (Phoenix) | A hot upgrade disconnects no one | Broadcast, and let the pages that subscribed decide what to show |
 | A value a process took when it started | A database pool keeps the password it connected with, a client keeps the token it was built with | Restart that process. It applies to secrets too, see [Secrets from 1Password](/guides/docs/yaml/README.md#secrets-from-1password) |
 | A cache filled at boot | Nothing ran again to fill it: an ETS table, a `:persistent_term`, a file read once | Fill it again |
+| What a library was given once at boot | The metrics of a reporter, such as a PromEx plugin, the queues and the schedule of a job library: the library keeps the list it was started with, and a metric a release adds is not exported | Restart the process that holds the list, from a process of its own as said below |
+| A telemetry handler attached with `&handle/4` | The capture belongs to the version of the module that attached it. After an upgrade of that module the handler fails on its first event and Telemetry detaches it | Attach `&__MODULE__.handle/4`, which needs nothing afterwards |
 
 Two rules follow from where the callback runs, which is inside the application controller of the node:
 
