@@ -2,6 +2,8 @@
 # See guides/docs/docker/README.md
 services:
   deployex:
+    # Named here so the Kubernetes trial loads the same image whatever the compose project is
+    image: deployex-trial:latest
     build:
       context: ../..
       dockerfile: devops/docker/Dockerfile

@@ -21,7 +21,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: deployex
-          image: docker-deployex:latest
+          image: deployex-trial:latest
           imagePullPolicy: Never
           envFrom:
             - secretRef:
@@ -46,7 +46,8 @@ spec:
             - name: nginx
               mountPath: /etc/nginx/nginx.conf
               subPath: nginx.conf
-          # The pod is ready when the application answers through nginx
+          # The pod is ready when the application answers through nginx. The dashboard
+          # has a Service of its own, which does not wait for that
           readinessProbe:
             httpGet:
               path: /
@@ -83,6 +84,20 @@ spec:
       port: 80
       targetPort: 8080
       nodePort: 30080
+---
+# The dashboard has to answer when the application does not: before one is published, and
+# when a release is bad. A Service sends nothing to a pod that is not ready unless it
+# publishes the addresses that are not
+apiVersion: v1
+kind: Service
+metadata:
+  name: deployex-dashboard
+spec:
+  type: NodePort
+  publishNotReadyAddresses: true
+  selector:
+    app: deployex
+  ports:
     - name: dashboard
       port: 5001
       targetPort: 5001

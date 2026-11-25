@@ -13,7 +13,7 @@ fi
 
 (
   while sleep "${LOGROTATE_INTERVAL_SECONDS:-300}"; do
-    logrotate -s /var/lib/deployex/logrotate.status /etc/deployex/logrotate.conf || true
+    logrotate -s /var/lib/deployex/logrotate.status /opt/logrotate.conf || true
   done
 ) &
 

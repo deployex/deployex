@@ -127,6 +127,7 @@ dev-tls: ## Create TLS distribution certificates and /tmp/inet_tls.conf for make
 
 
 docker-up: ## Build and start DeployEx and nginx in containers: dashboard on :5001, the app on :8080
+	@mkdir -p devops/docker/bucket
 	$(DOCKER_COMPOSE) up -d --build
 	@echo "DeployEx: http://localhost:5001 (admin / deployex). Publish an app with: make docker-app"
 

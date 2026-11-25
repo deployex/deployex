@@ -28,8 +28,9 @@ RUN useradd --create-home --shell /bin/bash deployex \
     && chown -R deployex:deployex /opt/deployex /var/lib/deployex /var/log/deployex /var/log/monitored-apps /certs /bucket
 COPY --from=builder --chown=deployex:deployex /release /opt/deployex
 COPY --from=builder --chown=deployex:deployex /certs/ca.crt /certs/deployex.crt /certs/deployex.key /certs/
-# The log files of the applications are rotated from the entrypoint, see logrotate.conf
-COPY --chown=deployex:deployex devops/docker/logrotate.conf /etc/deployex/logrotate.conf
+# The log files of the applications are rotated from the entrypoint, see logrotate.conf.
+# It is not in /etc/deployex: a volume mounted there for deployex.yaml would hide it
+COPY --chown=deployex:deployex devops/docker/logrotate.conf /opt/logrotate.conf
 COPY --chown=deployex:deployex devops/docker/entrypoint.sh /opt/entrypoint.sh
 USER deployex
 # erlexec, which runs the applications, does not start without a shell to run them with,

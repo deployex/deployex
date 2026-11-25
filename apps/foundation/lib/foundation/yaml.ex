@@ -688,13 +688,14 @@ defmodule Foundation.Yaml do
   defp parse_enable_restart(nil), do: @default_monitoring_enable_restart
   defp parse_enable_restart(enable_restart), do: enable_restart
 
-  # A missing value stays nil so the config provider keeps the release config.
+  # A missing value is off: the applications write to their files only.
   defp parse_monitored_app_log_stdout(nil), do: false
   defp parse_monitored_app_log_stdout(value) when is_boolean(value), do: value
 
   defp parse_monitored_app_log_stdout(value),
     do: raise("monitored_app_log_stdout #{inspect(value)} not supported, expected true or false")
 
+  # A missing value stays nil so the config provider keeps the release config.
   defp parse_enable_release_check(nil), do: nil
   defp parse_enable_release_check(value) when is_boolean(value), do: value
 

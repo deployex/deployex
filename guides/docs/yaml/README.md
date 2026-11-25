@@ -567,7 +567,7 @@ These fields require a **full DeployEx restart**:
 - `var_path` - Managed data directory
 - `log_path` - DeployEx logs directory
 - `monitored_app_log_path` - Monitored apps logs directory
-- `monitored_app_log_stdout` - Also writes what the applications print to the output of DeployEx itself, unchanged: their stdout to its stdout and their stderr to its stderr. For DeployEx in a container, where the logs are collected from the output of the main process. The files and the logs of the dashboard stay as they are
+- `monitored_app_log_stdout` - Also writes what the applications print to the output of DeployEx itself, without a prefix and one whole line at a time: their stdout to its stdout and their stderr to its stderr. For DeployEx in a container, where the logs are collected from the output of the main process. The files and the logs of the dashboard stay as they are
 
 ### How Runtime Upgrades Work
 

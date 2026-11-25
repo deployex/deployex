@@ -97,7 +97,7 @@ With the sample application, on Docker 29 and an arm64 host, four requests a sec
 ### What to know before going further
 
  * **Both versions answer during a full deployment.** The new instance accepts connections a couple of seconds after it starts, and DeployEx waits for it to be ready, 30 seconds in the run above, before it stops the previous one. nginx sends requests to both meanwhile. Nothing failed, and a release that is bad would get half of the requests for that long. A proxy that checks a readiness path of the application before it sends traffic closes that window. It is tracked, with the ways to close it, in [issue 394](https://github.com/deployex/deployex/issues/394).
- * **The logs of the application are in the output of the container** because `deployex.yaml` sets `monitored_app_log_stdout: true`. An application writes to files under `/var/log/monitored-apps`, which DeployEx follows for its dashboard, and without that option `docker logs` and `kubectl logs` show DeployEx only. With it, each piece DeployEx reads is also written to its own output, unchanged, so the lines of an application that logs JSON stay JSON. The lines of DeployEx itself are in the same output, as text.
+ * **The logs of the application are in the output of the container** because `deployex.yaml` sets `monitored_app_log_stdout: true`. An application writes to files under `/var/log/monitored-apps`, which DeployEx follows for its dashboard, and without that option `docker logs` and `kubectl logs` show DeployEx only. With it, what DeployEx reads is also written to its own output, without a prefix and one whole line at a time, so the lines of an application that logs JSON stay JSON and are not mixed with the lines of another application or of DeployEx itself, which are in the same output, as text. A line that has no end yet is written after a second.
  * **The log files are rotated by logrotate**, which the image installs, with the rule the cloud guides put on a host: 20 MB a file, seven kept, `copytruncate` since the application keeps its file open. A container has no cron, so `entrypoint.sh` runs it every five minutes next to DeployEx, `LOGROTATE_INTERVAL_SECONDS` to change that.
  * **`SHELL` has to be set.** erlexec, which runs the applications, does not start without it, and a container sets none. The `Dockerfile` sets it.
  * **The certificates are made when the image is built.** They are for the TLS distribution between DeployEx and the applications, and are enough for a trial. Mount your own at `/certs` for anything else.
@@ -110,7 +110,7 @@ With the sample application, on Docker 29 and an arm64 host, four requests a sec
 The same two containers as one pod, on a local cluster made with [kind](https://kind.sigs.k8s.io). It needs `kind` and `kubectl` installed.
 
 ```bash
-make k8s-up        # the cluster, the image, the ConfigMap, the Secret and the pod
+make k8s-up        # the cluster, the image, the ConfigMap, the Secret and the pod. Run it again after a change
 make docker-app    # publishes to the same bucket, which the node mounts
 make k8s-logs
 make k8s-down
@@ -123,6 +123,7 @@ What is in [`devops/docker/kubernetes`](https://github.com/deployex/deployex/tre
  * **One Deployment with one replica and the `Recreate` strategy**, so there are never two pods, each with its own DeployEx, on the same bucket.
  * **`deployex.yaml` and `nginx.conf` in a ConfigMap, the three secrets of DeployEx in a Secret.**
  * **The readiness probe is on nginx**, a request to the application through it: the pod is ready when the application answers, and not before one is published.
+ * **The dashboard has a Service of its own**, with `publishNotReadyAddresses`, so it answers before an application is published and when a release is bad, which is when it is needed.
  * **A memory limit of 1.5 GB** on the DeployEx container, which covers DeployEx, the application and a second instance of it during a full deployment. DeployEx used 275 MB and the sample application 200 MB.
  * **The bucket is a directory of the node**, for the trial. On a real cluster it is `release_adapter: "s3"` or `"gcp-storage"`.
 
