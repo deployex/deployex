@@ -3,6 +3,11 @@ defmodule DeployexWeb.UserLoginLive do
 
   alias DeployexWeb.OAuth.Config
 
+  # The credentials the sign-in page is filled in with, for a developer. Read when DeployEx is
+  # compiled and not when it runs: only config/dev.exs sets them, so a release, which is built
+  # for production, has none whatever its configuration says afterwards
+  @dev_login Application.compile_env(:deployex_web, :dev_login, [])
+
   def render(assigns) do
     ~H"""
     <div
@@ -82,8 +87,7 @@ defmodule DeployexWeb.UserLoginLive do
       socket
       |> assign(form: form)
       |> assign(oauth_configured?: Config.configured?())
-      # Only set by config/dev.exs, so a developer signs in with one click
-      |> assign(dev_login: Application.get_env(:deployex_web, :dev_login, []))
+      |> assign(dev_login: @dev_login)
 
     {:ok, socket, temporary_assigns: [form: form]}
   end

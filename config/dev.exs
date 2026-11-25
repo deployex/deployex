@@ -54,7 +54,8 @@ config :deployex_web, DeployexWeb.Endpoint,
   ]
 
 # The sign-in page comes with the default credentials filled in, one click signs in. They
-# are the ones of config/config.exs, and only this file sets them
+# are the ones of config/config.exs. Only this file sets them, and they are compiled into
+# the page, so a release never has them
 config :deployex_web, :dev_login, username: "admin", password: "deployex"
 
 # Enable dev routes for dashboard and mailbox
