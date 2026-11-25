@@ -56,7 +56,7 @@ Open the file `rebar.config` and apply the following configurations:
 Integrate the [rebar3_jellyfish_plugin](https://github.com/deployex/rebar3_jellyfish_plugin) adding the following to `rebar.config`:
 ```erlang
 {project_plugins, [
-    {rebar3_jellyfish_plugin, "0.1.1"}
+    {rebar3_jellyfish_plugin, "0.1.5"}
 ]}.
 
 {provider_hooks, [
@@ -89,7 +89,8 @@ Modify/Add the profiles to prepare the release:
     %% to be explicitly included like this
     {prod, [
         {relx, [
-            {mode, dev},
+            {dev_mode, false},
+            {include_erts, true},
 
             %% use minimal mode to exclude ERTS
             %% {mode, minimal}
@@ -190,8 +191,8 @@ rebar3 as prod tar
 Pack the release and move it to the distributed folder and updated the version:
 ```bash
 export app_name=myerlangapp
-cp _build/prod/rel/${app_name}/${app_name}-0.2.4.tar.gz /Users/testeves/Workspace/private/deployex/tmp/deployex/bucket/dist/${app_name}
-echo "{\"version\":\"0.2.4\",\"pre_commands\": [],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
+cp _build/prod/rel/${app_name}/${app_name}-0.1.0.tar.gz /tmp/deployex/bucket/dist/${app_name}
+echo "{\"version\":\"0.1.0\",\"pre_commands\": [],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
 ```
 
 ## 4. Running DeployEx and deploy the app
