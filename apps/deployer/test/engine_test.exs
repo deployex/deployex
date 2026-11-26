@@ -1593,6 +1593,91 @@ defmodule Deployer.EngineTest do
     end
 
     @tag :capture_log
+    test "A new version waits for the deployment lock, and holds it while it deploys" do
+      name = "myelixir"
+      from_version = "1.0.0"
+      to_version = "2.0.0"
+      ref = make_ref()
+      pid = self()
+
+      # Another DeployEx is deploying the application
+      holder =
+        spawn(fn ->
+          :ok = Deployer.Lock.acquire(name, %{to_version: to_version, hold_ms: 60_000})
+          send(pid, :lock_taken)
+
+          receive do
+            :release -> Deployer.Lock.release(name)
+          end
+        end)
+
+      assert_receive :lock_taken
+
+      Deployer.StatusMock
+      |> expect(:list_installed_apps, fn _name -> [] end)
+      # The version of the instance is the new one once the deployment has started it
+      |> stub(:current_version, fn _sname ->
+        if Process.get("start_service", 0) > 1, do: to_version, else: from_version
+      end)
+      |> stub(:update, fn _sname -> :ok end)
+      |> stub(:set_current_version_map, fn _sname, _release, _attrs -> :ok end)
+
+      Deployer.MonitorMock
+      |> stub(:start_service, fn _service ->
+        called = Process.get("start_service", 0)
+        Process.put("start_service", called + 1)
+        if called > 0, do: send(pid, {:handle_ref_event, ref})
+        {:ok, self()}
+      end)
+      |> stub(:stop_service, fn _name, _sname -> :ok end)
+
+      Deployer.ReleaseMock
+      |> stub(:download_version_map, fn _app_name ->
+        called = Process.get("download_version_map", 0)
+        Process.put("download_version_map", called + 1)
+        version = if called > 0, do: to_version, else: from_version
+        %{version: version, hash: "local", pre_commands: []}
+      end)
+      |> stub(:download_release, fn _app_name, _version, _download_path -> :ok end)
+
+      Deployer.HotUpgradeMock
+      |> stub(:prepare_new_path, fn _name, _language, _to_version, _new_path -> :ok end)
+      |> stub(:check, fn check -> {:ok, %{check | deploy: :full_deployment}} end)
+
+      with_mock System, [:passthrough],
+        cmd: fn "tar", ["-x", "-f", _source_path, "-C", _dest_path] -> {"", 0} end do
+        assert {:ok, worker} =
+                 Engine.Worker.start_link(%Engine.Worker{
+                   deploy_rollback_timeout_ms: 5_000,
+                   deploy_schedule_interval_ms: 50,
+                   name: name,
+                   language: "elixir"
+                 })
+
+        # It asks every tick, and does not deploy
+        refute_receive {:handle_ref_event, ^ref}, 500
+
+        assert [%{state: :waiting, owner: ^worker, to_version: ^to_version}] =
+                 Enum.filter(Deployer.Lock.list(), &(&1.name == name and &1.owner == worker))
+
+        send(holder, :release)
+        assert_receive {:handle_ref_event, ^ref}, 1_000
+
+        # The window is open, so the lock is held by the worker
+        :sys.get_state(worker)
+
+        assert [%{state: :held, owner: ^worker}] =
+                 Enum.filter(Deployer.Lock.list(), &(&1.name == name))
+
+        # The application runs, the deployment is over and the lock is given back
+        sname = :sys.get_state(worker).deployments[1].sname
+        GenServer.cast(worker, {:application_running, sname})
+        Process.sleep(200)
+        assert Enum.filter(Deployer.Lock.list(), &(&1.name == name)) == []
+      end
+    end
+
+    @tag :capture_log
     test "Check for new version - ignore ghosted version" do
       name = "myelixir"
       language = "elixir"
