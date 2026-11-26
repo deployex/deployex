@@ -74,6 +74,40 @@ defmodule DeployexWeb.Applications.WatcherTest do
   end
 
   @tag :capture_log
+  test "GET /applications Review pending readiness changes renders what the probe checks", %{
+    conn: conn
+  } do
+    Deployer.StatusMock
+    |> expect(:monitoring, fn -> {:ok, FixtureStatus.list()} end)
+    |> expect(:subscribe, fn -> :ok end)
+    |> stub(:history_version_list, fn _name, _options -> FixtureStatus.versions() end)
+
+    {:ok, liveview, _html} = live(conn, ~p"/applications")
+
+    changes =
+      put_in(
+        FixtureWatcher.build_pending_changes().summary.applications.details["myphoenixapp"].changes.readiness,
+        %{
+          old: %Foundation.Yaml.Readiness{function: {MyApp.Health, :ready?, 0}},
+          new: %Foundation.Yaml.Readiness{
+            type: :http,
+            scheme: "https",
+            port_key: "PORT",
+            path: "/ready"
+          },
+          apply_strategy: :next_deploy
+        }
+      )
+
+    send(liveview.pid, {:watcher_config_new, Node.self(), changes})
+
+    html = liveview |> element("#host-config-review") |> render_click()
+
+    assert html =~ "type: otp min_ready_ms: 30000 function: MyApp.Health.ready?/0"
+    assert html =~ "type: http min_ready_ms: 30000 scheme: https port_key: PORT path: /ready"
+  end
+
+  @tag :capture_log
   test "GET /applications Review pending secrets changes renders where they come from", %{
     conn: conn
   } do
