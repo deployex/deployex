@@ -36,6 +36,8 @@ defmodule Foundation.YamlTest do
   @yaml_app_log_stdout_error "#{@file_paths}/deployex-app-log-stdout-error.yaml"
   @yaml_log_format "#{@file_paths}/deployex-log-format.yaml"
   @yaml_log_format_error "#{@file_paths}/deployex-log-format-error.yaml"
+  @yaml_auto_apply "#{@file_paths}/deployex-config-auto-apply.yaml"
+  @yaml_auto_apply_error "#{@file_paths}/deployex-config-auto-apply-error.yaml"
   @yaml_peers "#{@file_paths}/deployex-peers.yaml"
   @yaml_peers_error "#{@file_paths}/deployex-peers-error.yaml"
   @yaml_shutdown "#{@file_paths}/deployex-shutdown.yaml"
@@ -928,6 +930,35 @@ defmodule Foundation.YamlTest do
       ]) do
         assert_raise RuntimeError,
                      ~s(shutdown_timeout_ms "30s" not supported, expected milliseconds, 0 or more),
+                     fn -> Yaml.load() end
+      end
+    end
+  end
+
+  describe "config_auto_apply" do
+    test "parses true, and is false when absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auto_apply end]}
+      ]) do
+        assert {:ok, %Yaml{config_auto_apply: true}} = Yaml.load()
+      end
+
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        assert {:ok, %Yaml{config_auto_apply: false}} = Yaml.load()
+      end
+    end
+
+    test "rejects what is not true or false" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auto_apply_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(config_auto_apply "yes" not supported, expected true or false),
                      fn -> Yaml.load() end
       end
     end

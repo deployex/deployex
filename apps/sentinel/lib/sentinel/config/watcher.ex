@@ -110,43 +110,7 @@ defmodule Sentinel.Config.Watcher do
   end
 
   def handle_call(:apply_changes, _from, %State{} = state) do
-    Logger.info("ConfigWatcher: Applying pending configuration changes")
-
-    summary = state.pending_changes.summary
-
-    apply_pre_config_changes(summary)
-
-    # Build configuration updates from pending changes
-    config_updates = build_config_updates(state.pending_changes.summary)
-
-    # Apply all configuration updates at once
-    Application.put_all_env(config_updates)
-
-    apply_post_config_changes(summary)
-
-    Logger.info("ConfigWatcher: Successfully applied configuration updates")
-
-    Notifications.notify("config_change_applied", %{
-      node: Node.self(),
-      changes_count: state.pending_changes.changes_count,
-      fields: state.pending_changes.summary |> Map.keys() |> Enum.map(&to_string/1)
-    })
-
-    # Notify subscribers about new changes
-    Phoenix.PubSub.broadcast(
-      Foundation.PubSub,
-      @pubsub_topic_apply,
-      {:watcher_config_apply, Node.self(), state.pending_changes}
-    )
-
-    new_state = %State{
-      state
-      | current_config: state.pending_config,
-        pending_config: nil,
-        pending_changes: nil
-    }
-
-    {:reply, :ok, new_state}
+    {:reply, :ok, apply_pending(state)}
   end
 
   @impl true
@@ -276,8 +240,62 @@ defmodule Sentinel.Config.Watcher do
           })
         end
 
-        %{state | pending_config: yaml_upgradable, pending_changes: pending_changes}
+        state = %{state | pending_config: yaml_upgradable, pending_changes: pending_changes}
+
+        # With config_auto_apply in the file that was just read, nobody is waited for
+        if yaml_config.config_auto_apply do
+          Logger.info("ConfigWatcher: config_auto_apply is on, applying the change(s)")
+          apply_pending(state)
+        else
+          state
+        end
     end
+  end
+
+  # Applies the pending changes, which become the current configuration
+  defp apply_pending(%State{} = state) do
+    Logger.info("ConfigWatcher: Applying pending configuration changes")
+
+    summary = state.pending_changes.summary
+
+    apply_pre_config_changes(summary)
+
+    # Build configuration updates from pending changes
+    config_updates = build_config_updates(state.pending_changes.summary)
+
+    # Apply all configuration updates at once
+    Application.put_all_env(config_updates)
+
+    apply_post_config_changes(summary)
+
+    Logger.info("ConfigWatcher: Successfully applied configuration updates")
+
+    Notifications.notify("config_change_applied", %{
+      node: Node.self(),
+      changes_count: state.pending_changes.changes_count,
+      fields: state.pending_changes.summary |> Map.keys() |> Enum.map(&to_string/1)
+    })
+
+    # Notify subscribers about new changes
+    Phoenix.PubSub.broadcast(
+      Foundation.PubSub,
+      @pubsub_topic_apply,
+      {:watcher_config_apply, Node.self(), state.pending_changes}
+    )
+
+    # Clear any review/apply prompt still shown for the pending changes just applied
+    Phoenix.PubSub.broadcast(
+      Foundation.PubSub,
+      @pubsub_topic_new,
+      {:watcher_config_new, Node.self(), nil}
+    )
+
+    %State{
+      state
+      | current_config: state.pending_config,
+        pending_config: nil,
+        pending_changes: nil
+    }
   end
 
   defp notify_if_removed(%{pending_config: nil}), do: :ok
