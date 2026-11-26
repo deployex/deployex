@@ -5,7 +5,9 @@ defmodule Deployer.Monitor.Supervisor do
   require Logger
 
   alias Deployer.Monitor
-  alias Foundation.Common
+
+  # Over the time an application has to stop, for the monitor to answer or to end
+  @stop_margin_ms 10_000
 
   ### ==========================================================================
   ### GenServer Callbacks
@@ -43,7 +45,9 @@ defmodule Deployer.Monitor.Supervisor do
     spec = %{
       id: Monitor.Application,
       start: {Monitor.Application, :start_link, [service]},
-      restart: :transient
+      restart: :transient,
+      # When DeployEx stops, the monitor gives the application its time to stop
+      shutdown: Monitor.Application.shutdown_timeout_ms(service.sname) + @stop_margin_ms
     }
 
     name
@@ -109,7 +113,14 @@ defmodule Deployer.Monitor.Supervisor do
 
     %{pid: child_pid} = list(format: :map) |> Enum.find(&(&1.name == module_name))
 
-    Common.call_gen_server(child_pid, :stop_service)
+    # The monitor answers when the application is gone, which it has its time for
+    timeout = Monitor.Application.shutdown_timeout_ms(sname) + @stop_margin_ms
+
+    try do
+      GenServer.call(child_pid, :stop_service, timeout)
+    catch
+      _kind, _reason -> {:error, :rescued}
+    end
 
     name
     |> supervisor_name()

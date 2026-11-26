@@ -213,6 +213,7 @@ applications:
     # Deployment Configuration (optional with defaults)
     deploy_rollback_timeout_ms: 600000 # Max deployment time before rollback, and max time for hot upgrade pre-commands to start and to run (default: 600000)
     deploy_schedule_interval_ms: 5000  # Check for new deployments interval (default: 5000)
+    shutdown_timeout_ms: 5000          # Time the application has to stop by itself before it is killed (default: 5000)
 
     # Readiness Configuration (optional with defaults)
     readiness:
@@ -492,6 +493,7 @@ If the secret is missing when the `auth` section is applied, DeployEx logs a war
 - `language` - Application language (Elixir, Erlang, Gleam)
 - `replicas` - Number of application instances
 - `deploy_rollback_timeout_ms` - Deployment rollback timeout. A hot upgrade also gives its pre-commands this long to start, and this long to run once they start
+- `shutdown_timeout_ms` - How long the application has to stop by itself. To stop it, DeployEx sends it a SIGTERM, which starts the shutdown of the VM, and waits for its process to be gone. What is left after this time is killed, and a warning is logged. It is used wherever an application is stopped: the previous instance of a full deployment, a restart from the dashboard or by the watchdog, a deployment that is rolled back, and when DeployEx itself is stopped. Give it the time the application needs to finish what it is doing, to drain its connections in `prep_stop/1` for instance. Where something else stops DeployEx, it has to wait at least as long: `terminationGracePeriodSeconds` of a Kubernetes pod, `TimeoutStopSec` of a systemd unit. `0` kills the application at once, as DeployEx did before this option
 - `deploy_schedule_interval_ms` - Deployment check interval
 - `replica_ports` - Port configuration for replicas
 - `env` - Environment variables

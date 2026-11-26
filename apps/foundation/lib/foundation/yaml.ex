@@ -17,6 +17,7 @@ defmodule Foundation.Yaml do
   @default_language "elixir"
   @default_deploy_rollback_timeout_ms :timer.minutes(10)
   @default_deploy_schedule_interval_ms :timer.seconds(5)
+  @default_shutdown_timeout_ms :timer.seconds(5)
   @default_install_path "/opt/deployex"
   @default_var_path "/var/lib/deployex"
   @default_log_path "/var/log/deployex"
@@ -278,6 +279,7 @@ defmodule Foundation.Yaml do
       :replicas,
       :deploy_rollback_timeout_ms,
       :deploy_schedule_interval_ms,
+      :shutdown_timeout_ms,
       :replica_ports,
       :env,
       :monitoring,
@@ -292,6 +294,7 @@ defmodule Foundation.Yaml do
             replicas: non_neg_integer(),
             deploy_rollback_timeout_ms: non_neg_integer() | nil,
             deploy_schedule_interval_ms: non_neg_integer() | nil,
+            shutdown_timeout_ms: non_neg_integer() | nil,
             replica_ports: [Foundation.Yaml.Ports.t()],
             env: [String.t()],
             monitoring: [{atom(), Foundation.Yaml.Monitoring.t()}],
@@ -731,6 +734,14 @@ defmodule Foundation.Yaml do
     Enum.map(apps, &parse_application/1)
   end
 
+  # How long an application has to stop by itself before it is killed
+  defp parse_shutdown_timeout_ms(nil), do: @default_shutdown_timeout_ms
+  defp parse_shutdown_timeout_ms(value) when is_integer(value) and value >= 0, do: value
+
+  defp parse_shutdown_timeout_ms(value) do
+    raise "shutdown_timeout_ms #{inspect(value)} not supported, expected milliseconds, 0 or more"
+  end
+
   defp parse_application(data) do
     %Foundation.Yaml.Application{
       name: data["name"],
@@ -740,6 +751,7 @@ defmodule Foundation.Yaml do
         data["deploy_rollback_timeout_ms"] || @default_deploy_rollback_timeout_ms,
       deploy_schedule_interval_ms:
         data["deploy_schedule_interval_ms"] || @default_deploy_schedule_interval_ms,
+      shutdown_timeout_ms: parse_shutdown_timeout_ms(data["shutdown_timeout_ms"]),
       replica_ports: parse_ports(data["replica_ports"]),
       env: parse_env(data["env"]),
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),

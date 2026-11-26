@@ -503,6 +503,7 @@ defmodule Sentinel.Config.Watcher do
     |> add_number_changes(:replicas, old_app, new_app, :immediate)
     |> add_number_changes(:deploy_rollback_timeout_ms, old_app, new_app, :immediate)
     |> add_number_changes(:deploy_schedule_interval_ms, old_app, new_app, :immediate)
+    |> add_number_changes(:shutdown_timeout_ms, old_app, new_app, :immediate)
     |> add_replica_ports_changes(old_app, new_app, :full_deploy)
     |> add_env_changes(old_app, new_app, :next_deploy)
     |> add_readiness_changes(old_app, new_app, :next_deploy)
