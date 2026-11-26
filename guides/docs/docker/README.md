@@ -2,14 +2,14 @@
 
 DeployEx is made for a host it shares with the applications it runs. This guide puts both in one container, so that a team that deploys with containers can try hot upgrades without changing how it deploys: the container is still what the platform schedules, restarts and replaces, and DeployEx changes the code of the application inside it.
 
-It is a trial setup, with one container of DeployEx and one of nginx that share a network, the way two containers of a Kubernetes pod do. It runs with Docker alone, and as one pod on a local Kubernetes cluster, which is the last section. What it was run with, what was seen and what is still open are in each.
+It is a trial setup, with one container of DeployEx and one of [HAProxy](https://www.haproxy.org) that share a network, the way two containers of a Kubernetes pod do. It runs with Docker alone, and as one pod on a local Kubernetes cluster, which is the last section. What it was run with, what was seen and what is still open are in each.
 
 ### How it is put together
 
 ```
                      the "pod": one network
       ┌──────────────────────────────────────────────────┐
- 8080 │  nginx ──► 127.0.0.1:4000 or :4001                │
+ 8080 │  HAProxy ──► 127.0.0.1:4000 or :4001              │
  ────►│                 ▲                                │
       │  DeployEx ──────┘ starts the application, and    │
  5001 │     ▲             upgrades it in place           │
@@ -20,10 +20,11 @@ It is a trial setup, with one container of DeployEx and one of nginx that share 
 ```
 
  * **The image has DeployEx and no application.** The application comes from the bucket: a full deployment when the container starts, hot upgrades after that. A container that is replaced comes back on the version `current.json` points at.
- * **nginx gives the application one port.** DeployEx runs an instance on its base port plus 0 to `replicas`, and a full deployment starts the new instance on a free one before it stops the previous. One replica with a base of 4000 is on 4000 or 4001, and `nginx.conf` lists both: a request to a port where nothing listens is refused and sent to the other.
- * **The files are in [`devops/docker`](https://github.com/deployex/deployex/tree/main/devops/docker)**: the `Dockerfile` of DeployEx, `compose.yaml`, `deployex.yaml`, `nginx.conf`, and `publish-app.sh` with the `Dockerfile.app-builder` it uses.
+ * **HAProxy gives the application one port.** DeployEx runs an instance on its base port plus 0 to `replicas`, and a full deployment starts the new instance on a free one before it stops the previous. One replica with a base of 4000 is on 4000 or 4001, and `haproxy.cfg` lists both.
+ * **HAProxy only sends requests to an instance that is ready.** It asks each port every second, with a request, and a port gets traffic after two good answers and loses it after two bad ones. The trial asks for `/`. An application with a readiness path names it in `haproxy.cfg`, see [Ready for requests](#ready-for-requests).
+ * **The files are in [`devops/docker`](https://github.com/deployex/deployex/tree/main/devops/docker)**: the `Dockerfile` of DeployEx, `compose.yaml`, `deployex.yaml`, `haproxy.cfg`, and `publish-app.sh` with the `Dockerfile.app-builder` it uses.
 
-### 1. Start DeployEx and nginx
+### 1. Start DeployEx and HAProxy
 
 From the root of this repository:
 
@@ -51,7 +52,7 @@ make docker-logs
 # Application sname: myphoenixapp-xi0vd1 is running
 ```
 
-The application answers through nginx at [http://localhost:8080](http://localhost:8080).
+The application answers through HAProxy at [http://localhost:8080](http://localhost:8080).
 
 ### 3. Hot upgrade it
 
@@ -75,7 +76,7 @@ The instance and its OS process are the same as before. A release with no appups
 
 | Command | What it does |
 |---|---|
-| `make docker-up` | Builds the image and starts DeployEx and nginx |
+| `make docker-up` | Builds the image and starts DeployEx and HAProxy |
 | `make docker-app` | Builds the application for the image and publishes it |
 | `make docker-logs` | Follows the output of the DeployEx container |
 | `make docker-down` | Stops and removes the containers |
@@ -84,19 +85,40 @@ The instance and its OS process are the same as before. A release with no appups
 
 ### What was seen
 
-With the sample application, on Docker 29 and an arm64 host, four requests a second through nginx:
+With the sample application, on Docker 29 and an arm64 host, ten requests a second through HAProxy:
 
 | Step | Result |
 |---|---|
-| The container starts with 0.5.1 in the bucket | The application answered through nginx 12 seconds later |
-| Hot upgrade, 0.5.1 to 0.5.2 | 345 requests, none failed. Same OS process before and after |
-| Full deployment to 0.5.3 | 161 requests, none failed. The new instance on the other port, the previous one stopped 30 seconds later |
-| The container removed and created again | Back on 0.5.3 in 12 seconds, read from the bucket |
-| `docker compose stop` | Stopped in 11 seconds, exit code 0 |
+| The container starts with a version in the bucket | The application answered through HAProxy 15 seconds later |
+| Hot upgrade | 261 requests, none failed. Same OS process before and after |
+| Full deployment | 793 requests, none failed. The new instance on the other port, the previous one stopped 30 seconds later |
+| The container removed and created again | Back on the same version in 13 seconds, read from the bucket |
+| `docker compose stop` | Stopped in 12 seconds, exit code 0 |
+
+### Ready for requests
+
+An application that opens its port is not always one that can answer: it may still be warming a cache or waiting for a connection. During a full deployment both instances are running, and a proxy that only looks at the port sends requests to the new one from the moment it listens.
+
+To see it, the sample application was given a `/readyz` path that answers 503 for the first 20 seconds of the VM, and a full deployment was run twice, with ten requests a second:
+
+| In front of the application | Requests answered by the instance that was not ready |
+|---|---|
+| A proxy that tries the next port when one refuses the connection | 96 of 792 |
+| HAProxy with `/readyz` as its check | None of 793 |
+
+With the check, the new instance had its first request 22 seconds after it started: the 20 seconds, and two answers a second apart. Both instances answered for the next 8 seconds, until DeployEx stopped the previous one, and no request failed in either run.
+
+Name the readiness path of your application in `haproxy.cfg`:
+
+```
+http-check send meth GET uri /readyz ver HTTP/1.1 hdr Host localhost
+```
+
+The check works on the way out too. An application that makes its readiness path fail when it is asked to stop gets no new request while it shuts down.
 
 ### What to know before going further
 
- * **Both versions answer during a full deployment.** The new instance accepts connections a couple of seconds after it starts, and DeployEx waits for it to be ready, 30 seconds in the run above, before it stops the previous one. nginx sends requests to both meanwhile. Nothing failed, and a release that is bad would get half of the requests for that long. A proxy that checks a readiness path of the application before it sends traffic closes that window. It is tracked, with the ways to close it, in [issue 394](https://github.com/deployex/deployex/issues/394).
+ * **Both versions answer during a full deployment**, from the moment the new instance passes the check of HAProxy until DeployEx stops the previous one, 8 seconds in the run above. A release that answers its check and is still bad gets half of the requests for that long.
  * **The logs of the application are in the output of the container** because `deployex.yaml` sets `monitored_app_log_stdout: true`. An application writes to files under `/var/log/monitored-apps`, which DeployEx follows for its dashboard, and without that option `docker logs` and `kubectl logs` show DeployEx only. With it, what DeployEx reads is also written to its own output, without a prefix and one whole line at a time, so the lines of an application that logs JSON stay JSON and are not mixed with the lines of another application or of DeployEx itself, which are in the same output, as text. A line that has no end yet is written after a second.
  * **The log files are rotated by logrotate**, which the image installs, with the rule the cloud guides put on a host: 20 MB a file, seven kept, `copytruncate` since the application keeps its file open. A container has no cron, so `entrypoint.sh` runs it every five minutes next to DeployEx, `LOGROTATE_INTERVAL_SECONDS` to change that.
  * **`SHELL` has to be set.** erlexec, which runs the applications, does not start without it, and a container sets none. The `Dockerfile` sets it.
@@ -121,21 +143,21 @@ The dashboard is at [http://localhost:5011](http://localhost:5011) and the appli
 What is in [`devops/docker/kubernetes`](https://github.com/deployex/deployex/tree/main/devops/docker/kubernetes):
 
  * **One Deployment with one replica and the `Recreate` strategy**, so there are never two pods, each with its own DeployEx, on the same bucket.
- * **`deployex.yaml` and `nginx.conf` in a ConfigMap, the three secrets of DeployEx in a Secret.**
- * **The readiness probe is on nginx**, a request to the application through it: the pod is ready when the application answers, and not before one is published.
+ * **`deployex.yaml` and `haproxy.cfg` in a ConfigMap, the three secrets of DeployEx in a Secret.**
+ * **The readiness probe is on HAProxy**, a request to the application through it. HAProxy answers 503 while no instance passes its check, so the pod is ready when the application is, and not before one is published.
  * **The dashboard has a Service of its own**, with `publishNotReadyAddresses`, so it answers before an application is published and when a release is bad, which is when it is needed.
  * **A memory limit of 1.5 GB** on the DeployEx container, which covers DeployEx, the application and a second instance of it during a full deployment. DeployEx used 275 MB and the sample application 200 MB.
  * **The bucket is a directory of the node**, for the trial. On a real cluster it is `release_adapter: "s3"` or `"gcp-storage"`.
 
-What was seen, with four requests a second through the Service:
+What was seen, with ten requests a second through the Service:
 
 | Step | Result |
 |---|---|
 | The pod starts with a version in the bucket | Ready, 2 of 2 containers, 16 seconds later |
-| Hot upgrade | No request failed. The pod stayed ready and was not restarted |
-| Full deployment | No request failed. The pod stayed ready and was not restarted |
+| Hot upgrade | 212 requests, none failed. The pod stayed ready and was not restarted |
+| Full deployment | 695 requests, none failed. The pod stayed ready and was not restarted |
 | `kubectl logs` of the DeployEx container | Has the lines of the application |
-| The pod deleted | Gone in 12 seconds, the new one ready 16 seconds after the delete. No answer for 15 seconds in between, there is one pod |
+| The pod deleted | The new one ready 16 seconds after the delete, and no answer until then: there is one pod |
 
 One thing only a cluster showed. The first pod was killed for its memory every time the application started, with the limit at 1.5 GB. A pod on containerd has a limit of open files of about a billion, where Docker gives a million, and the Erlang VM sizes its table of ports from that limit unless it is started with `+Q`. DeployEx is, the applications it starts usually are not, and their VM asked for gigabytes when it booted. `entrypoint.sh` now lowers the limit to 65536 before it starts DeployEx, which the applications inherit, `DEPLOYEX_MAX_OPEN_FILES` to change it.
 

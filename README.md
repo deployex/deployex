@@ -110,7 +110,7 @@ What DeployEx adds to it is in [Hot-Upgrades](guides/docs/hot-upgrades/README.md
 - And much more ...
 
 > [!NOTE]
-> All examples and deployments in this project use NGINX as a reverse proxy and load balancer. However, DeployEx does not depend on NGINX; it is used here purely for convenience.
+> The cloud examples in this project use NGINX as a reverse proxy and load balancer, and the container trial uses HAProxy. DeployEx depends on neither; they are used here purely for convenience.
 
 ## ⚠️ What is coming next? 
 
@@ -276,7 +276,7 @@ Learn how to run DeployEx locally and configure your application for mTLS, hot u
 - [Elixir Umbrella Application - No Ecto](guides/docs/local-elixir-umbrella/README.md)
 - [Gleam Application](guides/docs/local-gleam/README.md)
 - [Erlang Application](guides/docs/local-erlang/README.md)
-- [DeployEx in a container, with nginx in front](guides/docs/docker/README.md)
+- [DeployEx in a container, with HAProxy in front](guides/docs/docker/README.md)
 
 ### Recommended Supporting Repositories
 

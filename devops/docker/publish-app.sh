@@ -36,8 +36,10 @@ docker run --rm \
   deployex-app-builder sh -c "
     set -e
     give_back() {
-      chown -R \"\$HOST_UID:\$HOST_GID\" /bucket
-      find /app -xdev -user root -exec chown -h \"\$HOST_UID:\$HOST_GID\" {} +
+      # A file that cannot be given back, a read-only one of .git on macOS for instance,
+      # does not fail a build that worked
+      chown -R \"\$HOST_UID:\$HOST_GID\" /bucket || true
+      find /app -xdev -user root -exec chown -h \"\$HOST_UID:\$HOST_GID\" {} + || true
     }
     trap give_back EXIT
     mix deps.get --only prod

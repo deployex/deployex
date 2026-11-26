@@ -1,4 +1,4 @@
-# One pod: DeployEx, which runs and upgrades the application, and nginx in front of it.
+# One pod: DeployEx, which runs and upgrades the application, and HAProxy in front of it.
 # The ConfigMap deployex-config and the Secret deployex-secrets are made by up.sh from the
 # files of devops/docker.
 apiVersion: apps/v1
@@ -38,16 +38,17 @@ spec:
               memory: 512Mi
             limits:
               memory: 1536Mi
-        - name: nginx
-          image: nginx:1.27-alpine
+        - name: haproxy
+          image: haproxy:3.2-alpine
           ports:
             - containerPort: 8080
           volumeMounts:
-            - name: nginx
-              mountPath: /etc/nginx/nginx.conf
-              subPath: nginx.conf
-          # The pod is ready when the application answers through nginx. The dashboard
-          # has a Service of its own, which does not wait for that
+            - name: haproxy
+              mountPath: /usr/local/etc/haproxy/haproxy.cfg
+              subPath: haproxy.cfg
+          # The pod is ready when the application answers through HAProxy, which only
+          # sends to an instance that passes its check. The dashboard has a Service of
+          # its own, which does not wait for that
           readinessProbe:
             httpGet:
               path: /
@@ -61,12 +62,12 @@ spec:
             items:
               - key: deployex.yaml
                 path: deployex.yaml
-        - name: nginx
+        - name: haproxy
           configMap:
             name: deployex-config
             items:
-              - key: nginx.conf
-                path: nginx.conf
+              - key: haproxy.cfg
+                path: haproxy.cfg
         - name: bucket
           hostPath:
             path: /bucket

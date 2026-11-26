@@ -1,5 +1,5 @@
 #!/bin/sh
-# Creates a local cluster with kind and deploys DeployEx and nginx in one pod.
+# Creates a local cluster with kind and deploys DeployEx and HAProxy in one pod.
 #
 # Everything goes through a kubeconfig of its own, next to this file, so the contexts of
 # your kubectl are never read or changed. Run from the root of the repository.
@@ -20,7 +20,7 @@ else
 fi
 kind load docker-image deployex-trial:latest --name deployex-trial
 kubectl create configmap deployex-config --dry-run=client -o yaml \
-  --from-file=deployex.yaml="$src/deployex.yaml" --from-file=nginx.conf="$src/nginx.conf" |
+  --from-file=deployex.yaml="$src/deployex.yaml" --from-file=haproxy.cfg="$src/haproxy.cfg" |
   kubectl apply -f -
 # The hash is the one of "deployex", the password of the admin user
 kubectl create secret generic deployex-secrets --dry-run=client -o yaml \
@@ -29,7 +29,7 @@ kubectl create secret generic deployex-secrets --dry-run=client -o yaml \
   --from-literal=DEPLOYEX_ADMIN_HASHED_PASSWORD='$2b$12$vNAn.RJezPdQF7Dcy4c9Q.p34hdeNnkIaGTk80xdc/Rk18vWjUOC.' |
   kubectl apply -f -
 kubectl apply -f "$here/deployex.yaml"
-# A pod that was already there has the previous image, nginx.conf and secrets
+# A pod that was already there has the previous image, haproxy.cfg and secrets
 if [ "$existing" = true ]; then
   kubectl rollout restart deployment/deployex
 fi
