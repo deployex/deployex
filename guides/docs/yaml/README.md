@@ -220,6 +220,7 @@ applications:
     readiness:
       type: "otp"                      # timeout, otp or http (default: otp)
       min_ready_ms: 30000              # Min time the application stays up before it counts as ready (default: 30000)
+      # function: "MyApp.Health.ready?/0" # otp only, optional, calls this instead of checking boot status
       # scheme: "https"                # http only, optional (default: http)
       # port_key: "PORT"               # http only, required, must be a key in replica_ports
       # path: "/ready"                 # http only, required, must start with /
@@ -507,7 +508,7 @@ The rollback window closes and the previous version stops when the new instance 
 `deploy_rollback_timeout_ms` is the deadline: a version that does not get ready in time is ghosted and the previous version keeps running.
 
 - `timeout` - The OS process stays up for `min_ready_ms`. This does not check the application, so one that stays up but never serves still replaces the previous version.
-- `otp` (default) - The OS process stays up for `min_ready_ms`, and the node reports over OTP distribution that its boot script finished. This requires no change to the application, but it does not check that the application is serving requests or can reach its dependencies. A Gleam application boots from `-eval`, after the boot script, so for Gleam this only checks that the node is up and answering, not that `main` finished its own setup.
+- `otp` (default) - The OS process stays up for `min_ready_ms`, and the node reports over OTP distribution that its boot script finished. This requires no change to the application, but it does not check that the application is serving requests or can reach its dependencies. A Gleam application boots from `-eval`, after the boot script, so for Gleam this only checks that the node is up and answering, not that `main` finished its own setup. With `function` set to a string in `Module.function/0` form, DeployEx calls that function on the node instead of checking boot status, and is ready only when it returns `true`. A missing function, an exception, or a timeout each count as not ready, and the function must return within 1 second. The function format for Erlang and Gleam modules is not yet decided, so `function` is only supported for `language: "elixir"` applications today; the YAML fails to load when `function` is set for any other language.
 - `http` - The OS process stays up for `min_ready_ms`, and DeployEx requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a 2xx response. `port` comes from `replica_ports`, selected by `port_key`, which is validated to be one of its keys when the YAML loads. `path` must start with `/` and is also validated at load. With `scheme: "https"` the probe does not verify the certificate, because it connects by IP address and the certificate is issued for the application's domain. Redirects are not followed and count as a failure, so an application that redirects HTTP to HTTPS must use `https` or exclude the probe path from the redirect. The endpoint should check that the application can serve requests, including reachability of dependencies such as a database or cache.
 
 #### Application Certificates

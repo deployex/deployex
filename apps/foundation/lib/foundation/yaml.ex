@@ -62,7 +62,8 @@ defmodule Foundation.Yaml do
     Provides structure to define when a started application counts as ready
 
     With `:timeout` the OS process only has to stay up for `min_ready_ms`. With `:otp` the
-    node must also answer over distribution with its boot status. With `:http` a request to
+    node must also answer over distribution with its boot status, unless `function` names an
+    application-defined `Module.function/0` to call instead. With `:http` a request to
     `scheme://127.0.0.1:<port><path>` must answer with a 2xx status, where the port is looked up
     from the instance's ports by `port_key`, and `path` is validated to start with `/`.
     """
@@ -71,6 +72,7 @@ defmodule Foundation.Yaml do
 
     defstruct type: :otp,
               min_ready_ms: :timer.seconds(30),
+              function: nil,
               scheme: "http",
               port_key: nil,
               path: nil
@@ -78,6 +80,7 @@ defmodule Foundation.Yaml do
     @type t :: %__MODULE__{
             type: :timeout | :otp | :http,
             min_ready_ms: non_neg_integer(),
+            function: {module(), atom(), 0} | nil,
             scheme: String.t(),
             port_key: String.t() | nil,
             path: String.t() | nil
@@ -767,7 +770,11 @@ defmodule Foundation.Yaml do
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),
       certificates: parse_certificates(data["certificates"]),
       secrets: parse_application_secrets(data["secrets"]),
-      readiness: data["readiness"] |> parse_readiness() |> check_readiness_port(data)
+      readiness:
+        data["readiness"]
+        |> parse_readiness()
+        |> check_readiness_port(data)
+        |> check_readiness_function(data["language"] || @default_language)
     }
   end
 
@@ -817,6 +824,18 @@ defmodule Foundation.Yaml do
 
   defp check_readiness_port(readiness, _data), do: readiness
 
+  # The Module.function/0 string parses as an Elixir module path, which an Erlang or Gleam
+  # node has no code for, so this is checked once at load instead of ghosting the version
+  # after deploy_rollback_timeout_ms on every readiness probe
+  defp check_readiness_function(%Readiness{function: {_, _, _}}, language)
+       when language != "elixir",
+       do:
+         raise(
+           "readiness function not supported for language #{inspect(language)}, expected elixir"
+         )
+
+  defp check_readiness_function(readiness, _language), do: readiness
+
   defp parse_readiness(nil), do: %Readiness{}
 
   defp parse_readiness(%{} = data) do
@@ -825,6 +844,7 @@ defmodule Foundation.Yaml do
     %Readiness{
       type: type,
       min_ready_ms: parse_min_ready_ms(data["min_ready_ms"]),
+      function: parse_readiness_function(type, data["function"]),
       scheme: parse_readiness_scheme(data["scheme"]),
       port_key: parse_readiness_port_key(type, data["port_key"]),
       path: parse_readiness_path(type, data["path"])
@@ -861,6 +881,40 @@ defmodule Foundation.Yaml do
     do: raise("readiness http requires path starting with /, got #{inspect(path)}")
 
   defp parse_readiness_path(_type, path), do: path
+
+  defp parse_readiness_function(_type, nil), do: nil
+
+  defp parse_readiness_function(:otp, function) when is_binary(function) do
+    case Regex.run(
+           ~r/^((?:[A-Z][A-Za-z0-9_]*\.)*[A-Z][A-Za-z0-9_]*)\.([a-z_][A-Za-z0-9_]*[?!]?)\/(\d+)$/,
+           function
+         ) do
+      [_, module, name, "0"] ->
+        {Module.concat(String.split(module, ".")), String.to_atom(name), 0}
+
+      [_, _module, _name, arity] ->
+        raise(
+          "readiness function #{inspect(function)} not supported, expected arity 0, got #{arity}"
+        )
+
+      nil ->
+        raise(
+          "readiness function #{inspect(function)} not supported, expected a string in Module.function/0 format"
+        )
+    end
+  end
+
+  defp parse_readiness_function(:otp, function),
+    do:
+      raise(
+        "readiness function #{inspect(function)} not supported, expected a string in Module.function/0 format"
+      )
+
+  defp parse_readiness_function(type, function),
+    do:
+      raise(
+        "readiness function #{inspect(function)} not supported for type #{inspect(type)}, expected otp"
+      )
 
   defp parse_min_ready_ms(nil), do: %Readiness{}.min_ready_ms
   defp parse_min_ready_ms(value) when is_integer(value) and value >= 0, do: value

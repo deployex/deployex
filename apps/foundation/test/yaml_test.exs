@@ -1302,6 +1302,23 @@ defmodule Foundation.YamlTest do
             {"elixir", ~s(type: "grpc"), ~s(readiness type "grpc" not supported)},
             {"elixir", "min_ready_ms: -1", "readiness min_ready_ms -1 not supported"},
             {"elixir", ~s(min_ready_ms: "fast"), ~s(min_ready_ms "fast" not supported)},
+            {"elixir", ~s(type: "timeout"\n      function: "MyApp.Health.ready?/0"),
+             ~s(readiness function "MyApp.Health.ready?/0" not supported for type :timeout)},
+            {"elixir", ~s(function: 1), "readiness function 1 not supported"},
+            {"elixir", ~s(function: "not a function"),
+             ~s(readiness function "not a function" not supported)},
+            {"elixir", ~s(function: "myApp.Health.ready?/0"),
+             ~s(readiness function "myApp.Health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp..Health.ready?/0"),
+             ~s(readiness function "MyApp..Health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp.health.ready?/0"),
+             ~s(readiness function "MyApp.health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp.Health.ready?/1"),
+             ~s(readiness function "MyApp.Health.ready?/1" not supported, expected arity 0, got 1)},
+            {"gleam", ~s(function: "MyApp.Health.ready?/0"),
+             ~s(readiness function not supported for language "gleam", expected elixir)},
+            {"erlang", ~s(function: "MyApp.Health.ready?/0"),
+             ~s(readiness function not supported for language "erlang", expected elixir)},
             {"elixir",
              ~s(type: "http"\n      scheme: "ftp"\n      port_key: "PORT"\n      path: "/ready"),
              ~s(readiness scheme "ftp" not supported)},
@@ -1368,6 +1385,30 @@ defmodule Foundation.YamlTest do
 
         assert app.language == "gleam"
         assert app.readiness.type == :otp
+      end
+    end
+
+    test "parses a custom function" do
+      path = readiness_yaml("elixir", ~s(function: "MyApp.Health.ready?/0"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.readiness.function == {MyApp.Health, :ready?, 0}
+      end
+    end
+
+    test "parses a custom function on a top-level module" do
+      path = readiness_yaml("elixir", ~s(function: "Health.ready/0"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.readiness.function == {Health, :ready, 0}
       end
     end
   end
