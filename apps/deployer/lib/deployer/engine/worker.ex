@@ -18,6 +18,7 @@ defmodule Deployer.Engine.Worker do
 
   alias Deployer.Engine
   alias Deployer.HotUpgrade
+  alias Deployer.Lock
   alias Deployer.Monitor
   alias Deployer.Release
   alias Deployer.Status
@@ -182,6 +183,9 @@ defmodule Deployer.Engine.Worker do
     schedule_new_deployment(state.deploy_schedule_interval_ms)
     current_deployment = state.deployments[state.current]
 
+    # The deployment that had the lock is over, however it ended
+    if not deploying?(state) and Lock.held?(state.name), do: Lock.release(state.name)
+
     new_state =
       cond do
         current_deployment.state == :init ->
@@ -339,6 +343,41 @@ defmodule Deployer.Engine.Worker do
   end
 
   @impl true
+  # Ends the deployment that holds the lock, the way a deployment that did not get to run
+  # in time ends. One that does not hold it is the start of this host, which is left alone
+  def handle_cast(:cancel_deployment, %__MODULE__{} = state) do
+    current_deployment = state.deployments[state.current]
+
+    new_state =
+      cond do
+        not Lock.held?(state.name) ->
+          state
+
+        current_deployment.timer_ref ->
+          Logger.warning(
+            "Deployment of #{state.name} cancelled at sname: #{current_deployment.sname}"
+          )
+
+          Process.cancel_timer(current_deployment.timer_ref)
+          send(self(), {:timeout_rollback, state.current, current_deployment.sname})
+          state
+
+        # The new instance never started, the old one is still running: nothing to roll back,
+        # only the pre-commands request and the lock are given up
+        state.pending_pre_commands ->
+          Logger.warning(
+            "Deployment of #{state.name} cancelled at sname: #{state.pending_pre_commands.sname}"
+          )
+
+          abandon_pending_pre_commands(state)
+
+        true ->
+          state
+      end
+
+    {:noreply, new_state}
+  end
+
   def handle_cast(:restart_deployments, %__MODULE__{} = state) do
     {:noreply, state |> abandon_pending_pre_commands() |> do_restart_deployments()}
   end
@@ -532,9 +571,32 @@ defmodule Deployer.Engine.Worker do
     |> GenServer.cast(:restart_deployments)
   end
 
+  @doc """
+  Ends the deployment that is in progress for the application, when it holds the deployment
+  lock: the instance returns to the version it had and the version it was moving to is
+  ghosted on this host. See `Deployer.Lock`.
+
+  ## Examples
+
+      iex> Deployer.Engine.Worker.cancel_deployment("myapp")
+      :ok
+  """
+  @spec cancel_deployment(name :: String.t()) :: :ok
+  def cancel_deployment(name) do
+    name
+    |> String.to_existing_atom()
+    |> GenServer.cast(:cancel_deployment)
+  end
+
   ### ==========================================================================
   ### Private functions
   ### ==========================================================================
+
+  # A window is open, or a hot upgrade waits for its pre_commands
+  defp deploying?(state) do
+    Map.get(state, :pending_pre_commands) != nil or
+      Enum.any?(state.deployments, fn {_instance, deployment} -> deployment.timer_ref != nil end)
+  end
 
   defp schedule_new_deployment(timeout), do: Process.send_after(self(), :schedule, timeout)
 
@@ -963,6 +1025,9 @@ defmodule Deployer.Engine.Worker do
       end
     end
 
+    # Nothing to deploy any more, for a worker that was waiting for the lock
+    if not leaves?(target, current_version) and not deploying?(state), do: Lock.release(name)
+
     cond do
       is_nil(current_version) and is_nil(release.version) ->
         Logger.warning("No versions set yet for #{name}")
@@ -972,19 +1037,40 @@ defmodule Deployer.Engine.Worker do
         %{version: release_version} = release = target_release(target)
         version = current_version || "<no current set>"
 
-        Logger.info(
-          "Update is needed at sname: #{current_sname} from: #{version} to: #{release_version}"
-        )
+        # An instance that runs nothing has nothing to keep in service meanwhile
+        lock =
+          if current_version do
+            Lock.acquire(name, %{
+              sname: current_sname,
+              from_version: current_version,
+              to_version: release_version,
+              hold_ms: state.deploy_rollback_timeout_ms
+            })
+          else
+            :ok
+          end
 
-        new_state = deploy_application.(release)
+        if lock == :ok do
+          Logger.info(
+            "Update is needed at sname: #{current_sname} from: #{version} to: #{release_version}"
+          )
 
-        # The engine worker rolls the instance back on its own, so it reports it once the deployment
-        # starts and marks its window. A failed download leaves the state as it was
-        if fall_back? and new_state != state do
-          notify_deployment_rollback(name, current_sname, current_version, release_version)
-          put_in(new_state.deployments[current].fall_back?, true)
+          new_state = deploy_application.(release)
+
+          # A hot upgrade is over here, and so is a download that failed
+          if not deploying?(new_state), do: Lock.release(name)
+
+          # The engine worker rolls the instance back on its own, so it reports it once the deployment
+          # starts and marks its window. A failed download leaves the state as it was
+          if fall_back? and new_state != state do
+            notify_deployment_rollback(name, current_sname, current_version, release_version)
+            put_in(new_state.deployments[current].fall_back?, true)
+          else
+            new_state
+          end
         else
-          new_state
+          # Another DeployEx deploys this application, the next tick tries again
+          state
         end
 
       # Up to date, a sname that a restart kept stopped starts as at start up

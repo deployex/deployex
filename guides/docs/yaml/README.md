@@ -223,6 +223,7 @@ applications:
     # Deployment Configuration (optional with defaults)
     deploy_rollback_timeout_ms: 600000 # Max deployment time before rollback, and max time for hot upgrade pre-commands to start and to run (default: 600000)
     deploy_schedule_interval_ms: 5000  # Check for new deployments interval (default: 5000)
+    shutdown_timeout_ms: 5000          # Time the application has to stop by itself before it is killed (default: 5000)
 
     # Readiness Configuration (optional with defaults)
     readiness:
@@ -502,6 +503,7 @@ If the secret is missing when the `auth` section is applied, DeployEx logs a war
 - `language` - Application language (Elixir, Erlang, Gleam)
 - `replicas` - Number of application instances
 - `deploy_rollback_timeout_ms` - Deployment rollback timeout. A hot upgrade also gives its pre-commands this long to start, and this long to run once they start
+- `shutdown_timeout_ms` - How long the application has to stop by itself. To stop it, DeployEx sends it a SIGTERM, which starts the shutdown of the VM, and waits for its process to be gone. What is left after this time is killed, and a warning is logged. It is used wherever an application is stopped: the previous instance of a full deployment, a restart from the dashboard or by the watchdog, a deployment that is rolled back, and when DeployEx itself is stopped. Give it the time the application needs to finish what it is doing, to drain its connections in `prep_stop/1` for instance. Where something else stops DeployEx, it has to wait at least as long: `terminationGracePeriodSeconds` of a Kubernetes pod, `TimeoutStopSec` of a systemd unit. `0` kills the application at once, as DeployEx did before this option
 - `deploy_schedule_interval_ms` - Deployment check interval
 - `replica_ports` - Port configuration for replicas
 - `env` - Environment variables
@@ -573,7 +575,7 @@ These fields require a **full DeployEx restart**:
 - `os_target` - Target operating system
 - `enable_release_check` - GitHub check for a newer DeployEx release
 - `log_format` - The format of the logs DeployEx writes to its output. `text` is the default. `json`, `datadog`, `gcp` and `elastic` write one JSON object a line, in the shape of the [LoggerJSON](https://hexdocs.pm/logger_json) formatter of that name, each with `service: "deployex"`, which is `service.name` with `elastic`. For DeployEx in a container, where a collector reads the output: with `monitored_app_log_stdout` the lines of the applications are in the same output, and their `service` tells them apart. The few lines the VM logs while it boots, before the YAML is read, stay text. A value that is not one of these stops DeployEx when it starts, and is logged as an error when the file is changed while it runs
-- `peers_dns_query` - A DNS name that resolves to the address of every DeployEx, the headless Service of a Kubernetes StatefulSet for instance. Each DeployEx resolves it every five seconds and connects to the others, and the applications they run are then connected to each other too, with nothing in them for it. Not set, a DeployEx does not look for others. DeployEx names its nodes with short names, so the short host name of each one has to resolve from the others: on Kubernetes, a StatefulSet with a headless Service, and that Service in the DNS search list of the pods (`dnsConfig.searches`)
+- `peers_dns_query` - A DNS name that resolves to the address of every DeployEx, the headless Service of a Kubernetes StatefulSet for instance. Each DeployEx resolves it every five seconds and connects to the others, and the applications they run are then connected to each other too, with nothing in them for it. Not set, a DeployEx does not look for others. DeployEx names its nodes with short names, so the short host name of each one has to resolve from the others: on Kubernetes, a StatefulSet with a headless Service, and that Service in the DNS search list of the pods (`dnsConfig.searches`). Where it does not, the pods of a Deployment for instance, start DeployEx with the environment variable `DEPLOYEX_NODE_HOST` set to the address of its host, on Kubernetes `status.podIP` through the downward API. DeployEx and the applications it runs then have long names, `deployex@10.244.0.14`, and a peer is reached at its address. It is an environment variable and not a key of this file because the node is named before the file is read, and its value is not the same on every host. An Elixir application needs nothing for it. An Erlang release has to name its node with `-name ${RELEASE_NODE}` in its `vm.args`
 
 #### Installation Paths
 - `install_path` - DeployEx installation directory

@@ -43,6 +43,7 @@ defmodule Sentinel.Config.Changes do
           optional(:replicas) => numeric_change(),
           optional(:deploy_rollback_timeout_ms) => numeric_change(),
           optional(:deploy_schedule_interval_ms) => numeric_change(),
+          optional(:shutdown_timeout_ms) => numeric_change(),
           optional(:replica_ports) => list_change(),
           optional(:env) => list_change(),
           optional(:readiness) => readiness_change(),
