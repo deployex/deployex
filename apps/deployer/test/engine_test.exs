@@ -10,6 +10,7 @@ defmodule Deployer.EngineTest do
 
   alias Deployer.Engine
   alias Deployer.Fixture.Files, as: FixtureFiles
+  alias Deployer.Lock
   alias Foundation.Catalog
   alias Foundation.Fixture.Catalog, as: FixtureCatalog
 
@@ -2725,6 +2726,81 @@ defmodule Deployer.EngineTest do
 
         assert_receive :cancelled, 1_000
         assert %Engine.Worker{pending_pre_commands: nil, replicas: 1} = :sys.get_state(worker)
+      end
+    end
+
+    test "Cancelling while pre-commands run stops the request and gives the lock back" do
+      pid = self()
+      name = "myelixir"
+
+      Deployer.StatusMock
+      |> expect(:list_installed_apps, fn _name -> [] end)
+      |> stub(:current_version, fn _sname -> "1.0.0" end)
+      |> stub(:update, fn _sname -> :ok end)
+      |> stub(:set_current_version_map, fn _sname, _release, _attrs -> :ok end)
+      |> expect(:add_ghosted_version, 0, fn version_map -> {:ok, [version_map]} end)
+
+      Deployer.MonitorMock
+      # only the initial deployment, the hot upgrade never starts a second instance
+      |> expect(:start_service, 1, fn service ->
+        send(pid, {:started, service.sname})
+        {:ok, self()}
+      end)
+      # only the empty start-up placeholder is terminated, never the running instance
+      |> expect(:stop_service, 1, fn _name, nil -> :ok end)
+      # a migration that has not finished yet, the reply never comes in this test. The
+      # cancelled request is retried on the next tick, once with the lock given back
+      |> expect(:start_pre_commands, 2, fn _sname, ["eval Migrate.run"], :new ->
+        send(pid, :requested)
+        {:ok, make_ref()}
+      end)
+      |> expect(:cancel_pre_commands, 1, fn _sname, _ref ->
+        send(pid, :cancelled)
+        :ok
+      end)
+
+      Deployer.ReleaseMock
+      |> stub(:download_version_map, fn _app_name ->
+        %{version: "2.0.0", hash: "local", pre_commands: ["eval Migrate.run"]}
+      end)
+      |> stub(:download_release, fn _app_name, _version, _download_path -> :ok end)
+
+      Deployer.HotUpgradeMock
+      |> stub(:prepare_new_path, fn _name, _language, _to_version, _new_path -> :ok end)
+      |> stub(:check, fn check -> {:ok, %{check | deploy: :hot_upgrade}} end)
+      |> expect(:execute, 0, fn _execute -> :ok end)
+
+      with_mock System, [:passthrough],
+        cmd: fn "tar", ["-x", "-f", _source_path, "-C", _dest_path] -> {"", 0} end do
+        assert {:ok, worker} =
+                 Engine.Worker.start_link(%Engine.Worker{
+                   deploy_rollback_timeout_ms: 60_000,
+                   deploy_schedule_interval_ms: 50,
+                   name: name,
+                   language: "elixir"
+                 })
+
+        # the initial instance is up, so its own rollback timer does not fire
+        assert_receive {:started, sname}, 1_000
+        Engine.notify_application_running(sname)
+
+        assert_receive :requested, 1_000
+
+        # The engine worker holds the lock itself, as the real deployment would
+        assert [%{name: ^name, state: :held}] =
+                 Enum.filter(Lock.list(), &(&1.name == name))
+
+        log =
+          capture_log(fn ->
+            Engine.Worker.cancel_deployment(name)
+            assert_receive :cancelled, 1_000
+          end)
+
+        assert log =~ "Deployment of #{name} cancelled"
+        assert %Engine.Worker{pending_pre_commands: nil} = :sys.get_state(worker, 100)
+
+        # The lock was given back: the next schedule tick finds none held and deploys again
+        assert_receive :requested, 1_000
       end
     end
 

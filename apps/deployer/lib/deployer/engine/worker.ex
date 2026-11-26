@@ -348,16 +348,34 @@ defmodule Deployer.Engine.Worker do
   def handle_cast(:cancel_deployment, %__MODULE__{} = state) do
     current_deployment = state.deployments[state.current]
 
-    if Lock.held?(state.name) and current_deployment.timer_ref do
-      Logger.warning(
-        "Deployment of #{state.name} cancelled at sname: #{current_deployment.sname}"
-      )
+    new_state =
+      cond do
+        not Lock.held?(state.name) ->
+          state
 
-      Process.cancel_timer(current_deployment.timer_ref)
-      send(self(), {:timeout_rollback, state.current, current_deployment.sname})
-    end
+        current_deployment.timer_ref ->
+          Logger.warning(
+            "Deployment of #{state.name} cancelled at sname: #{current_deployment.sname}"
+          )
 
-    {:noreply, state}
+          Process.cancel_timer(current_deployment.timer_ref)
+          send(self(), {:timeout_rollback, state.current, current_deployment.sname})
+          state
+
+        # The new instance never started, the old one is still running: nothing to roll back,
+        # only the pre-commands request and the lock are given up
+        state.pending_pre_commands ->
+          Logger.warning(
+            "Deployment of #{state.name} cancelled at sname: #{state.pending_pre_commands.sname}"
+          )
+
+          abandon_pending_pre_commands(state)
+
+        true ->
+          state
+      end
+
+    {:noreply, new_state}
   end
 
   def handle_cast(:restart_deployments, %__MODULE__{} = state) do
