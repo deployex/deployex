@@ -719,8 +719,8 @@ defmodule DeployexWeb.Components.ConfigChangesModal do
 
   defp format_value(:env, list), do: Enum.join(list, " ")
 
-  defp format_value(:readiness, %{type: type, min_ready_ms: min_ready_ms}),
-    do: "type: #{type} min_ready_ms: #{min_ready_ms}"
+  defp format_value(:readiness, %{type: type, min_ready_ms: min_ready_ms} = readiness),
+    do: "type: #{type} min_ready_ms: #{min_ready_ms}#{format_readiness_probe(readiness)}"
 
   # Where the secrets come from, never the secrets themselves
   defp format_value(:secrets, nil), do: "none"
@@ -729,6 +729,15 @@ defmodule DeployexWeb.Components.ConfigChangesModal do
     do: "adapter: #{adapter |> Module.split() |> List.last()} path: #{path}"
 
   defp format_value(_, value), do: to_string(value)
+
+  # What the probe checks, so a change of only the function or the endpoint shows in the review
+  defp format_readiness_probe(%{type: :http, scheme: scheme, port_key: port_key, path: path}),
+    do: " scheme: #{scheme} port_key: #{port_key} path: #{path}"
+
+  defp format_readiness_probe(%{type: :otp, function: {module, function, arity}}),
+    do: " function: #{inspect(module)}.#{function}/#{arity}"
+
+  defp format_readiness_probe(_readiness), do: ""
 
   defp format_cert_value(nil), do: "none"
 

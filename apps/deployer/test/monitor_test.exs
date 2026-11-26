@@ -322,6 +322,109 @@ defmodule Deployer.MonitorTest do
     end
 
     @tag :capture_log
+    test "Stopping an application waits for it to be gone before it kills what is left", %{
+      elixir_name: name,
+      elixir_sname: sname,
+      ports: ports
+    } do
+      test_event_ref = make_ref()
+      test_pid_process = self()
+      FixtureFiles.create_bin_files(sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn ^sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      Host.CommanderMock
+      |> expect(:run_link, fn _command, options ->
+        send(test_pid_process, {:kill_timeout, options[:kill_timeout]})
+        Process.send_after(test_pid_process, {:handle_ref_event, test_event_ref}, 100)
+        {:ok, test_pid_process, 123_456}
+      end)
+      |> expect(:run, fn command, _options ->
+        send(test_pid_process, {:stop_command, command})
+        {:error, [exit_status: 256]}
+      end)
+      |> expect(:stop, fn ^test_pid_process ->
+        send(test_pid_process, :asked_to_stop)
+        :ok
+      end)
+
+      assert {:ok, _pid} =
+               MonitorApp.start_service(%Service{
+                 name: name,
+                 sname: sname,
+                 language: "elixir",
+                 ports: ports,
+                 readiness: %Readiness{type: :timeout, min_ready_ms: 10}
+               })
+
+      assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
+
+      # erlexec is told to kill later than the monitor does: five seconds, the default, and five
+      assert_receive {:kill_timeout, 10}
+
+      assert MonitorApp.shutdown_timeout_ms(sname) == 5_000
+      assert :ok = MonitorApp.stop_service(name, sname)
+
+      # Asked first, then one command that waits while the process is there and kills
+      assert_receive :asked_to_stop
+      assert_receive {:stop_command, command}
+      assert command =~ "while [ $i -lt 25 ] && ps -ax | grep"
+      assert command =~ "#{name}/#{sname}/current/erts-"
+      assert command =~ "sleep 0.2"
+      assert command =~ ~r/done; kill -9 /
+    end
+
+    @tag :capture_log
+    test "A monitor that ends stops its application, with the time it has to stop", %{
+      elixir_name: name,
+      elixir_sname: sname,
+      ports: ports
+    } do
+      test_event_ref = make_ref()
+      test_pid_process = self()
+      FixtureFiles.create_bin_files(sname)
+
+      Deployer.StatusMock
+      |> stub(:current_version_map, fn ^sname -> %Catalog.Version{version: "1.0.0"} end)
+
+      Host.CommanderMock
+      |> expect(:run_link, fn _command, _options ->
+        Process.send_after(test_pid_process, {:handle_ref_event, test_event_ref}, 100)
+        {:ok, test_pid_process, 123_456}
+      end)
+      |> expect(:run, fn command, _options ->
+        send(test_pid_process, {:stop_command, command})
+        {:ok, []}
+      end)
+      |> expect(:stop, fn ^test_pid_process -> :ok end)
+
+      assert {:ok, pid} =
+               MonitorApp.start_service(%Service{
+                 name: name,
+                 sname: sname,
+                 language: "elixir",
+                 ports: ports,
+                 readiness: %Readiness{type: :timeout, min_ready_ms: 10}
+               })
+
+      assert_receive {:handle_ref_event, ^test_event_ref}, 1_000
+
+      # As when DeployEx stops: the supervisor ends the monitor, the application still runs
+      ref = Process.monitor(pid)
+
+      log =
+        capture_log(fn ->
+          GenServer.stop(pid, :shutdown)
+          assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1_000
+        end)
+
+      assert_receive {:stop_command, command}
+      assert command =~ "while [ $i -lt 25 ]"
+      assert log =~ "did not stop in 5000 ms and was killed"
+    end
+
+    @tag :capture_log
     test "Running application - otp readiness waits for the boot of the node to finish",
          %{elixir_name: name, elixir_sname: sname, ports: ports} do
       test_pid_process = self()
@@ -1178,6 +1281,22 @@ defmodule Deployer.MonitorTest do
 
       assert [%{cause: :operator} | _] = restarts
       assert length(restarts) == 10
+
+      # A restart the liveness probe asked for has a count of its own too
+      :sys.replace_state(monitor, &%{&1 | current_pid: app_pid})
+
+      assert :ok =
+               MonitorApp.restart(context.elixir_sname,
+                 cause: :liveness,
+                 detail: "failed 3 liveness probes"
+               )
+
+      assert %{
+               liveness_restart_count: 1,
+               watchdog_restart_count: 1,
+               force_restart_count: 3,
+               restarts: [%{cause: :liveness, detail: "failed 3 liveness probes"} | _]
+             } = :sys.get_state(monitor)
 
       assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
     end

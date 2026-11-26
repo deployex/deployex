@@ -40,9 +40,15 @@ defmodule Foundation.YamlTest do
   @yaml_auto_apply_error "#{@file_paths}/deployex-config-auto-apply-error.yaml"
   @yaml_peers "#{@file_paths}/deployex-peers.yaml"
   @yaml_peers_error "#{@file_paths}/deployex-peers-error.yaml"
+  @yaml_shutdown "#{@file_paths}/deployex-shutdown.yaml"
+  @yaml_shutdown_error "#{@file_paths}/deployex-shutdown-error.yaml"
   @yaml_notifications_all "#{@file_paths}/deployex-notifications-all.yaml"
   @yaml_self_upgrade "#{@file_paths}/deployex-self-upgrade.yaml"
   @yaml_auth "#{@file_paths}/deployex-auth.yaml"
+  @yaml_auth_read_only "#{@file_paths}/deployex-auth-read-only.yaml"
+  @yaml_auth_cloudflare "#{@file_paths}/deployex-auth-cloudflare.yaml"
+  @yaml_auth_cloudflare_error "#{@file_paths}/deployex-auth-cloudflare-error.yaml"
+  @yaml_auth_cloudflare_blank "#{@file_paths}/deployex-auth-cloudflare-blank.yaml"
   @yaml_auth_provider_case "#{@file_paths}/deployex-auth-provider-case.yaml"
   @yaml_auth_emails_error "#{@file_paths}/deployex-auth-emails-error.yaml"
 
@@ -322,6 +328,7 @@ defmodule Foundation.YamlTest do
                    language: "elixir",
                    deploy_rollback_timeout_ms: 600_000,
                    deploy_schedule_interval_ms: 5000,
+                   shutdown_timeout_ms: 5000,
                    replica_ports: [%Foundation.Yaml.Ports{key: "PORT", base: 4000}],
                    certificates: []
                  },
@@ -333,6 +340,7 @@ defmodule Foundation.YamlTest do
                    language: "erlang",
                    deploy_rollback_timeout_ms: 600_000,
                    deploy_schedule_interval_ms: 5000,
+                   shutdown_timeout_ms: 5000,
                    replica_ports: [%Foundation.Yaml.Ports{key: "PORT", base: 4050}],
                    certificates: []
                  }
@@ -805,6 +813,7 @@ defmodule Foundation.YamlTest do
           version_ghosted
           pipeline_not_started
           deployment_rollback
+          liveness_probe_failed
         )
 
         assert Enum.sort(webhook.events) == Enum.sort(all_events)
@@ -889,6 +898,39 @@ defmodule Foundation.YamlTest do
         {:ok, config} = Yaml.load()
         assert config.scheme == nil
         assert config.check_origin == nil
+      end
+    end
+  end
+
+  describe "shutdown_timeout_ms" do
+    test "parses the time an application has to stop" do
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_shutdown end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert [30_000, 0] == Enum.map(config.applications, & &1.shutdown_timeout_ms)
+      end
+    end
+
+    test "is five seconds when absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.applications != []
+        assert Enum.all?(config.applications, &(&1.shutdown_timeout_ms == 5_000))
+      end
+    end
+
+    test "rejects what is not a number of milliseconds" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_shutdown_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(shutdown_timeout_ms "30s" not supported, expected milliseconds, 0 or more),
+                     fn -> Yaml.load() end
       end
     end
   end
@@ -1296,6 +1338,23 @@ defmodule Foundation.YamlTest do
             {"elixir", ~s(type: "grpc"), ~s(readiness type "grpc" not supported)},
             {"elixir", "min_ready_ms: -1", "readiness min_ready_ms -1 not supported"},
             {"elixir", ~s(min_ready_ms: "fast"), ~s(min_ready_ms "fast" not supported)},
+            {"elixir", ~s(type: "timeout"\n      function: "MyApp.Health.ready?/0"),
+             ~s(readiness function "MyApp.Health.ready?/0" not supported for type :timeout)},
+            {"elixir", ~s(function: 1), "readiness function 1 not supported"},
+            {"elixir", ~s(function: "not a function"),
+             ~s(readiness function "not a function" not supported)},
+            {"elixir", ~s(function: "myApp.Health.ready?/0"),
+             ~s(readiness function "myApp.Health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp..Health.ready?/0"),
+             ~s(readiness function "MyApp..Health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp.health.ready?/0"),
+             ~s(readiness function "MyApp.health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp.Health.ready?/1"),
+             ~s(readiness function "MyApp.Health.ready?/1" not supported, expected arity 0, got 1)},
+            {"gleam", ~s(function: "MyApp.Health.ready?/0"),
+             ~s(readiness function not supported for language "gleam", expected elixir)},
+            {"erlang", ~s(function: "MyApp.Health.ready?/0"),
+             ~s(readiness function not supported for language "erlang", expected elixir)},
             {"elixir",
              ~s(type: "http"\n      scheme: "ftp"\n      port_key: "PORT"\n      path: "/ready"),
              ~s(readiness scheme "ftp" not supported)},
@@ -1364,6 +1423,30 @@ defmodule Foundation.YamlTest do
         assert app.readiness.type == :otp
       end
     end
+
+    test "parses a custom function" do
+      path = readiness_yaml("elixir", ~s(function: "MyApp.Health.ready?/0"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.readiness.function == {MyApp.Health, :ready?, 0}
+      end
+    end
+
+    test "parses a custom function on a top-level module" do
+      path = readiness_yaml("elixir", ~s(function: "Health.ready/0"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.readiness.function == {Health, :ready, 0}
+      end
+    end
   end
 
   defp readiness_yaml(language, section) do
@@ -1385,6 +1468,124 @@ defmodule Foundation.YamlTest do
     File.write!(path, content)
     on_exit(fn -> File.rm(path) end)
     path
+  end
+
+  describe "liveness" do
+    test "defaults to nil when the section is absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.liveness == nil
+      end
+    end
+
+    test "parses a configured section" do
+      path =
+        liveness_yaml(~s(type: "otp"\n      failure_threshold: 5\n      enable_restart: true))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.liveness == %Yaml.Liveness{
+                 type: :otp,
+                 period_ms: 10_000,
+                 failure_threshold: 5,
+                 enable_restart: true
+               }
+      end
+    end
+
+    test "parses an http section" do
+      path =
+        liveness_yaml(
+          ~s(type: "http"\n      scheme: "https"\n      port_key: "PORT"\n      path: "/live"\n      period_ms: 5000)
+        )
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.liveness == %Yaml.Liveness{
+                 type: :http,
+                 period_ms: 5_000,
+                 failure_threshold: 3,
+                 enable_restart: false,
+                 scheme: "https",
+                 port_key: "PORT",
+                 path: "/live"
+               }
+      end
+    end
+
+    test "defaults type, failure_threshold and enable_restart in a partial section" do
+      for {section, expected} <- [
+            {~s(type: "otp"),
+             %Yaml.Liveness{type: :otp, failure_threshold: 3, enable_restart: false}},
+            {"failure_threshold: 1",
+             %Yaml.Liveness{type: :otp, failure_threshold: 1, enable_restart: false}},
+            {"enable_restart: true",
+             %Yaml.Liveness{type: :otp, failure_threshold: 3, enable_restart: true}}
+          ] do
+        path = liveness_yaml(section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+          assert app.liveness == expected
+        end
+      end
+    end
+
+    test "raises on values it does not support" do
+      for {section, message} <- [
+            {~s(type: "garbage"),
+             ~s(liveness type "garbage" not supported, expected otp or http)},
+            {~s(type: "http"\n      path: "/live"), "liveness http requires port_key, got nil"},
+            {~s(type: "http"\n      port_key: "PORT"),
+             "liveness http requires path starting with /, got nil"},
+            {~s(type: "http"\n      port_key: "PORT"\n      path: "live"),
+             ~s(liveness http requires path starting with /, got "live")},
+            {~s(type: "http"\n      port_key: "NOPE"\n      path: "/live"),
+             ~s(liveness port_key "NOPE" is not a key in replica_ports)},
+            {~s(type: "http"\n      scheme: "ftp"\n      port_key: "PORT"\n      path: "/live"),
+             ~s(liveness scheme "ftp" not supported, expected http or https)},
+            {"period_ms: 999",
+             "liveness period_ms 999 not supported, expected an integer of at least 1000"},
+            {~s(period_ms: "fast"),
+             ~s(liveness period_ms "fast" not supported, expected an integer of at least 1000)},
+            {"failure_threshold: 0",
+             "liveness failure_threshold 0 not supported, expected a positive integer"},
+            {"failure_threshold: -1",
+             "liveness failure_threshold -1 not supported, expected a positive integer"},
+            {~s(failure_threshold: "fast"),
+             ~s(liveness failure_threshold "fast" not supported, expected a positive integer)},
+            {~s(enable_restart: "nope"),
+             ~s(liveness enable_restart "nope" not supported, expected true or false)}
+          ] do
+        path = liveness_yaml(section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          assert_raise RuntimeError, ~r/#{Regex.escape(message)}/, fn -> Yaml.load() end
+        end
+      end
+    end
+  end
+
+  defp liveness_yaml(section) do
+    replace_in_default_yaml(
+      ~s(    language: "elixir"\n),
+      ~s(    language: "elixir"\n    liveness:\n      #{section}\n)
+    )
   end
 
   # The default file with one replacement, the first match only
@@ -1423,6 +1624,75 @@ defmodule Foundation.YamlTest do
   end
 
   describe "auth" do
+    test "parses Cloudflare Access, with its team, audience and groups" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_cloudflare end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+
+        assert %Foundation.Yaml.Auth{
+                 provider: DeployexWeb.OAuth.CloudflareAccess,
+                 team_domain: "myteam.cloudflareaccess.com",
+                 audience: "f1e2d3c4b5a6",
+                 client_id: nil,
+                 allowlist: %{
+                   emails: ["alice@example.com"],
+                   domains: [],
+                   admin_groups: ["deployex-admins"],
+                   read_only_groups: ["engineering"]
+                 }
+               } = config.auth
+      end
+    end
+
+    test "refuses Cloudflare Access without its audience" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_cloudflare_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     "auth provider cloudflare_access needs team_domain and audience",
+                     fn -> Yaml.load() end
+      end
+    end
+
+    test "refuses Cloudflare Access with a blank audience" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_cloudflare_blank end]}
+      ]) do
+        assert_raise RuntimeError,
+                     "auth provider cloudflare_access needs team_domain and audience",
+                     fn -> Yaml.load() end
+      end
+    end
+
+    test "parses who signs in with read-only access, next to the admins" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_read_only end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+
+        assert config.auth.allowlist == %{
+                 emails: ["alice@example.com", "bob@example.com"],
+                 domains: ["example.com"],
+                 read_only_emails: ["carol@example.com"],
+                 read_only_domains: ["partner.example.com"]
+               }
+      end
+    end
+
+    test "leaves the read-only lists out when the YAML has none" do
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert Map.keys(config.auth.allowlist) == [:domains, :emails]
+      end
+    end
+
     test "parses the auth section" do
       with_mocks([
         {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth end]}

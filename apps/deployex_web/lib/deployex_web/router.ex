@@ -1,6 +1,7 @@
 defmodule DeployexWeb.Router do
   use DeployexWeb, :router
 
+  import DeployexWeb.Authorization, only: [require_admin: 2]
   import DeployexWeb.UserAuth
   import Observer.Web.Router
 
@@ -66,26 +67,43 @@ defmodule DeployexWeb.Router do
     live_session :require_authenticated_user,
       on_mount: [
         {DeployexWeb.UserAuth, :ensure_authenticated},
+        # A read-only user looks: the events that change something are refused
+        {DeployexWeb.Authorization, :guard_events},
         DeployexWeb.HostInfo,
         DeployexWeb.RecentEvents,
         DeployexWeb.ProcessLabel
       ] do
       live "/", ApplicationsLive, :index
-      live "/terminal", TerminalLive, :index
       live "/logs/live", LogsLive, :live
       live "/logs/history", LogsLive, :history
-      live "/embedded-observer", ObserverLive, :index
       live "/applications", ApplicationsLive, :index
       live "/fleet", FleetLive, :index
       live "/applications/:name/versions", VersionsLive, :index
       live "/applications/:name/ghosted", GhostedLive, :index
       live "/applications/:name/:sname/versions", VersionsLive, :index
       live "/documentation", DocsLive, :index
-      live "/hotupgrade", HotUpgradeLive, :index
-      live "/hotupgrade/apply", HotUpgradeLive, :apply
     end
 
     get "/logs/export", LogsExportController, :export
+  end
+
+  ## For admins: a shell on the host, the processes of a node, and the code it runs
+  scope "/", DeployexWeb do
+    pipe_through [:browser, :require_authenticated_user, :require_admin]
+
+    live_session :require_admin,
+      on_mount: [
+        {DeployexWeb.UserAuth, :ensure_authenticated},
+        {DeployexWeb.Authorization, :ensure_admin},
+        DeployexWeb.HostInfo,
+        DeployexWeb.RecentEvents,
+        DeployexWeb.ProcessLabel
+      ] do
+      live "/terminal", TerminalLive, :index
+      live "/embedded-observer", ObserverLive, :index
+      live "/hotupgrade", HotUpgradeLive, :index
+      live "/hotupgrade/apply", HotUpgradeLive, :apply
+    end
 
     observer_dashboard("/observer")
   end

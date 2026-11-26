@@ -147,6 +147,11 @@ notifications:
 # A domain entry trusts every GitHub account that has ever verified an address
 # at that domain, including people who have left. Prefer allowed_emails, and
 # remove the entry to end a person's access.
+# allowed_emails and allowed_domains sign in as admins, read_only_emails and
+# read_only_domains with read-only access: the applications, their versions,
+# the logs and the documentation, and nothing that changes an application. The
+# Terminal, Observer Web and Hot Upgrade pages are for admins. An email on both
+# lists is an admin. The built-in admin user is always an admin.
 
 auth:
   provider: "github"                                     # Provider: github
@@ -156,6 +161,33 @@ auth:
     - "alice@example.com"
   allowed_domains:                                       # Whole domains allowed to sign in
     - "example.com"
+  read_only_emails:                                      # Exact emails that sign in with read-only access (optional)
+    - "bob@example.com"
+  read_only_domains:                                     # Whole domains that sign in with read-only access (optional)
+    - "partner.example.com"
+
+# Or, with DeployEx behind Cloudflare Access: the token Cloudflare puts on every
+# request is the sign-in, there is no login page. DeployEx checks its signature
+# with the keys of the team, that it is for the team and for the application
+# (audience), and that it has not expired. A user is an admin or has read-only
+# access by the same lists of emails and domains, or by the groups the identity
+# provider of the team says the user is in. A user with neither is not signed
+# in. Nothing is kept on the server, so any DeployEx with the same secret takes
+# the session. The built-in password login stays, for a request that does not
+# come through Cloudflare. Service tokens are not signed in.
+
+auth:
+  provider: "cloudflare_access"                          # Provider: cloudflare_access
+  team_domain: "myteam.cloudflareaccess.com"             # Required, the domain of the Cloudflare Access team
+  audience: "f1e2d3c4b5a6..."                            # Required, the Application Audience (AUD) tag of the Access application
+  admin_groups:                                          # Groups of the identity provider that sign in as admins (optional)
+    - "deployex-admins"
+  read_only_groups:                                      # Groups that sign in with read-only access (optional)
+    - "engineering"
+  allowed_emails:                                        # Exact emails that sign in as admins (optional)
+    - "alice@example.com"
+  read_only_emails:                                      # Exact emails that sign in with read-only access (optional)
+    - "bob@example.com"
 
 # ============================================================================
 # AGENT API (optional)
@@ -215,14 +247,26 @@ applications:
     # Deployment Configuration (optional with defaults)
     deploy_rollback_timeout_ms: 600000 # Max deployment time before rollback, and max time for hot upgrade pre-commands to start and to run (default: 600000)
     deploy_schedule_interval_ms: 5000  # Check for new deployments interval (default: 5000)
+    shutdown_timeout_ms: 5000          # Time the application has to stop by itself before it is killed (default: 5000)
 
     # Readiness Configuration (optional with defaults)
     readiness:
       type: "otp"                      # timeout, otp or http (default: otp)
       min_ready_ms: 30000              # Min time the application stays up before it counts as ready (default: 30000)
+      # function: "MyApp.Health.ready?/0" # otp only, optional, calls this instead of checking boot status
       # scheme: "https"                # http only, optional (default: http)
       # port_key: "PORT"               # http only, required, must be a key in replica_ports
       # path: "/ready"                 # http only, required, must start with /
+
+    # Liveness Configuration (optional, disabled by default)
+    liveness:
+      type: "otp"                      # otp or http (default: otp)
+      period_ms: 10000                 # Time between two probes of an instance, at least 1000 (default: 10000)
+      failure_threshold: 3             # Consecutive failed probes before reporting a hung application (default: 3)
+      enable_restart: false            # Restart the application once failure_threshold is reached (default: false)
+      # scheme: "https"                # http only, optional (default: http)
+      # port_key: "PORT"               # http only, required, must be a key in replica_ports
+      # path: "/live"                  # http only, required, must start with /
     
     # Port Configuration (optional)
     replica_ports:                     # Each replica gets: base + replica_index
@@ -494,11 +538,14 @@ If the secret is missing when the `auth` section is applied, DeployEx logs a war
 - `language` - Application language (Elixir, Erlang, Gleam)
 - `replicas` - Number of application instances
 - `deploy_rollback_timeout_ms` - Deployment rollback timeout. A hot upgrade also gives its pre-commands this long to start, and this long to run once they start
+- `shutdown_timeout_ms` - How long the application has to stop by itself. To stop it, DeployEx sends it a SIGTERM, which starts the shutdown of the VM, and waits for its process to be gone. What is left after this time is killed, and a warning is logged. It is used wherever an application is stopped: the previous instance of a full deployment, a restart from the dashboard or by the watchdog, a deployment that is rolled back, and when DeployEx itself is stopped. Give it the time the application needs to finish what it is doing, to drain its connections in `prep_stop/1` for instance. Where something else stops DeployEx, it has to wait at least as long: `terminationGracePeriodSeconds` of a Kubernetes pod, `TimeoutStopSec` of a systemd unit. `0` kills the application at once, as DeployEx did before this option
 - `deploy_schedule_interval_ms` - Deployment check interval
 - `replica_ports` - Port configuration for replicas
 - `env` - Environment variables
 - `readiness` - When a started application counts as ready, which is when the previous version stops. Applied on the next deployment. See [Application Readiness](#application-readiness)
 - `secrets` - Where the application's secrets are read from. Applied on the next deployment, an instance that already runs keeps the secrets it was started with. See [Secrets from 1Password](#secrets-from-1password)
+
+`liveness` is not on this list yet: a change to it only takes effect after DeployEx itself restarts, it is not picked up by the runtime upgrade watcher. See [Application Liveness](#application-liveness).
 
 #### Application Readiness
 
@@ -506,8 +553,20 @@ The rollback window closes and the previous version stops when the new instance 
 `deploy_rollback_timeout_ms` is the deadline: a version that does not get ready in time is ghosted and the previous version keeps running.
 
 - `timeout` - The OS process stays up for `min_ready_ms`. This does not check the application, so one that stays up but never serves still replaces the previous version.
-- `otp` (default) - The OS process stays up for `min_ready_ms`, and the node reports over OTP distribution that its boot script finished. This requires no change to the application, but it does not check that the application is serving requests or can reach its dependencies. A Gleam application boots from `-eval`, after the boot script, so for Gleam this only checks that the node is up and answering, not that `main` finished its own setup.
+- `otp` (default) - The OS process stays up for `min_ready_ms`, and the node reports over OTP distribution that its boot script finished. This requires no change to the application, but it does not check that the application is serving requests or can reach its dependencies. A Gleam application boots from `-eval`, after the boot script, so for Gleam this only checks that the node is up and answering, not that `main` finished its own setup. With `function` set to a string in `Module.function/0` form, DeployEx calls that function on the node instead of checking boot status, and is ready only when it returns `true`. A missing function, an exception, or a timeout each count as not ready, and the function must return within 1 second. The function format for Erlang and Gleam modules is not yet decided, so `function` is only supported for `language: "elixir"` applications today; the YAML fails to load when `function` is set for any other language.
 - `http` - The OS process stays up for `min_ready_ms`, and DeployEx requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a 2xx response. `port` comes from `replica_ports`, selected by `port_key`, which is validated to be one of its keys when the YAML loads. `path` must start with `/` and is also validated at load. With `scheme: "https"` the probe does not verify the certificate, because it connects by IP address and the certificate is issued for the application's domain. Redirects are not followed and count as a failure, so an application that redirects HTTP to HTTPS must use `https` or exclude the probe path from the redirect. The endpoint should check that the application can serve requests, including reachability of dependencies such as a database or cache.
+
+#### Application Liveness
+
+Liveness runs after the application is already ready, and is disabled when the `liveness` section is left out. It does not gate a deployment, readiness already did that: it reports, and optionally recovers, an application that stops answering after it was promoted.
+
+- `otp` (default) - Runs the same boot-status check as the `otp` readiness probe with no `function`, after the application is ready. It tells that the node is up and answering over OTP distribution, not that the application still serves requests.
+- `http` - DeployEx requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a 2xx response, the same request the `http` readiness probe makes and with the same `scheme`, `port_key` and `path` fields, validated the same way when the YAML loads. Use a path of its own, such as `/live`, that answers without reaching any dependency, and not the path of the readiness probe.
+- `period_ms` - Time between two probes of an instance, 10 seconds by default and at least 1 second. Each probe waits up to 1 second for its answer. With the defaults, an application that stops answering is reported after about 30 seconds.
+- `failure_threshold` - Consecutive failed probes before DeployEx reports the application as hung, through a `liveness_probe_failed` notification. A probe that recovers before reaching the threshold is not reported.
+- `enable_restart` - Whether DeployEx restarts the application once `failure_threshold` is reached. Off by default: the BEAM already restarts a crashed process on its own, and restarting every replica during a shared dependency outage would make the outage worse.
+
+A liveness probe should never check an external dependency, such as a database or a cache. A dependency outage would then fail every replica's probe at once, and restarting all of them cannot fix an outage that is not theirs. Dependency checks belong in readiness instead, where a version that cannot reach its dependencies at boot is ghosted rather than replacing a version that could.
 
 #### Application Certificates
 

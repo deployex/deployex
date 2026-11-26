@@ -31,6 +31,15 @@ defmodule DeployexWeb.OAuth.Config do
   """
   @spec warn_if_incomplete() :: :ok
   def warn_if_incomplete do
+    if provider_module() == DeployexWeb.OAuth.CloudflareAccess do
+      # It has no client or redirect: the YAML is refused without what it needs
+      :ok
+    else
+      warn_if_oauth_incomplete()
+    end
+  end
+
+  defp warn_if_oauth_incomplete do
     missing = missing()
     partly_set? = length(missing) < length(@required) or allowlist() != @empty_allowlist
 
@@ -52,6 +61,18 @@ defmodule DeployexWeb.OAuth.Config do
 
   @spec redirect_uri() :: String.t() | nil
   def redirect_uri, do: Keyword.get(config(), :redirect_uri)
+
+  @doc """
+  The domain of the Cloudflare Access team, `myteam.cloudflareaccess.com`.
+  """
+  @spec team_domain() :: String.t() | nil
+  def team_domain, do: Keyword.get(config(), :team_domain)
+
+  @doc """
+  The audience tag of the Cloudflare Access application DeployEx is behind.
+  """
+  @spec audience() :: String.t() | nil
+  def audience, do: Keyword.get(config(), :audience)
 
   @spec allowlist() :: map()
   def allowlist, do: Keyword.get(config(), :allowlist, @empty_allowlist)

@@ -43,7 +43,7 @@ defmodule Sentinel.Config.Watcher do
   @pubsub_topic_auth_apply "deployex::config::auth::apply"
 
   # Keys of the :deployex_web OAuth env that come from the YAML auth section
-  @auth_env_keys [:provider, :client_id, :redirect_uri, :allowlist]
+  @auth_env_keys [:provider, :client_id, :redirect_uri, :team_domain, :audience, :allowlist]
 
   defmodule State do
     @moduledoc false
@@ -521,6 +521,7 @@ defmodule Sentinel.Config.Watcher do
     |> add_number_changes(:replicas, old_app, new_app, :immediate)
     |> add_number_changes(:deploy_rollback_timeout_ms, old_app, new_app, :immediate)
     |> add_number_changes(:deploy_schedule_interval_ms, old_app, new_app, :immediate)
+    |> add_number_changes(:shutdown_timeout_ms, old_app, new_app, :immediate)
     |> add_replica_ports_changes(old_app, new_app, :full_deploy)
     |> add_env_changes(old_app, new_app, :next_deploy)
     |> add_readiness_changes(old_app, new_app, :next_deploy)

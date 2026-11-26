@@ -19,6 +19,11 @@ defmodule Deployer.Monitor.Application do
   @monitor_table "monitor-table"
   @new_deploy_topic "deployex::new_deploy"
   @max_backoff_ms :timer.minutes(5)
+
+  # An application has this long to stop by itself when the YAML does not say, and whether
+  # it is gone is looked at this often
+  @default_shutdown_timeout_ms :timer.seconds(5)
+  @stop_poll_ms 200
   # The restarts each instance keeps, for the dashboard
   @restart_history 10
 
@@ -49,8 +54,9 @@ defmodule Deployer.Monitor.Application do
     {:ok,
      update_non_blocking_state(%Monitor{
        # Map.get, since a DynamicSupervisor restart after a relup passes the start argument the
-       # old code built, without a readiness key
+       # old code built, without a readiness or liveness key
        readiness: Map.get(service, :readiness, %Readiness{}),
+       liveness: Map.get(service, :liveness, nil),
        # Map.get for the same reason, a start argument without a secrets key
        secrets: Map.get(service, :secrets),
        retry_delay_pre_commands: service.retry_delay_pre_commands,
@@ -81,12 +87,9 @@ defmodule Deployer.Monitor.Application do
       ) do
     Logger.info("Requested sname: #{sname} to stop application pid: #{inspect(pid)}")
 
-    # Stop current application
-    Commander.stop(state.current_pid)
-
-    # NOTE: The next command is needed for Systems that have a different PID for the "/bin/app start" script
-    #       and the bin/beam.smp process
-    cleanup_beam_process(state.sname)
+    # The caller waits for it: what it does next, removing the files of the instance for
+    # one, is for an application that is gone
+    stop_application(state)
 
     # Without a current pid, the exit of the application that was just stopped is not taken
     # for one it decided by itself, which starts it again
@@ -122,8 +125,11 @@ defmodule Deployer.Monitor.Application do
     {:reply, :ok, %{state | pre_commands_run: Map.put(run, :restart, restart)}}
   end
 
-  def handle_call({:restart, restart}, _from, state),
-    do: {:reply, :ok, do_restart(state, restart)}
+  # Answered first: stopping the application can take as long as it is given to stop
+  def handle_call({:restart, restart}, from, state) do
+    GenServer.reply(from, :ok)
+    {:noreply, do_restart(state, restart)}
+  end
 
   # Hot upgrade pre_commands run as erlexec processes that report their exit with a DOWN message.
   # A hot upgrade needs a running app, so the worker asks again while it is down or starting
@@ -315,6 +321,14 @@ defmodule Deployer.Monitor.Application do
   def terminate(_reason, %Monitor{pre_commands_run: %{os_pid: os_pid}}) when is_integer(os_pid),
     do: Commander.stop(os_pid)
 
+  # DeployEx is stopping, or this server is: the application is given its time to stop too
+  def terminate(_reason, %Monitor{current_pid: current_pid} = state)
+      when not is_nil(current_pid) do
+    Logger.info("Stopping sname: #{state.sname}, its monitor is stopping")
+    stop_application(state)
+    :ok
+  end
+
   def terminate(_reason, _state), do: :ok
 
   # A state from an older version gets the fields it lacks on a relup
@@ -327,9 +341,11 @@ defmodule Deployer.Monitor.Application do
      |> Map.put_new(:reported_pre_commands, [])
      |> Map.put_new(:last_crash_at, nil)
      |> Map.put_new(:watchdog_restart_count, 0)
+     |> Map.put_new(:liveness_restart_count, 0)
      |> Map.put_new(:restarts, [])
      |> Map.put_new_lazy(:started_at, fn -> Common.monotonic_to_utc(state.start_time) end)
      |> Map.put_new_lazy(:readiness, fn -> %Readiness{min_ready_ms: state.timeout_app_ready} end)
+     |> Map.put_new(:liveness, nil)
      |> Map.delete(:timeout_app_ready)}
   end
 
@@ -427,6 +443,27 @@ defmodule Deployer.Monitor.Application do
     |> Common.call_gen_server({:restart, restart})
   end
 
+  @doc """
+  How long the application of `sname` has to stop by itself, in milliseconds: its
+  `shutdown_timeout_ms` in the YAML. It is read when the application is stopped, so a
+  change in the YAML is used by the next stop.
+
+  ## Examples
+
+      iex> Deployer.Monitor.Application.shutdown_timeout_ms("not-an-app-abc123")
+      5000
+  """
+  @spec shutdown_timeout_ms(String.t()) :: non_neg_integer()
+  def shutdown_timeout_ms(sname) do
+    with %{name: name} <- Catalog.node_info(sname),
+         %{} = application <- Enum.find(Catalog.applications(), &(&1.name == name)),
+         timeout when is_integer(timeout) <- Map.get(application, :shutdown_timeout_ms) do
+      timeout
+    else
+      _not_set -> @default_shutdown_timeout_ms
+    end
+  end
+
   def global_name(sname),
     do: %{module: __MODULE__, sname: sname}
 
@@ -475,6 +512,9 @@ defmodule Deployer.Monitor.Application do
           run_app_bin(state, app_exec, "start"),
           [
             {:env, os_env(secret_env)},
+            # erlexec kills what it asked to stop after this long. The monitor does it
+            # first, when the application did not stop in its shutdown_timeout_ms
+            {:kill_timeout, div(shutdown_timeout_ms(sname), 1_000) + 5},
             {:stdout, Catalog.stdout_path(sname) |> to_charlist, [:append, {:mode, 0o600}]},
             {:stderr, Catalog.stderr_path(sname) |> to_charlist, [:append, {:mode, 0o600}]}
           ]
@@ -1000,16 +1040,17 @@ defmodule Deployer.Monitor.Application do
       sname: "#{state.sname}"
     })
 
-    # Stop current application
-    Commander.stop(state.current_pid)
+    stop_application(state)
 
-    cleanup_beam_process(state.sname)
-
-    # Update the number of force restarts, and of the ones the watchdog asked for
+    # Update the number of force restarts, and of the ones the watchdog or the liveness probe
+    # asked for, so what is left of the total is what an operator asked for
     force_restart_count = state.force_restart_count + 1
 
     watchdog_restart_count =
       Map.get(state, :watchdog_restart_count, 0) + if(cause == :watchdog, do: 1, else: 0)
+
+    liveness_restart_count =
+      Map.get(state, :liveness_restart_count, 0) + if(cause == :liveness, do: 1, else: 0)
 
     # Trigger restart with backoff time of 1 second
     trigger_run_service(state.sname, 1_000)
@@ -1018,6 +1059,7 @@ defmodule Deployer.Monitor.Application do
     # taken for a crash, which would start it a second time
     %{state | current_pid: nil, force_restart_count: force_restart_count, status: :starting}
     |> Map.put(:watchdog_restart_count, watchdog_restart_count)
+    |> Map.put(:liveness_restart_count, liveness_restart_count)
     |> add_restart(restart)
     |> update_non_blocking_state()
   end
@@ -1028,13 +1070,39 @@ defmodule Deployer.Monitor.Application do
     Map.update(state, :restarts, [restart], &Enum.take([restart | &1], @restart_history))
   end
 
-  defp cleanup_beam_process(sname) do
+  # Asks the application to stop, which is a SIGTERM, and waits for it to be gone for as
+  # long as its shutdown_timeout_ms. What is left after that is killed
+  defp stop_application(%{current_pid: current_pid, sname: sname}) do
+    Commander.stop(current_pid)
+    cleanup_beam_process(sname, shutdown_timeout_ms(sname))
+  end
+
+  # NOTE: The kill is needed for systems that have a different PID for the "/bin/app start"
+  #       script and the bin/beam.smp process
+  defp cleanup_beam_process(sname, wait_ms \\ 0) do
     %{sname: sname, name: name} = Catalog.node_info(sname)
 
+    beam =
+      "ps -ax | grep \"#{name}/#{sname}/current/erts-*.*/bin/beam.smp\" | grep -v grep"
+
+    # One command, so the monitor asks once: it waits while the process is there
+    wait =
+      if wait_ms > 0 do
+        "i=0; while [ $i -lt #{div(wait_ms, @stop_poll_ms)} ] && #{beam} > /dev/null; " <>
+          "do sleep #{@stop_poll_ms / 1_000}; i=$((i+1)); done; "
+      else
+        ""
+      end
+
     case Commander.run(
-           "kill -9 $(ps -ax | grep \"#{name}/#{sname}/current/erts-*.*/bin/beam.smp\" | grep -v grep | awk '{print $1}') ",
+           "#{wait}kill -9 $(#{beam} | awk '{print $1}') ",
            [:sync, :stdout, :stderr]
          ) do
+      {:ok, _} when wait_ms > 0 ->
+        Logger.warning(
+          "The application sname: #{sname} did not stop in #{wait_ms} ms and was killed"
+        )
+
       {:ok, _} ->
         Logger.warning("Remaining beam app removed for sname: #{sname}")
 

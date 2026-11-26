@@ -28,6 +28,7 @@ defmodule Deployer.Status do
           crash_restart_count: non_neg_integer(),
           force_restart_count: non_neg_integer(),
           watchdog_restart_count: non_neg_integer(),
+          liveness_restart_count: non_neg_integer(),
           restarts: [Deployer.Monitor.restart()],
           uptime: String.t() | nil,
           started_at: DateTime.t() | nil,
@@ -45,7 +46,10 @@ defmodule Deployer.Status do
           otp_version: String.t() | nil,
           elixir_version: String.t() | nil,
           phoenix_version: String.t() | nil,
-          logo: String.t() | nil
+          logo: String.t() | nil,
+          # The app's readiness and liveness config, nil for DeployEx
+          readiness: Foundation.Yaml.Readiness.t() | nil,
+          liveness: Foundation.Yaml.Liveness.t() | nil
         }
 
   defstruct name: nil,
@@ -66,6 +70,7 @@ defmodule Deployer.Status do
             crash_restart_count: 0,
             force_restart_count: 0,
             watchdog_restart_count: 0,
+            liveness_restart_count: 0,
             restarts: [],
             uptime: nil,
             started_at: nil,
@@ -80,7 +85,9 @@ defmodule Deployer.Status do
             otp_version: nil,
             elixir_version: nil,
             phoenix_version: nil,
-            logo: nil
+            logo: nil,
+            readiness: nil,
+            liveness: nil
 
   @behaviour Deployer.Status.Adapter
 
