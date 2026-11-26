@@ -94,7 +94,7 @@ defmodule DeployexWeb.Shell.Commands do
      unset $(env | grep -E '^(RELEASE|DEPLOYEX)_' | awk -F'=' '{print $1}')
      unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
      export PATH=#{path}
-     erl #{remsh_name()} -remsh #{sname}@#{hostname} -setcookie #{cookie} #{ssl_options}
+     erl #{remsh_name()}-remsh #{sname}@#{hostname} -setcookie #{cookie} #{ssl_options}
      """, "erl -remsh #{sname}@#{hostname}"}
   end
 
@@ -125,7 +125,7 @@ defmodule DeployexWeb.Shell.Commands do
   # With long names the console needs a long name of its own to reach the node
   defp remsh_name do
     if Common.long_names?() do
-      "-name console-#{System.unique_integer([:positive])}@#{Common.node_host()}"
+      "-name console-#{System.unique_integer([:positive])}@#{Common.node_host()} "
     else
       ""
     end
