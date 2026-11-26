@@ -723,7 +723,6 @@ defmodule Foundation.Yaml do
   defp parse_peers_dns_query(query),
     do: raise("peers_dns_query #{inspect(query)} not supported, expected a DNS name")
 
-  # A missing value stays nil so the config provider keeps the release config.
   # A missing value is false: a change of this file waits to be applied from the dashboard
   defp parse_config_auto_apply(nil), do: false
   defp parse_config_auto_apply(value) when is_boolean(value), do: value
@@ -731,6 +730,7 @@ defmodule Foundation.Yaml do
   defp parse_config_auto_apply(value),
     do: raise("config_auto_apply #{inspect(value)} not supported, expected true or false")
 
+  # A missing value stays nil so the config provider keeps the release config.
   defp parse_enable_release_check(nil), do: nil
   defp parse_enable_release_check(value) when is_boolean(value), do: value
 

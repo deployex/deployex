@@ -283,6 +283,13 @@ defmodule Sentinel.Config.Watcher do
       {:watcher_config_apply, Node.self(), state.pending_changes}
     )
 
+    # Clear any review/apply prompt still shown for the pending changes just applied
+    Phoenix.PubSub.broadcast(
+      Foundation.PubSub,
+      @pubsub_topic_new,
+      {:watcher_config_new, Node.self(), nil}
+    )
+
     %State{
       state
       | current_config: state.pending_config,

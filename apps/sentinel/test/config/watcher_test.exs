@@ -585,6 +585,7 @@ defmodule Sentinel.Config.WatcherTest do
            end
          ]}
       ]) do
+        Watcher.subscribe_new_config()
         Watcher.subscribe_apply_new_config()
 
         log =
@@ -592,7 +593,9 @@ defmodule Sentinel.Config.WatcherTest do
             {:ok, _pid} = Watcher.start_link(name: :test_auto_apply, check_interval_ms: 100)
 
             assert_receive {:applied, _updates}, 1_000
+            assert_receive {:watcher_config_new, _node, %{changes_count: 1}}, 1_000
             assert_receive {:watcher_config_apply, _node, %{changes_count: 1}}, 1_000
+            assert_receive {:watcher_config_new, _node, nil}, 1_000
 
             state = :sys.get_state(:test_auto_apply)
             assert state.pending_config == nil
