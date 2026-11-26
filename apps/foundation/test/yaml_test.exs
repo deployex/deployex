@@ -36,6 +36,8 @@ defmodule Foundation.YamlTest do
   @yaml_app_log_stdout_error "#{@file_paths}/deployex-app-log-stdout-error.yaml"
   @yaml_log_format "#{@file_paths}/deployex-log-format.yaml"
   @yaml_log_format_error "#{@file_paths}/deployex-log-format-error.yaml"
+  @yaml_peers "#{@file_paths}/deployex-peers.yaml"
+  @yaml_peers_error "#{@file_paths}/deployex-peers-error.yaml"
   @yaml_shutdown "#{@file_paths}/deployex-shutdown.yaml"
   @yaml_shutdown_error "#{@file_paths}/deployex-shutdown-error.yaml"
   @yaml_notifications_all "#{@file_paths}/deployex-notifications-all.yaml"
@@ -954,6 +956,38 @@ defmodule Foundation.YamlTest do
       ]) do
         assert_raise RuntimeError,
                      ~s(log_format "xml" not supported, expected one of: text, datadog, elastic, gcp, json),
+                     fn -> Yaml.load() end
+      end
+    end
+  end
+
+  describe "peers_dns_query" do
+    test "parses the DNS name" do
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_peers end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.peers_dns_query == "deployex.default.svc.cluster.local"
+      end
+    end
+
+    test "is nil when absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.peers_dns_query == nil
+      end
+    end
+
+    test "rejects what is not a name" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_peers_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     "peers_dns_query 5 not supported, expected a DNS name",
                      fn -> Yaml.load() end
       end
     end

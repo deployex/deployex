@@ -59,6 +59,7 @@ otp_version: 28                                          # OTP version (must mat
 os_target: "ubuntu-24.04"                                # Target OS server. The installer picks the amd64 or arm64 build
 enable_release_check: true                               # Hourly GitHub check for a newer DeployEx (optional, default: true)
 log_format: "text"                                       # Logs of DeployEx: text, json, datadog, gcp or elastic (optional, default: text)
+peers_dns_query: "deployex.default.svc.cluster.local"    # DNS name that resolves to every DeployEx, to connect them (optional)
 
 # Path Configuration (optional with defaults)
 otp_tls_certificates: "/usr/local/share/ca-certificates" # Path to TLS certificates
@@ -565,6 +566,7 @@ These fields require a **full DeployEx restart**:
 - `os_target` - Target operating system
 - `enable_release_check` - GitHub check for a newer DeployEx release
 - `log_format` - The format of the logs DeployEx writes to its output. `text` is the default. `json`, `datadog`, `gcp` and `elastic` write one JSON object a line, in the shape of the [LoggerJSON](https://hexdocs.pm/logger_json) formatter of that name, each with `service: "deployex"`, which is `service.name` with `elastic`. For DeployEx in a container, where a collector reads the output: with `monitored_app_log_stdout` the lines of the applications are in the same output, and their `service` tells them apart. The few lines the VM logs while it boots, before the YAML is read, stay text. A value that is not one of these stops DeployEx when it starts, and is logged as an error when the file is changed while it runs
+- `peers_dns_query` - A DNS name that resolves to the address of every DeployEx, the headless Service of a Kubernetes StatefulSet for instance. Each DeployEx resolves it every five seconds and connects to the others, and the applications they run are then connected to each other too, with nothing in them for it. Not set, a DeployEx does not look for others. DeployEx names its nodes with short names, so the short host name of each one has to resolve from the others: on Kubernetes, a StatefulSet with a headless Service, and that Service in the DNS search list of the pods (`dnsConfig.searches`)
 
 #### Installation Paths
 - `install_path` - DeployEx installation directory

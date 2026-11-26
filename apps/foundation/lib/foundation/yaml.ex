@@ -357,6 +357,7 @@ defmodule Foundation.Yaml do
             os_target: nil,
             enable_release_check: nil,
             log_format: "text",
+            peers_dns_query: nil,
             install_path: nil,
             log_path: nil,
             monitored_app_log_path: nil,
@@ -391,6 +392,7 @@ defmodule Foundation.Yaml do
           os_target: String.t() | nil,
           enable_release_check: boolean() | nil,
           log_format: String.t(),
+          peers_dns_query: String.t() | nil,
           install_path: String.t() | nil,
           var_path: String.t() | nil,
           log_path: String.t() | nil,
@@ -524,6 +526,7 @@ defmodule Foundation.Yaml do
       os_target: data["os_target"],
       enable_release_check: parse_enable_release_check(data["enable_release_check"]),
       log_format: parse_log_format(data["log_format"]),
+      peers_dns_query: parse_peers_dns_query(data["peers_dns_query"]),
       install_path: data["install_path"] || @default_install_path,
       var_path: data["var_path"] || @default_var_path,
       log_path: data["log_path"] || @default_log_path,
@@ -712,6 +715,13 @@ defmodule Foundation.Yaml do
               Enum.join(Foundation.LogFormat.formats(), ", ")
     end
   end
+
+  # A missing value is nil: this DeployEx does not look for others.
+  defp parse_peers_dns_query(nil), do: nil
+  defp parse_peers_dns_query(query) when is_binary(query) and query != "", do: query
+
+  defp parse_peers_dns_query(query),
+    do: raise("peers_dns_query #{inspect(query)} not supported, expected a DNS name")
 
   # A missing value stays nil so the config provider keeps the release config.
   defp parse_enable_release_check(nil), do: nil
