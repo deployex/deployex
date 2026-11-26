@@ -546,18 +546,22 @@ defmodule DeployexWeb.ApplicationsLive.View do
     end
   end
 
-  # One count for the board, amber only for crashes. The tooltip tells crashes, operator and watchdog
-  # restarts apart, and lists the latest ones newest first, each a link to the logs at its time
+  # One count for the board, amber only for crashes. The tooltip tells crashes, operator, watchdog
+  # and liveness restarts apart, and lists the latest ones newest first, each a link to the logs at
+  # its time
   defp restarts(children, now) do
     crash = Enum.reduce(children, 0, &(&1.crash_restart_count + &2))
     forced = Enum.reduce(children, 0, &(&1.force_restart_count + &2))
     watchdog = Enum.reduce(children, 0, &(Map.get(&1, :watchdog_restart_count, 0) + &2))
+    liveness = Enum.reduce(children, 0, &(Map.get(&1, :liveness_restart_count, 0) + &2))
+    operator = forced - watchdog - liveness
 
     totals =
       [
         crash > 0 && crashes(crash),
-        forced > watchdog && "#{forced - watchdog} by an operator",
-        watchdog > 0 && "#{watchdog} by the watchdog"
+        operator > 0 && "#{operator} by an operator",
+        watchdog > 0 && "#{watchdog} by the watchdog",
+        liveness > 0 && "#{liveness} by the liveness probe"
       ]
       |> Enum.filter(& &1)
 

@@ -87,6 +87,43 @@ defmodule Foundation.Yaml do
           }
   end
 
+  defmodule Liveness do
+    @moduledoc """
+    Provides structure to define a liveness probe, run after the application is ready
+
+    Disabled by default, through a `nil` value on `Application.liveness`. With `:otp` the node
+    must answer over distribution with its boot status, the same check readiness performs with no
+    `function` configured. With `:http` a request to `scheme://127.0.0.1:<port><path>` must answer
+    with a 2xx status, where the port is looked up from the instance's ports by `port_key`, the
+    same request the `:http` readiness makes. The probe runs every `period_ms`, and
+    `failure_threshold` failures in a row report the application.
+
+    A liveness probe should not check external dependencies, that belongs in readiness, because
+    the BEAM already restarts a crashed process on its own and restarting every replica during a
+    shared dependency outage makes the outage worse.
+    """
+
+    @derive Jason.Encoder
+
+    defstruct type: :otp,
+              period_ms: :timer.seconds(10),
+              failure_threshold: 3,
+              enable_restart: false,
+              scheme: "http",
+              port_key: nil,
+              path: nil
+
+    @type t :: %__MODULE__{
+            type: :otp | :http,
+            period_ms: pos_integer(),
+            failure_threshold: pos_integer(),
+            enable_restart: boolean(),
+            scheme: String.t(),
+            port_key: String.t() | nil,
+            path: String.t() | nil
+          }
+  end
+
   defmodule Ports do
     @moduledoc """
     Provides structure to define Ports feature
@@ -288,7 +325,8 @@ defmodule Foundation.Yaml do
       :monitoring,
       :certificates,
       :secrets,
-      readiness: %Foundation.Yaml.Readiness{}
+      readiness: %Foundation.Yaml.Readiness{},
+      liveness: nil
     ]
 
     @type t :: %__MODULE__{
@@ -303,7 +341,8 @@ defmodule Foundation.Yaml do
             monitoring: [{atom(), Foundation.Yaml.Monitoring.t()}],
             certificates: [Foundation.Yaml.Certificate.t()],
             secrets: Foundation.Yaml.Secrets.t() | nil,
-            readiness: Foundation.Yaml.Readiness.t()
+            readiness: Foundation.Yaml.Readiness.t(),
+            liveness: Foundation.Yaml.Liveness.t() | nil
           }
   end
 
@@ -773,8 +812,9 @@ defmodule Foundation.Yaml do
       readiness:
         data["readiness"]
         |> parse_readiness()
-        |> check_readiness_port(data)
-        |> check_readiness_function(data["language"] || @default_language)
+        |> check_probe_port("readiness", data)
+        |> check_readiness_function(data["language"] || @default_language),
+      liveness: data["liveness"] |> parse_liveness() |> check_probe_port("liveness", data)
     }
   end
 
@@ -812,17 +852,18 @@ defmodule Foundation.Yaml do
     end
   end
 
-  # An http readiness probe against a port_key missing from replica_ports never passes, and the
-  # only trace is a generic "not ready yet" debug line, so this is checked once at load
-  defp check_readiness_port(%Readiness{type: :http, port_key: port_key} = readiness, data) do
+  # An http probe against a port_key missing from replica_ports never passes. For readiness the
+  # only trace is a generic "not ready yet" debug line, and for liveness a running application
+  # reported as hung, so this is checked once at load
+  defp check_probe_port(%{type: :http, port_key: port_key} = probe, section, data) do
     if Enum.any?(parse_ports(data["replica_ports"]), &(&1.key == port_key)) do
-      readiness
+      probe
     else
-      raise("readiness port_key #{inspect(port_key)} is not a key in replica_ports")
+      raise("#{section} port_key #{inspect(port_key)} is not a key in replica_ports")
     end
   end
 
-  defp check_readiness_port(readiness, _data), do: readiness
+  defp check_probe_port(probe, _section, _data), do: probe
 
   # The Module.function/0 string parses as an Elixir module path, which an Erlang or Gleam
   # node has no code for, so this is checked once at load instead of ghosting the version
@@ -845,9 +886,9 @@ defmodule Foundation.Yaml do
       type: type,
       min_ready_ms: parse_min_ready_ms(data["min_ready_ms"]),
       function: parse_readiness_function(type, data["function"]),
-      scheme: parse_readiness_scheme(data["scheme"]),
-      port_key: parse_readiness_port_key(type, data["port_key"]),
-      path: parse_readiness_path(type, data["path"])
+      scheme: parse_probe_scheme("readiness", data["scheme"]),
+      port_key: parse_probe_port_key("readiness", type, data["port_key"]),
+      path: parse_probe_path("readiness", type, data["path"])
     }
   end
 
@@ -861,26 +902,29 @@ defmodule Foundation.Yaml do
   defp parse_readiness_type(type),
     do: raise("readiness type #{inspect(type)} not supported, expected timeout, otp or http")
 
-  defp parse_readiness_scheme(nil), do: %Readiness{}.scheme
-  defp parse_readiness_scheme(scheme) when scheme in ["http", "https"], do: scheme
+  # The http fields are the same for the readiness and the liveness sections, the section is
+  # only named in the error
+  defp parse_probe_scheme(_section, nil), do: %Readiness{}.scheme
+  defp parse_probe_scheme(_section, scheme) when scheme in ["http", "https"], do: scheme
 
-  defp parse_readiness_scheme(scheme),
-    do: raise("readiness scheme #{inspect(scheme)} not supported, expected http or https")
+  defp parse_probe_scheme(section, scheme),
+    do: raise("#{section} scheme #{inspect(scheme)} not supported, expected http or https")
 
-  defp parse_readiness_port_key(:http, port_key) when is_binary(port_key) and port_key != "",
-    do: port_key
+  defp parse_probe_port_key(_section, :http, port_key)
+       when is_binary(port_key) and port_key != "",
+       do: port_key
 
-  defp parse_readiness_port_key(:http, port_key),
-    do: raise("readiness http requires port_key, got #{inspect(port_key)}")
+  defp parse_probe_port_key(section, :http, port_key),
+    do: raise("#{section} http requires port_key, got #{inspect(port_key)}")
 
-  defp parse_readiness_port_key(_type, port_key), do: port_key
+  defp parse_probe_port_key(_section, _type, port_key), do: port_key
 
-  defp parse_readiness_path(:http, "/" <> _rest = path), do: path
+  defp parse_probe_path(_section, :http, "/" <> _rest = path), do: path
 
-  defp parse_readiness_path(:http, path),
-    do: raise("readiness http requires path starting with /, got #{inspect(path)}")
+  defp parse_probe_path(section, :http, path),
+    do: raise("#{section} http requires path starting with /, got #{inspect(path)}")
 
-  defp parse_readiness_path(_type, path), do: path
+  defp parse_probe_path(_section, _type, path), do: path
 
   defp parse_readiness_function(_type, nil), do: nil
 
@@ -924,6 +968,61 @@ defmodule Foundation.Yaml do
       "readiness min_ready_ms #{inspect(value)} not supported, expected a non negative integer"
     )
   end
+
+  defp parse_liveness(nil), do: nil
+
+  defp parse_liveness(%{} = data) do
+    type = parse_liveness_type(data["type"])
+
+    %Liveness{
+      type: type,
+      period_ms: parse_liveness_period_ms(data["period_ms"]),
+      failure_threshold: parse_failure_threshold(data["failure_threshold"]),
+      enable_restart: parse_liveness_enable_restart(data["enable_restart"]),
+      scheme: parse_probe_scheme("liveness", data["scheme"]),
+      port_key: parse_probe_port_key("liveness", type, data["port_key"]),
+      path: parse_probe_path("liveness", type, data["path"])
+    }
+  end
+
+  defp parse_liveness(value),
+    do: raise("liveness #{inspect(value)} not supported, expected a section with type")
+
+  defp parse_liveness_type(type) when type in [nil, "otp"], do: :otp
+  defp parse_liveness_type("http"), do: :http
+
+  defp parse_liveness_type(type),
+    do: raise("liveness type #{inspect(type)} not supported, expected otp or http")
+
+  # The probes are scheduled on a tick of one second, so a shorter period cannot be honored
+  defp parse_liveness_period_ms(nil), do: %Liveness{}.period_ms
+  defp parse_liveness_period_ms(value) when is_integer(value) and value >= 1_000, do: value
+
+  defp parse_liveness_period_ms(value),
+    do:
+      raise(
+        "liveness period_ms #{inspect(value)} not supported, expected an integer of at least 1000"
+      )
+
+  defp parse_failure_threshold(nil), do: %Liveness{}.failure_threshold
+  defp parse_failure_threshold(value) when is_integer(value) and value > 0, do: value
+
+  defp parse_failure_threshold(value),
+    do:
+      raise(
+        "liveness failure_threshold #{inspect(value)} not supported, expected a positive integer"
+      )
+
+  # NOTE: enable_restart is a boolean, || would promote an explicit false to the default. Unlike
+  #       monitoring, liveness defaults to false: the BEAM already restarts a crashed process on
+  #       its own, and restarting every replica during a shared dependency outage makes it worse
+  defp parse_liveness_enable_restart(nil), do: false
+
+  defp parse_liveness_enable_restart(enable_restart) when is_boolean(enable_restart),
+    do: enable_restart
+
+  defp parse_liveness_enable_restart(value),
+    do: raise("liveness enable_restart #{inspect(value)} not supported, expected true or false")
 
   defp parse_ports(nil), do: []
 
@@ -1069,6 +1168,7 @@ defmodule Foundation.Yaml do
     version_ghosted
     pipeline_not_started
     deployment_rollback
+    liveness_probe_failed
   )
 
   defp parse_notification_events(events) do

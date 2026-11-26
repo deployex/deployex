@@ -5,17 +5,18 @@ defmodule Deployer.Monitor do
 
   alias Deployer.Monitor
   alias Foundation.Catalog
+  alias Foundation.Yaml.Liveness
   alias Foundation.Yaml.Readiness
 
   @behaviour Monitor.Adapter
 
   @typedoc """
-  A restart of the instance: a crash, or one an operator or the watchdog asked for, with the watchdog's
-  metric as its detail.
+  A restart of the instance: a crash, or one an operator, the watchdog or a failing liveness
+  probe asked for, with the watchdog's metric or the probe's failure count as its detail.
   """
   @type restart :: %{
           at: DateTime.t(),
-          cause: :crash | :operator | :watchdog,
+          cause: :crash | :operator | :watchdog | :liveness,
           detail: String.t() | nil
         }
 
@@ -32,11 +33,13 @@ defmodule Deployer.Monitor do
           consecutive_crash_count: integer(),
           force_restart_count: integer(),
           watchdog_restart_count: integer(),
+          liveness_restart_count: integer(),
           restarts: [restart()],
           start_time: nil | integer(),
           started_at: nil | DateTime.t(),
           last_crash_at: nil | DateTime.t(),
           readiness: Readiness.t(),
+          liveness: Liveness.t() | nil,
           secrets: Foundation.Yaml.Secrets.t() | nil,
           retry_delay_pre_commands: integer(),
           pre_commands_run: map() | nil,
@@ -55,11 +58,13 @@ defmodule Deployer.Monitor do
             consecutive_crash_count: 0,
             force_restart_count: 0,
             watchdog_restart_count: 0,
+            liveness_restart_count: 0,
             restarts: [],
             start_time: nil,
             started_at: nil,
             last_crash_at: nil,
             readiness: %Readiness{},
+            liveness: nil,
             secrets: nil,
             retry_delay_pre_commands: nil,
             pre_commands_run: nil,

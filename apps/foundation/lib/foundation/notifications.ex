@@ -35,6 +35,7 @@ defmodule Foundation.Notifications do
   | `"version_ghosted"`               | A version was ghosted, this host does not deploy it again  | `node`, `sname`, `name`, `version`, `reason`                                |
   | `"pipeline_not_started"`          | A pipeline is down after a hot upgrade that succeeded      | `node`, `sname`, `name`, `version`, `pipelines`                             |
   | `"deployment_rollback"`           | An instance starts to go back from a version ghosted here  | `node`, `sname`, `name`, `from_version`, `to_version`, `reason`             |
+  | `"liveness_probe_failed"`         | A liveness probe failed `failure_threshold` times in a row | `node`, `sname`, `name`, `consecutive_failures`, `failure_threshold`, `action` (`:restart`/`:no_restart`) |
 
   ## Available adapters
 

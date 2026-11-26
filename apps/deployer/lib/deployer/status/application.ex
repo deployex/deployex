@@ -401,6 +401,7 @@ defmodule Deployer.Status.Application do
       force_restart_count: force_restart_count,
       # A monitor state written before a relup has no restart history until its next update
       watchdog_restart_count: Map.get(monitor_state, :watchdog_restart_count, 0),
+      liveness_restart_count: Map.get(monitor_state, :liveness_restart_count, 0),
       restarts: Map.get(monitor_state, :restarts, []),
       uptime: Common.uptime_to_string(start_time),
       # A monitor state written before a relup has no started_at until its next update

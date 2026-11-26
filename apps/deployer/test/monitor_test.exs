@@ -1282,6 +1282,22 @@ defmodule Deployer.MonitorTest do
       assert [%{cause: :operator} | _] = restarts
       assert length(restarts) == 10
 
+      # A restart the liveness probe asked for has a count of its own too
+      :sys.replace_state(monitor, &%{&1 | current_pid: app_pid})
+
+      assert :ok =
+               MonitorApp.restart(context.elixir_sname,
+                 cause: :liveness,
+                 detail: "failed 3 liveness probes"
+               )
+
+      assert %{
+               liveness_restart_count: 1,
+               watchdog_restart_count: 1,
+               force_restart_count: 3,
+               restarts: [%{cause: :liveness, detail: "failed 3 liveness probes"} | _]
+             } = :sys.get_state(monitor)
+
       assert :ok = MonitorApp.stop_service(context.elixir_name, context.elixir_sname)
     end
 
