@@ -83,8 +83,24 @@ defmodule DeployexWeb.UserAuthOAuthTest do
   test "an allowed OAuth session authenticates", %{conn: conn} do
     conn = oauth_session(conn)
 
-    assert UserAuth.fetch_current_user(conn, []).assigns.current_user == %{email: "me@co.com"}
-    assert mount_user(conn) == %{email: "me@co.com"}
+    assert UserAuth.fetch_current_user(conn, []).assigns.current_user ==
+             %{email: "me@co.com", role: :admin}
+
+    assert mount_user(conn) == %{email: "me@co.com", role: :admin}
+  end
+
+  test "an email on the read-only list authenticates with read-only access", %{conn: conn} do
+    conn = oauth_session(conn)
+    put_oauth_config(%{emails: [], domains: [], read_only_emails: ["me@co.com"]})
+
+    assert mount_user(conn) == %{email: "me@co.com", role: :read_only}
+
+    put_oauth_config(%{emails: [], domains: [], read_only_domains: ["co.com"]})
+    assert mount_user(conn) == %{email: "me@co.com", role: :read_only}
+
+    # The admin list wins
+    put_oauth_config(%{emails: ["me@co.com"], domains: [], read_only_domains: ["co.com"]})
+    assert mount_user(conn) == %{email: "me@co.com", role: :admin}
   end
 
   test "an email removed from the allowlist loses access", %{conn: conn} do

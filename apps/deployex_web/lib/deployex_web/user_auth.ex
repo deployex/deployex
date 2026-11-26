@@ -138,8 +138,8 @@ defmodule DeployexWeb.UserAuth do
   defp oauth_user(token) do
     with %{username: email} <- Accounts.get_user_by_session_token(token),
          true <- Config.configured?(),
-         :ok <- Allowlist.check(email, Config.allowlist()) do
-      %{email: email}
+         role when role in [:admin, :read_only] <- Allowlist.role(email, Config.allowlist()) do
+      %{email: email, role: role}
     else
       _ -> nil
     end

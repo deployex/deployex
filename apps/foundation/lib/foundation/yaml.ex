@@ -315,7 +315,12 @@ defmodule Foundation.Yaml do
             provider: module(),
             client_id: String.t() | nil,
             redirect_uri: String.t() | nil,
-            allowlist: %{emails: [String.t()], domains: [String.t()]}
+            allowlist: %{
+              required(:emails) => [String.t()],
+              required(:domains) => [String.t()],
+              optional(:read_only_emails) => [String.t()],
+              optional(:read_only_domains) => [String.t()]
+            }
           }
   end
 
@@ -578,11 +583,22 @@ defmodule Foundation.Yaml do
       provider: parse_auth_provider(data["provider"]),
       client_id: data["client_id"],
       redirect_uri: data["redirect_uri"],
-      allowlist: %{
-        emails: parse_auth_list("allowed_emails", data["allowed_emails"]),
-        domains: parse_auth_list("allowed_domains", data["allowed_domains"])
-      }
+      allowlist:
+        %{
+          emails: parse_auth_list("allowed_emails", data["allowed_emails"]),
+          domains: parse_auth_list("allowed_domains", data["allowed_domains"])
+        }
+        |> put_auth_list(:read_only_emails, "read_only_emails", data["read_only_emails"])
+        |> put_auth_list(:read_only_domains, "read_only_domains", data["read_only_domains"])
     }
+  end
+
+  # Who signs in with read-only access. The key is only there when the YAML has it
+  defp put_auth_list(allowlist, key, name, value) do
+    case parse_auth_list(name, value) do
+      [] -> allowlist
+      list -> Map.put(allowlist, key, list)
+    end
   end
 
   defp parse_auth_provider(nil), do: DeployexWeb.OAuth.Provider.GitHub

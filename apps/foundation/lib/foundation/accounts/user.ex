@@ -7,13 +7,16 @@ defmodule Foundation.Accounts.User do
   """
   @type t :: %__MODULE__{
           username: String.t() | nil,
-          hashed_password: String.t() | nil
+          hashed_password: String.t() | nil,
+          role: :admin
         }
 
   @derive Jason.Encoder
 
+  # The built-in user is the admin of the dashboard
   defstruct username: nil,
-            hashed_password: nil
+            hashed_password: nil,
+            role: :admin
 
   @doc """
   Verifies the password.
