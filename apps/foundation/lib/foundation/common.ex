@@ -179,6 +179,70 @@ defmodule Foundation.Common do
   end
 
   @doc """
+  Whether this node, and so the applications it runs, has long names: a DeployEx started
+  with `DEPLOYEX_NODE_HOST`. DeployEx uses short names otherwise.
+
+  ## Examples
+
+    iex> Foundation.Common.long_names?()
+    false
+  """
+  @spec long_names?() :: boolean()
+  def long_names?, do: :net_kernel.longnames() == true
+
+  @doc """
+  What goes after the `@` in the name of the nodes of this host: the host name with short
+  names, and with long names what this node was given, an address for instance.
+
+  ## Examples
+
+    iex> {:ok, host_name} = :inet.gethostname()
+    ...> Foundation.Common.node_host() == to_string(host_name)
+    true
+  """
+  @spec node_host() :: String.t()
+  def node_host do
+    if long_names?() do
+      Node.self() |> Atom.to_string() |> String.split("@") |> List.last()
+    else
+      {:ok, host_name} = :inet.gethostname()
+      to_string(host_name)
+    end
+  end
+
+  @doc """
+  The lines of a shell script that name the node of an application for an Elixir or an
+  Erlang release: `RELEASE_NODE`, and `RELEASE_DISTRIBUTION` with long names.
+
+  ## Examples
+
+    iex> Foundation.Common.release_node_env("myapp-abc123")
+    "export RELEASE_NODE=myapp-abc123"
+  """
+  @spec release_node_env(String.t()) :: String.t()
+  def release_node_env(sname) do
+    if long_names?() do
+      "export RELEASE_DISTRIBUTION=name\nexport RELEASE_NODE=#{sname}@#{node_host()}"
+    else
+      "export RELEASE_NODE=#{sname}"
+    end
+  end
+
+  @doc """
+  The argument of `erl` that names a node: `-sname`, or `-name` with the host when this
+  node has long names.
+
+  ## Examples
+
+    iex> Foundation.Common.erl_name_argument("myapp-abc123")
+    "-sname myapp-abc123"
+  """
+  @spec erl_name_argument(String.t()) :: String.t()
+  def erl_name_argument(sname) do
+    if long_names?(), do: "-name #{sname}@#{node_host()}", else: "-sname #{sname}"
+  end
+
+  @doc """
   This function calls gen_server with try catch
 
   NOTE: This function needs to use try/catch because rescue (suggested by credo)

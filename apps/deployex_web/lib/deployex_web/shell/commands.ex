@@ -94,7 +94,7 @@ defmodule DeployexWeb.Shell.Commands do
      unset $(env | grep -E '^(RELEASE|DEPLOYEX)_' | awk -F'=' '{print $1}')
      unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
      export PATH=#{path}
-     erl -remsh #{sname}@#{hostname} -setcookie #{cookie} #{ssl_options}
+     erl #{remsh_name()} -remsh #{sname}@#{hostname} -setcookie #{cookie} #{ssl_options}
      """, "erl -remsh #{sname}@#{hostname}"}
   end
 
@@ -104,7 +104,7 @@ defmodule DeployexWeb.Shell.Commands do
      unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
      export PATH=#{path}
      export RELX_REPLACE_OS_VARS=true
-     export RELEASE_NODE=#{sname}
+     #{Common.release_node_env(sname)}
      export RELEASE_COOKIE=#{cookie}
      export RELEASE_SSL_OPTIONS=\"#{ssl_options}\"
      #{bin_path} remote_console
@@ -116,10 +116,19 @@ defmodule DeployexWeb.Shell.Commands do
      unset $(env | grep -E '^(RELEASE|DEPLOYEX)_' | awk -F'=' '{print $1}')
      unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
      export PATH=#{path}
-     export RELEASE_NODE=#{sname}
+     #{Common.release_node_env(sname)}
      export RELEASE_COOKIE=#{cookie}
      #{bin_path} remote
      """, "bin/#{app_name(sname)} remote"}
+  end
+
+  # With long names the console needs a long name of its own to reach the node
+  defp remsh_name do
+    if Common.long_names?() do
+      "-name console-#{System.unique_integer([:positive])}@#{Common.node_host()}"
+    else
+      ""
+    end
   end
 
   # Set the PTY size explicitly, erlexec leaves it undefined without winsz. The page resizes it when it attaches
