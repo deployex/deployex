@@ -245,10 +245,13 @@ iex --sname deployex --cookie cookie -S mix phx.server
 iex(deployex@hostname)1>
 ```
 
-You should then visit the application and check it is running [localhost:5001](http://localhost:5001/). Since you are not using mTLS, the dashboard should show mTLS `Not Supported`. You can also click in the stdout log button of `myerlangapp` to check the following message is being printed:
+You should then visit the application and check it is running [localhost:5001](http://localhost:5001/). Since you are not using mTLS, the dashboard should show mTLS `Not Supported`. You can also open the logs of an instance of `myerlangapp`, with the logs button of its row, to check the following message is being printed:
 
-![Stdout button Erlang](../../static/deployex_monitoring_app_erlang_stdout.png)
-![Logs Erlang](../../static/deployex_monitoring_app_erlang_logs.png)
+```
+Version: 0.1.0 printed every second
+Version: 0.1.0 printed every second
+Version: 0.1.0 printed every second
+```
 
 > [!NOTE]
 > The __OTP-Nodes are connected__, but the __mTLS is not supported__. The __mTLS__ can be enabled and it will be covered ahead. Leave this terminal running and open a new one to compile and release the monitored app.
@@ -328,8 +331,15 @@ cp _build/prod/rel/${app_name}/${app_name}-0.1.2.tar.gz /tmp/deployex/bucket/dis
 echo "{\"version\":\"0.1.2\",\"pre_commands\": [],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
 ```
 
-you can check in the logs that the Hotupgrade was executed with success:
-![hot upgrade logs](../../static/deployex_monitoring_app_erlang_ht_logs.png)
+you can check in the logs of the instance that the Hotupgrade was executed with success:
+
+```
+Version: 0.1.1 printed every second
+Version: 0.1.1 printed every second
+( ͡° ͜ʖ ͡°)_/¯ Hot code reloading happening here
+Version: 0.1.2 printed every second
+Version: 0.1.2 printed every second
+```
 
 you can also restart the application to check that the hotupgrade persisted.
 
