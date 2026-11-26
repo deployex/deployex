@@ -54,6 +54,7 @@ defmodule Mix.Shared do
         Foundation.Certificates.Importer.Mock,
         Foundation.Fixture.Stubs.FailingACMEProvider,
         Foundation.Network,
+        Foundation.Peers.Resolver,
         Foundation.System.Zip,
         # TODO: The next 2 files are missing unit test
         Foundation.Certificates.PublicKey,

@@ -319,7 +319,10 @@ defmodule Deployer.HotUpgrade.VersionUpdateTest do
       start_sdk("0.1.0")
 
       # A batch processor that takes longer than the instruction waits for it
-      Process.exit(Process.whereis(:otel_batch_processor_global), :kill)
+      old = Process.whereis(:otel_batch_processor_global)
+      ref = Process.monitor(old)
+      Process.exit(old, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^old, :killed}
       test_pid = self()
 
       busy =

@@ -133,6 +133,17 @@ defmodule Foundation.ConfigProvider.Env.Config do
             Config.Reader.merge(updated_config, foundation: [log_format: yaml_config.log_format])
           end
 
+        # Where the other DeployEx nodes are found. Only set when the YAML has it, see
+        # Foundation.Peers.
+        updated_config =
+          if yaml_config.peers_dns_query do
+            Config.Reader.merge(updated_config,
+              foundation: [peers_dns_query: yaml_config.peers_dns_query]
+            )
+          else
+            updated_config
+          end
+
         # GitHub release check. Without the key, the release config stays.
         updated_config =
           case yaml_config.enable_release_check do

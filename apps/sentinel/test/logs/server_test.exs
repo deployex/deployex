@@ -358,6 +358,19 @@ defmodule Sentinel.Logs.ServerTest do
                    1_000
   end
 
+  test "Check Node down of a node of another host", %{sname: sname, pid: pid} do
+    log_type = "stderr"
+    Server.subscribe_for_new_logs(sname, log_type)
+
+    # The name of a node of this DeployEx, on the host of a connected one
+    send(pid, {:nodedown, :"#{sname}@another-host"})
+    {:ok, host} = :inet.gethostname()
+    send(pid, {:nodedown, :"deployex@#{host}-1"})
+
+    refute_receive {:logs_new_data, _sname, _log_type, %Message{}}, 500
+    assert Process.alive?(pid)
+  end
+
   test "Log terminals always capture the tail output from stdout", %{pid: pid} do
     test_pid = self()
     new_sname = Catalog.create_sname("myelixir")

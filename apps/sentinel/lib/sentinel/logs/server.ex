@@ -163,8 +163,11 @@ defmodule Sentinel.Logs.Server do
         } =
           state
       ) do
+    # A node of another host is not one of this DeployEx, whatever its name: the DeployEx
+    # of every host has the same one. The node of an sname is the one of this host
     with %{sname: sname} <- Catalog.node_info(node),
-         true <- sname in expected_snames do
+         true <- sname in expected_snames,
+         %{node: ^node} <- Catalog.node_info(sname) do
       sname_log_table = Map.get(sname_logs_tables, sname)
       now = System.os_time(:millisecond)
       minute = unix_to_minutes(now)
@@ -179,7 +182,8 @@ defmodule Sentinel.Logs.Server do
         log: "DeployEx detected node down for node: #{node}"
       }
 
-      if persist_data? do
+      # An sname without a log file has no table
+      if persist_data? and sname_log_table do
         ets_append_to_list(sname_log_table, timed_log_type_key, data)
       end
 
