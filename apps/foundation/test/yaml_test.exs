@@ -1458,8 +1458,32 @@ defmodule Foundation.YamlTest do
 
         assert app.liveness == %Yaml.Liveness{
                  type: :otp,
+                 period_ms: 10_000,
                  failure_threshold: 5,
                  enable_restart: true
+               }
+      end
+    end
+
+    test "parses an http section" do
+      path =
+        liveness_yaml(
+          ~s(type: "http"\n      scheme: "https"\n      port_key: "PORT"\n      path: "/live"\n      period_ms: 5000)
+        )
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.liveness == %Yaml.Liveness{
+                 type: :http,
+                 period_ms: 5_000,
+                 failure_threshold: 3,
+                 enable_restart: false,
+                 scheme: "https",
+                 port_key: "PORT",
+                 path: "/live"
                }
       end
     end
@@ -1487,8 +1511,21 @@ defmodule Foundation.YamlTest do
 
     test "raises on values it does not support" do
       for {section, message} <- [
-            {~s(type: "http"), ~s(liveness type "http" not supported, expected otp)},
-            {~s(type: "garbage"), ~s(liveness type "garbage" not supported, expected otp)},
+            {~s(type: "garbage"),
+             ~s(liveness type "garbage" not supported, expected otp or http)},
+            {~s(type: "http"\n      path: "/live"), "liveness http requires port_key, got nil"},
+            {~s(type: "http"\n      port_key: "PORT"),
+             "liveness http requires path starting with /, got nil"},
+            {~s(type: "http"\n      port_key: "PORT"\n      path: "live"),
+             ~s(liveness http requires path starting with /, got "live")},
+            {~s(type: "http"\n      port_key: "NOPE"\n      path: "/live"),
+             ~s(liveness port_key "NOPE" is not a key in replica_ports)},
+            {~s(type: "http"\n      scheme: "ftp"\n      port_key: "PORT"\n      path: "/live"),
+             ~s(liveness scheme "ftp" not supported, expected http or https)},
+            {"period_ms: 999",
+             "liveness period_ms 999 not supported, expected an integer of at least 1000"},
+            {~s(period_ms: "fast"),
+             ~s(liveness period_ms "fast" not supported, expected an integer of at least 1000)},
             {"failure_threshold: 0",
              "liveness failure_threshold 0 not supported, expected a positive integer"},
             {"failure_threshold: -1",

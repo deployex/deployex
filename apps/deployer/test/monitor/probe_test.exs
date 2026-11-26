@@ -109,7 +109,7 @@ defmodule Deployer.Monitor.ProbeTest do
       {:started, :started}
     end)
 
-    assert Probe.alive?(%Liveness{type: :otp}, @node, "elixir")
+    assert Probe.alive?(%Liveness{type: :otp}, @node, "elixir", [])
   end
 
   for status <- [
@@ -124,7 +124,7 @@ defmodule Deployer.Monitor.ProbeTest do
         unquote(Macro.escape(status))
       end)
 
-      refute Probe.alive?(%Liveness{type: :otp}, @node, "elixir")
+      refute Probe.alive?(%Liveness{type: :otp}, @node, "elixir", [])
     end
   end
 
@@ -133,7 +133,42 @@ defmodule Deployer.Monitor.ProbeTest do
       {:starting, :started}
     end)
 
-    assert Probe.alive?(%Liveness{type: :otp}, @node, "gleam")
+    assert Probe.alive?(%Liveness{type: :otp}, @node, "gleam", [])
+  end
+
+  describe "http liveness" do
+    @liveness %Liveness{type: :http, scheme: "http", port_key: "PORT", path: "/live"}
+    @ports [%Ports{key: "PORT", base: 4001}, %Ports{key: "OTHER", base: 9000}]
+
+    test "requests the instance's port, by key, and is alive on a 2xx response" do
+      with_mock Http, get: fn "http://127.0.0.1:4001/live", 1_000 -> {:ok, 200} end do
+        assert Probe.alive?(@liveness, @node, "elixir", @ports)
+      end
+    end
+
+    test "builds the url from scheme, port and path" do
+      liveness = %{@liveness | scheme: "https", path: "/livez"}
+
+      with_mock Http, get: fn "https://127.0.0.1:4001/livez", 1_000 -> {:ok, 204} end do
+        assert Probe.alive?(liveness, @node, "elixir", @ports)
+      end
+    end
+
+    for result <- [{:ok, 302}, {:ok, 500}, {:ok, 503}, {:error, :timeout}] do
+      test "is not alive when the request answers #{inspect(result)}" do
+        with_mock Http, get: fn _url, _timeout -> unquote(Macro.escape(result)) end do
+          refute Probe.alive?(@liveness, @node, "elixir", @ports)
+        end
+      end
+    end
+
+    test "is not alive when the instance's ports have no port_key match" do
+      with_mock Http, get: fn _url, _timeout -> {:ok, 200} end do
+        refute Probe.alive?(@liveness, @node, "elixir", [%Ports{key: "OTHER", base: 9000}])
+
+        assert_not_called(Http.get(:_, :_))
+      end
+    end
   end
 
   describe "otp with a custom function" do

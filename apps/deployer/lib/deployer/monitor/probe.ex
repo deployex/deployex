@@ -1,6 +1,7 @@
 defmodule Deployer.Monitor.Probe do
   @moduledoc """
-  Checks whether a started application satisfies its readiness configuration.
+  Checks whether a started application satisfies its readiness configuration, and whether a
+  running one still answers its liveness probe.
 
   With no `function` configured, the `:otp` check reads the boot status of the node, which needs
   nothing from the application. A node that is not up yet, or does not answer in time, is not
@@ -13,9 +14,6 @@ defmodule Deployer.Monitor.Probe do
   application ends, so a healthy node answers `{:starting, :started}` for its whole life. The check
   then only says that the node is up and answering, not that `main` finished its own setup.
 
-  `alive?/3` runs the same `:otp` check for a liveness probe, after the application is already
-  ready. Liveness is a separate, optional configuration, so it has its own entry point rather than
-  sharing `ready?/3`'s clauses.
   With `function` configured, the check calls that `Module.function/0` on the node instead and
   is ready only when it returns `true`. An exception, a missing function, or a timeout each
   count as not ready, since the node already caught or did not answer them.
@@ -23,6 +21,10 @@ defmodule Deployer.Monitor.Probe do
   The `:http` check requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a
   2xx response, with the port looked up from the instance's ports by `port_key`. An instance
   whose ports do not have that key is not ready.
+
+  `alive?/4` runs the same `:otp` boot status check and the same `:http` request for a liveness
+  probe, after the application is already ready. Liveness is a separate, optional configuration,
+  so it has its own entry point rather than sharing the clauses of `ready?/4`.
   """
 
   alias Deployer.Monitor.Probe.Http
@@ -56,15 +58,22 @@ defmodule Deployer.Monitor.Probe do
     do: Rpc.call(node, module, function, [], @rpc_timeout) == true
 
   def ready?(%Readiness{type: :http} = readiness, _node, _language, ports),
-    do: http_ready?(readiness, ports)
+    do: http_ok?(readiness, ports)
 
   @doc """
   Return true when the application running on the node still answers its liveness probe.
   """
-  @spec alive?(liveness :: Liveness.t(), node :: node(), language :: String.t() | nil) ::
-          boolean()
-  def alive?(%Liveness{type: :otp}, node, language),
+  @spec alive?(
+          liveness :: Liveness.t(),
+          node :: node(),
+          language :: String.t() | nil,
+          ports :: [Ports.t()]
+        ) :: boolean()
+  def alive?(%Liveness{type: :otp}, node, language, _ports),
     do: booted?(language, Rpc.call(node, :init, :get_status, [], @rpc_timeout))
+
+  def alive?(%Liveness{type: :http} = liveness, _node, _language, ports),
+    do: http_ok?(liveness, ports)
 
   ### ==========================================================================
   ### Private functions
@@ -73,14 +82,15 @@ defmodule Deployer.Monitor.Probe do
   defp booted?("gleam", {:starting, :started}), do: true
   defp booted?(_language, _status), do: false
 
-  defp http_ready?(%Readiness{port_key: port_key} = readiness, ports) do
+  # The readiness and the liveness sections carry the same http fields
+  defp http_ok?(%{port_key: port_key} = probe, ports) do
     case find_port(ports, port_key) do
       nil -> false
-      port -> request_ready?(readiness, port)
+      port -> request_ok?(probe, port)
     end
   end
 
-  defp request_ready?(%Readiness{scheme: scheme, path: path}, port) do
+  defp request_ok?(%{scheme: scheme, path: path}, port) do
     case Http.get("#{scheme}://127.0.0.1:#{port}#{path}", @http_timeout) do
       {:ok, status} when status in 200..299 -> true
       _ -> false

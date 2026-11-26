@@ -227,9 +227,13 @@ applications:
 
     # Liveness Configuration (optional, disabled by default)
     liveness:
-      type: "otp"                      # otp only for now (default: otp)
+      type: "otp"                      # otp or http (default: otp)
+      period_ms: 10000                 # Time between two probes of an instance, at least 1000 (default: 10000)
       failure_threshold: 3             # Consecutive failed probes before reporting a hung application (default: 3)
       enable_restart: false            # Restart the application once failure_threshold is reached (default: false)
+      # scheme: "https"                # http only, optional (default: http)
+      # port_key: "PORT"               # http only, required, must be a key in replica_ports
+      # path: "/live"                  # http only, required, must start with /
     
     # Port Configuration (optional)
     replica_ports:                     # Each replica gets: base + replica_index
@@ -523,7 +527,9 @@ The rollback window closes and the previous version stops when the new instance 
 
 Liveness runs after the application is already ready, and is disabled when the `liveness` section is left out. It does not gate a deployment, readiness already did that: it reports, and optionally recovers, an application that stops answering after it was promoted.
 
-- `otp` (default and, for now, the only type) - Runs the same boot-status check readiness performs with no custom function, polled on an interval after the application is ready. `http` is planned, once the HTTP readiness probe lands.
+- `otp` (default) - Runs the same boot-status check as the `otp` readiness probe with no `function`, after the application is ready. It tells that the node is up and answering over OTP distribution, not that the application still serves requests.
+- `http` - DeployEx requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a 2xx response, the same request the `http` readiness probe makes and with the same `scheme`, `port_key` and `path` fields, validated the same way when the YAML loads. Use a path of its own, such as `/live`, that answers without reaching any dependency, and not the path of the readiness probe.
+- `period_ms` - Time between two probes of an instance, 10 seconds by default and at least 1 second. Each probe waits up to 1 second for its answer. With the defaults, an application that stops answering is reported after about 30 seconds.
 - `failure_threshold` - Consecutive failed probes before DeployEx reports the application as hung, through a `liveness_probe_failed` notification. A probe that recovers before reaching the threshold is not reported.
 - `enable_restart` - Whether DeployEx restarts the application once `failure_threshold` is reached. Off by default: the BEAM already restarts a crashed process on its own, and restarting every replica during a shared dependency outage would make the outage worse.
 

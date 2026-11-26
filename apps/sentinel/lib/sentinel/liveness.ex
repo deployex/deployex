@@ -9,7 +9,8 @@ defmodule Sentinel.Liveness do
 
   A probe only runs while the application's monitor reports `:running`, so an instance that
   crashed and is starting again, or one still running pre-commands, is neither probed nor
-  counted as failing. A probe that fails `failure_threshold` times in a row sends a
+  counted as failing. Each instance is probed every `period_ms` of its configuration, on a
+  tick of one second. A probe that fails `failure_threshold` times in a row sends a
   `"liveness_probe_failed"` notification once, and restarts the application through
   `Deployer.Monitor.restart/2` when the application's `enable_restart` opts into it. The BEAM
   already restarts a crashed process on its own, so the default is to only report a hung one:
@@ -35,14 +36,16 @@ defmodule Sentinel.Liveness do
   defmodule Data do
     @moduledoc """
     How many liveness probes an sname has failed in a row, and whether that streak already
-    sent a notification, so a hung application is reported only once per streak.
+    sent a notification, so a hung application is reported only once per streak. The next
+    probe is due at `next_probe_at`, in monotonic milliseconds, and `nil` means right away.
     """
 
-    defstruct consecutive_failures: 0, notified: false
+    defstruct consecutive_failures: 0, notified: false, next_probe_at: nil
 
     @type t :: %__MODULE__{
             consecutive_failures: non_neg_integer(),
-            notified: boolean()
+            notified: boolean(),
+            next_probe_at: integer() | nil
           }
   end
 
@@ -93,24 +96,42 @@ defmodule Sentinel.Liveness do
       %Monitor{status: status} when status != :running ->
         reset(sname)
 
-      %Monitor{liveness: liveness, language: language, name: name} ->
-        %{node: node} = Catalog.node_info(sname)
+      %Monitor{liveness: liveness} = monitor ->
+        now = System.monotonic_time(:millisecond)
+        data = get_data(sname)
 
-        if Probe.alive?(liveness, node, language) do
-          reset(sname)
-        else
-          record_failure(sname, node, name, liveness)
-        end
+        if due?(data, now), do: probe(sname, monitor, data, now + liveness.period_ms)
     end
   end
 
+  defp due?(%Data{next_probe_at: nil}, _now), do: true
+  defp due?(%Data{next_probe_at: next_probe_at}, now), do: now >= next_probe_at
+
+  defp probe(
+         sname,
+         %Monitor{liveness: liveness, language: language, name: name, ports: ports},
+         data,
+         next_probe_at
+       ) do
+    %{node: node} = Catalog.node_info(sname)
+
+    if Probe.alive?(liveness, node, language, ports) do
+      :ets.insert(@liveness_data, {sname, %Data{next_probe_at: next_probe_at}})
+    else
+      record_failure(sname, node, name, liveness, %{data | next_probe_at: next_probe_at})
+    end
+  end
+
+  # An instance that is not running starts from scratch, probed as soon as it runs again
   defp reset(sname), do: :ets.insert(@liveness_data, {sname, %Data{}})
 
-  defp record_failure(sname, node, name, %LivenessConfig{
-         failure_threshold: failure_threshold,
-         enable_restart: enable_restart
-       }) do
-    data = get_data(sname)
+  defp record_failure(
+         sname,
+         node,
+         name,
+         %LivenessConfig{failure_threshold: failure_threshold, enable_restart: enable_restart},
+         data
+       ) do
     consecutive_failures = data.consecutive_failures + 1
 
     if consecutive_failures >= failure_threshold and not data.notified do
