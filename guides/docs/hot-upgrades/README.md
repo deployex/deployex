@@ -1,39 +1,16 @@
 # 🔥 Hot-Upgrades
 
-A hot upgrade replaces the code of a running system without restarting it.
-Processes keep the state they were holding, connections stay open, and nothing is drained or rerouted.
-What it cannot replace is the VM and the language runtime underneath that code, and that single limit decides most of what follows.
+DeployEx applies hot upgrades to the applications it monitors and to itself, using [Jellyfish][jyf] to generate the appup files automatically.
 
-DeployEx applies hot upgrades to the applications it monitors and to itself.
-It uses [Jellyfish][jyf] to generate the appup files automatically, which you can also write or extend by hand when an upgrade needs actions that cannot be inferred from the diff.
+**The BEAM mechanism itself (`appup`, `relup`, `release_handler`), the coding practices that make a project hot-upgradable, and framework-level pitfalls (Phoenix/LiveView, closures, supervision tree changes) are documented once, outside this project, in [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades).** Read that first. This page only covers what DeployEx itself adds on top: how it resolves configuration during the upgrade, how it decides whether a package is applicable, and how to drive a hot upgrade of DeployEx or a monitored application.
 
-Most releases do not need a full deployment.
-You do not change OTP or your libraries often, and a hot upgrade combines with migrations to ship a change with no downtime at all.
-High availability is not free though, it is something you design for, and this guide covers the part of that design that shows up at deployment time.
-
-A release is easiest to judge backwards: look first for what cannot be hot-upgraded, then decide about everything else.
-
-## What can be hot-upgraded
+## What DeployEx hot-upgrades
 
  * **Monitored applications** - your deployed Elixir/Erlang/Gleam applications.
- * **Dependencies** - the libraries those applications use, once you have checked that the versions you are moving between can be replaced in a running node.
+ * **Dependencies** - DeployEx reports them separately, with `type: "dependency"` rather than `type: "project"`, see [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades) for why dependencies are assessed individually.
  * **DeployEx itself** - without restarting the deployment system.
 
-Erlang/OTP and Elixir are never in scope.
-They are the runtime the upgrade runs on rather than libraries loaded into it, so a release that changes either is a full deployment.
-This is stated once here and is the reason behind several of the rules below.
-
-Dependencies are versioned independently from the project, so DeployEx reports them separately, with `type: "dependency"` rather than `type: "project"`.
-
-## When NOT to hot-upgrade
-
-**DO NOT HOT-UPGRADE if:**
- * The new release is updating Erlang OTP and/or Elixir version
- * The new release modified/deleted/added config_provider files
-
-Erlang and Elixir are both replaced from underneath the running code, and `systools` asks for an appup that upgrades them, which nobody ships.
-Picking a release artifact built for another OTP line is the easiest way to hit this by accident, see [Choosing the right release file](#choosing-the-right-release-file), and a mismatched Elixir is what produces the `make_relup` error in [Good practices](#good-practices-for-a-project-that-can-be-hot-upgraded).
-The second is about configuration, which behaves differently from the rest of the release and is worth understanding rather than memorising.
+Erlang/OTP, Elixir version changes, and config provider changes are never hot-upgraded, see [When NOT to hot-upgrade](https://github.com/deployex/beam-hotupgrades#when-not-to-hot-upgrade) for why. Picking a release artifact built for another OTP line is the easiest way to hit this by accident, see [Choosing the right release file](#choosing-the-right-release-file) below.
 
 ### What happens to configuration during a hot-upgrade
 
@@ -47,24 +24,273 @@ What that means in practice:
 
  * **Changed or removed keys are applied.** The environment is deleted and rebuilt, not merged, so a key you delete in the new version is really gone after the upgrade.
  * **A changed `runtime.exs` is applied.** DeployEx reads the new version's file, which `unpack_release/1` has already written to disk, so the values the application ends up with are the ones the new file resolves. The one condition is that it runs on the node as it is now: it is evaluated by the code the running node has loaded, so it must not rely on modules, functions or language features that only arrive with the new release. A `runtime.exs` that reads environment variables, files or secrets is fine. One that calls into a module the new version introduces is not, and that is the case to deploy fully.
+ * **`config_change/3` can be made to run on every hot upgrade.** OTP only calls it for an application whose environment changed, so a release can ask DeployEx to set one key of its own, see [Telling the application that it was hot-upgraded](#telling-the-application-that-it-was-hot-upgraded).
  * **A changed Config Provider is NOT applied.** Provider modules run on the node in its current version, before the new code is installed, so the old implementation is what resolves the configuration. A fix to a provider only takes effect once a full deployment has made it the running version.
 
-The last point is the reason for the `config_provider` entry in the list above, and it applies to the provider's own code, not to the values it produces.
+### The version on traces and logs
 
-## How a hot upgrade works
+An application reads its version once, when it boots, and two places keep the value they were given: the OpenTelemetry SDK holds the resource, with its `service.version`, in the state of its processes, and a `:logger` filter or formatter that stamps the version on every event holds it in its configuration.
+A hot upgrade restarts neither, so without help the node runs the new code and keeps reporting the old version.
 
-You do not need to write any of these files by hand, but knowing what they are is what makes the failures readable.
+DeployEx adds a second instruction to the relup for this, at its end, once every process is running the new code again.
+It replaces the value where it is held and restarts nothing, so the spans that are open and the events that are queued are kept:
 
-**The pieces**
+ * **Traces**: the `service.version` of the resource, in the processes of the OpenTelemetry SDK 1.x that hold it. It is only replaced when it is exactly the version being upgraded from, so a `service.version` that is not the release version is left alone.
+ * **Logs**: every value equal to the version being upgraded from, in the filters and the formatter of each `:logger` handler, and in the filters and the metadata of the primary configuration.
 
- * An **appup** describes how to move one application from one version to another: which modules to load, which processes to suspend, and where to call `code_change/3`. [Jellyfish][jyf] generates one per Elixir application, as a real `.appup` plus a `jellyfish.json` sidecar that records its `from` and `to` versions for DeployEx. For Erlang applications, where Jellyfish does not apply, the `.appup` is written by hand or with another tool, with no sidecar.
- * A **relup** is the plan for the whole release, built by `systools:make_relup/4` from the two releases and their appups. It is ordered, and it fails to build when an application changes version without an appup to describe how.
- * `release_handler` is the OTP module that runs that plan on the live node.
+There is nothing to turn on, and nothing to add to the application: an application without OpenTelemetry, or whose logs carry no version, is not changed.
+It runs for every hot upgrade, whether or not the release asks for `config_change/3`.
 
-**The steps DeployEx runs over RPC on the running node**
+ * **It only knows the release version.** The version is matched as the text DeployEx deploys, `1.1.0` or `1.1.0-9cad9cd`. A version the application derives from something else, keeps as another type, or holds anywhere else (a metric tag, a `:persistent_term`, the state of one of its own processes) is not seen. That is what `config_change/3`, below, is for.
+ * **It cannot fail the upgrade.** It runs after the point of no return, so every part of it catches its own errors, and a part that fails leaves the value as it was.
+ * **An upgrade that restarts the VM does not carry it.** The node boots on the new version and reads it again.
+ * **What it did is kept too.** The relup says what the node was told to do, not what came of it, so once the release is installed DeployEx asks the node and keeps the answer with the relup. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `version_update`:
+
+   | | |
+   |---|---|
+   | `Traces: service.version moved from 1.0.0 to 1.1.0` | The resource was replaced |
+   | `Traces: left alone, service.version was 2024.11 and not 1.0.0` | The application reports something other than the release version, so it is for its `config_change/3` to update |
+   | `Traces: the OpenTelemetry SDK is not running, nothing to change` | The application has no SDK |
+   | `Traces: service.version could not be replaced in every process that holds it, the node may still report 1.0.0` | One of the processes of the SDK did not answer in time. The process that says which version the node reports is left as it was, so the next hot upgrade says `left alone` rather than claim a version that was not reached. A restart of the application brings it up to date |
+   | `Logs: 1 logger setting moved to 1.1.0` | A filter, a formatter or the metadata held the version |
+   | `Logs: no logger setting held 1.0.0, nothing changed` | The logs carry no version, or not the release version |
+
+ * **It is in the relup DeployEx keeps**, as its last step, see [Seeing what a hot upgrade did](#seeing-what-a-hot-upgrade-did). The code it runs is `apps/deployer/priv/relup/version_update.erl` in the DeployEx repository, next to `runtime_config.erl`, the code of the hook that applies the configuration.
+
+### Protocols
+
+An Elixir release consolidates its protocols: each protocol is compiled again with the list of its implementations, which is what makes dispatch fast.
+Those modules are kept in `releases/<version>/consolidated`, outside of every application, and an appup describes one application.
+So no appup covers them, and `release_handler` loads the implementations a release adds and leaves the protocols as they were when the node booted.
+
+A release that adds a struct which derives `Jason.Encoder`, or implements `String.Chars` or `Phoenix.Param`, then installs without an error.
+The first value of that struct that reaches the protocol raises `Protocol.UndefinedError`, on a node that says it runs the new version.
+A restart makes it go away, which is why a full deployment never shows it.
+
+DeployEx adds an instruction to the relup for this, right after the last module it loads, so a `code_change` or a function the appup calls after it already finds them.
+It loads every consolidated protocol of the new release whose code is not the one that is loaded, and moves the code path to the directory of the new release.
+
+ * **Nothing to turn on**, and nothing to add to the application. A release that changes no protocol loads none.
+ * **A release without consolidated protocols is left alone**: an Erlang or a Gleam one, or an Elixir one built with `consolidate_protocols: false`. So is an upgrade that restarts the VM.
+ * **It cannot fail the upgrade.** It catches its own errors, protocol by protocol, and a protocol that could not be loaded stays as it was.
+ * **What it loaded is kept**, with the relup. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `protocols`. The code is `apps/deployer/priv/relup/protocols.erl`.
+
+### Broadway pipelines
+
+A hot upgrade removes the previous version of every module it loads, and a process that is still inside one is killed.
+For a [Broadway](https://hexdocs.pm/broadway) pipeline that is a message half handled, and with a producer that waits for an acknowledgement, such as RabbitMQ, it is worse than a lost message.
+Broadway starts the processor again and not the connection, so the message stays delivered and never acknowledged, and a consumer with a prefetch of 1 is sent nothing else until it is restarted.
+Nothing is logged: the consumer looks connected and receives nothing.
+
+So DeployEx keeps the pipelines out of the way while the code is replaced, with two more instructions in the relup:
+
+ * **Right after the point of no return**, before any module is loaded, it stops each running pipeline through the supervisor that started it. That is Broadway's graceful shutdown: the messages being handled finish, and what does not finish in time goes back to its queue when the connection closes.
+ * **At the end**, once every process runs the new code, it starts them again.
+
+There is nothing to turn on, and nothing to add to the application.
+
+ * **The upgrade waits for the messages in flight**, up to 30 seconds for all the pipelines together, which stop at the same time. Consumers that handle a message in milliseconds add nothing noticeable. A pipeline that is still stopping after 30 seconds is no longer waited for: the upgrade goes on, a message it is still handling can be killed as before, and it is started again at the end, or as soon as it has stopped: the start is waited for up to 10 seconds.
+ * **Pipelines of one supervisor stop one after the other.** A supervisor stops one child at a time, so two pipelines it started are not stopped together: the second waits for the first. A message that kept the first one for 50 seconds had both reported as `still stopping after 30 seconds`, although the second had nothing to handle. Both were running again a few seconds after the upgrade.
+ * **A message that outlasts the wait is not lost.** It is killed when the previous code is removed, never acknowledged, and the broker delivers it again once the connection of the pipeline closes: to this node on the new code, or to another node that consumes the same queue, whichever asks first.
+ * **Nothing is consumed on that node meanwhile.** The other nodes keep consuming. A broker that is down during the upgrade changes nothing: the pipelines are stopped and started all the same, and connect again when it is back.
+ * **A pipeline DeployEx could not start again is left alone**: one that was not started under a name, or by a supervisor that keeps no child to start again, such as a `DynamicSupervisor`, one that is a `temporary` child, or one started by a process that is not a supervisor. So is an application without Broadway, or with a version of it that does not list its pipelines.
+ * **An upgrade that restarts the VM does not carry them**, it stops everything anyway.
+ * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be started again is written down before anything is stopped.
+ * **A pipeline that could not be started is reported.** The upgrade is still a success, the code is installed, so it is logged as a warning and sent as the `pipeline_not_started` notification: the consumer is down until it is started again, or the application restarted.
+ * **What happened is kept**, with the relup: each pipeline, whether it stopped in time and whether it started. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `pipelines`. The code is `apps/deployer/priv/relup/pipelines_stop.erl` and `pipelines_start.erl`.
+
+### Background jobs
+
+A job that is running when a module it is inside of is replaced is killed too.
+[Oban](https://hexdocs.pm/oban) treats that as any other failure: the job is recorded with `killed` as its error and tried again on the new code, so nothing is stuck. The job still loses an attempt and the work it had done.
+
+When Oban shuts down it does better for the jobs that are almost done: it starts no new job and waits for the running ones, for its `shutdown_grace_period`.
+DeployEx gives a hot upgrade the same, with two more instructions in the relup:
+
+ * **Right after the point of no return**, it pauses the Oban queues of this node and waits for the running jobs, for the `shutdown_grace_period` of the instance: 15 seconds unless the application sets another, and 20 seconds at most.
+ * **At the end**, it resumes them.
+
+There is nothing to turn on, and nothing to add to the application.
+
+ * **A job that outlasts the wait keeps running.** It is killed only when a module it is inside of is replaced by this upgrade, and Oban then tries it again, a few seconds later. A job whose code did not change is not touched, which a deployment that stops the node cannot offer.
+ * **The rules for a job are the ones a deployment already asks for**: more than one attempt, since a kill uses one and a job with a single attempt is not tried again, and safe to run again from the start.
+ * **A job that is queued for a worker the release removes fails** when it comes due, with `module is not a worker`, on each of its attempts, and is discarded. It is the same after a full deployment. Stop enqueueing a worker in one release and remove it in a later one, once its queue is empty.
+ * **Only this node is paused**, and no job starts on it during the upgrade. A queue that was already paused is left paused.
+ * **The upgrade takes that much longer** when jobs are running, and no longer when the queues are idle. With the pipelines, an upgrade waits 65 seconds at most: 20 for the jobs, and 5, 30 and 10 to find, stop and start the pipelines.
+ * **An application without Oban is not changed**, nor is one with a version of it that cannot pause a queue on one node. An upgrade that restarts the VM does not carry the instructions.
+ * **It cannot fail the upgrade.** Both instructions catch their own errors, and what is to be resumed is written down before any queue is paused.
+ * **What happened is kept**, with the relup: the queues that were paused, how many jobs were still running when the wait ended (`null` when the queues could not be checked), and whether the queues were resumed. The Versions page shows it under the outcome of the upgrade, and the Agent API returns it as `jobs`. The code is `apps/deployer/priv/relup/jobs_pause.erl` and `jobs_resume.erl`.
+
+### What is left to the application
+
+DeployEx keeps the configuration, the version, the protocols, the pipelines and the job queues in step with an upgrade.
+Six things it cannot do, because only the application knows what they are. Each is a rule of [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades#good-practices-for-a-project-that-can-be-hot-upgraded), and each was seen on a running application.
+
+ * **The state of its processes.** A struct that gains a field is a change of shape: a process that held the previous one fails on its next message with a `KeyError`, is started again by its supervisor, and has lost what it held. It needs a `code_change/3`, written with a struct literal and not with a call into the module that defines the struct, which may still be the previous version when the migration runs.
+ * **Requests in flight.** The process serving a request is inside the application's code, and is killed when a module it is running through is replaced: the client gets no response, or part of one. It only concerns requests that last, a download, an upload, an export, and only an upgrade that changes their modules. Keep long work in a job, which is tried again.
+ * **Database connections.** The pool is kept, and each connection keeps the statements it has prepared. A migration that changes the type of a column makes each of those fail once, with `cached plan must not change result type`. Change a type in two releases: add the new column, then drop the old one.
+ * **Long-lived tasks.** DeployEx makes the release permanent as soon as it is installed, and that is when the previous code of a module is purged: a process still inside it is killed. A task started with an anonymous function of a module the release changes, `Task.start(fn -> ... end)`, `Task.async`, `start_async` in a LiveView, is one, whatever it loops on, and a database transaction it holds open is rolled back. Start it with a module, a function and arguments, have it loop through the module, and it goes on with the new code, unless it is blocked for the whole of the upgrade.
+ * **Connections held by a dependency.** A library that changes what the process of a connection holds loses the connections that are open. The upgrade of Bandit from 1.14 to 1.15 closed each HTTP/2 connection on its next request, with a `GOAWAY`, and the client opened a new one. Read what a dependency changed in its connection processes, and not only in the ones it starts once.
+ * **What the node read when it booted.** The flags in `vm.args`, the environment of the release script, a file the application loads into memory in `start/2`: the new release is on disk, and the node goes on with what it read until it restarts. Nothing reports it.
+
+One of these is worth a step of its own. A release checks, when it boots, that the values its code was compiled with are the ones of its runtime configuration, and refuses to start when they differ. A hot upgrade boots nothing, so such a release is installed, runs, and fails at its next restart, whenever that is. A [pre-command](#hot-upgrading-monitored-applications) that boots the new release, such as the migrations run with `eval`, fails first: DeployEx refuses the upgrade and the previous version keeps serving. An application with no migrations can have one that does nothing, `eval :ok`, for that reason alone.
+
+### Telling the application that it was hot-upgraded
+
+A hot upgrade replaces code without restarting anything, so nothing in the application runs again on its own: whatever it read or cached when it booted stays as it was.
+OTP has a callback for this, `config_change/3` on the application callback module, but `release_handler` only calls it for an application whose environment is different after the upgrade.
+A release that changes code and no configuration never triggers it.
+
+A release can ask DeployEx to trigger it.
+DeployEx then sets one key in the environment of the monitored application, as part of the configuration its relup hook applies:
+
+```elixir
+deployex_config_change: "1.1.0"   # the version being installed
+```
+
+The value is different on every upgrade, so `config_change/3` always runs.
+It runs once the relup has finished, so the callback is already the new version's code and the environment it reads is the new one, `runtime.exs` included.
+
+```elixir
+@impl true
+def config_change(changed, new, removed) do
+  # :deployex_config_change is in `new` on the first hot upgrade after a boot
+  # and in `changed` on the following ones
+  ...
+end
+```
+
+#### Turning it on
+
+It is off unless the release asks for it, since it runs application code during the upgrade and only the application knows what its callback does.
+
+The release asks for it in `current.json`, next to its version:
+
+```json
+{
+  "version": "1.1.0",
+  "hash": "9cad9cd3581c69fdd02ff60765e1c7dd4599d84a",
+  "pre_commands": [],
+  "hot_upgrade_config_change": true
+}
+```
+
+ * `true` sets the key for this release. `false`, or leaving the field out, does not.
+ * Anything other than `true` or `false` reads as the field being left out.
+ * There is no host setting for it. The pipeline that writes `current.json` decides, release by release.
+
+What each release asked for is stored with the version it deployed.
+The Versions page of the application shows it in the `config_change` column as `requested`, `declined` or `not set`, and `GET /v1/apps/:name/versions` of the [Agent API](/guides/docs/agent-api/README.md) returns it as `hot_upgrade_config_change`, `null` when the release did not say.
+A version deployed before this field existed shows as `not set`.
+
+#### What to expect from it
+
+ * The key is added to every application of the release that a `jellyfish.json` describes as `type: "project"`, which covers each application of an umbrella. A release without those files gets it on the application named after it.
+ * Only an application that the running node has loaded gets the key. One that the new release adds has no environment to compare yet, and starts with the new code anyway.
+ * The key is also set for Erlang and Gleam applications, as a binary.
+ * It is only set by a hot upgrade. After a full deployment the key is absent until the next hot upgrade.
+ * A release that does not ask, hot-upgraded over one that did, still gets the callback once. The key the earlier upgrade set is gone when the environment is rebuilt, so `config_change/3` is called with `:deployex_config_change` in `removed`. Look for the key in `changed` and `new`, as the Phoenix example below does, to react only to an upgrade that asked.
+ * DeployEx logs which applications got the key, and logs a warning when a release asked and none did, which is the case when the release name is not an application of the node and no `jellyfish.json` of this version names one.
+ * The callback runs inside `release_handler:install_release/2`, with the new code already running and before the release is made permanent, so the upgrade waits for it. Keep it short and hand anything slow to another process.
+ * A callback that fails does not fail the upgrade. One that raises, exits or returns an error leaves the release installed and made permanent, and OTP does not log it, so have the callback report its own failures.
+
+#### What the application does in it
+
+A hot upgrade restarts nothing, so everything the application worked out when it booted is still what it worked out then.
+DeployEx brings the version on traces and logs up to date itself, and `config_change/3` is where the application does the rest:
+
+| What stays as it was | Why | What to do |
+|---|---|---|
+| The version the application reports | A value read at boot, such as an environment variable or `runtime.exs`, still holds the old one. `runtime.exs` is of no help either, it is evaluated before the new code is installed | Read `Application.spec(:my_app, :vsn)` when the callback runs. The value of `:deployex_config_change` is the same version |
+| The version on traces (OpenTelemetry) and on log lines | The SDK keeps its resource in the state of its processes, and a logger filter, formatter or the metadata keeps the copy it was given at boot | Nothing: DeployEx replaces it in the relup, see [The version on traces and logs](#the-version-on-traces-and-logs). Only a version it cannot recognise, one that is not the release version or is kept somewhere else, is left to the application |
+| The static asset manifest (Phoenix, digested assets) | The endpoint reads it when it starts | `MyAppWeb.Endpoint.config_change/2`, see [Phoenix applications](#phoenix-applications) |
+| Pages that are already open (Phoenix) | A hot upgrade disconnects no one | Broadcast, and let the pages that subscribed decide what to show |
+| A value a process took when it started | A database pool keeps the password it connected with, a client keeps the token it was built with | Restart that process. It applies to secrets too, see [Secrets from 1Password](/guides/docs/yaml/README.md#secrets-from-1password) |
+| A cache filled at boot | Nothing ran again to fill it: an ETS table, a `:persistent_term`, a file read once | Fill it again |
+| What a library was given once at boot | The metrics of a reporter, such as a PromEx plugin, the queues and the schedule of a job library: the library keeps the list it was started with, and a metric a release adds is not exported. It is so even for what comes from the configuration: after a release that adds a queue to Oban, the application environment has it and Oban, which read it when it started, does not | Restart the process that holds the list, from a process of its own as said below |
+| A telemetry handler attached with `&handle/4` | The capture belongs to the version of the module that attached it. After an upgrade of that module the handler fails on its first event and Telemetry detaches it | Attach `&__MODULE__.handle/4`, which needs nothing afterwards |
+
+Two rules follow from where the callback runs, which is inside the application controller of the node:
+
+ * **It cannot stop or start an application, or change the application environment.** `Application.stop/1`, `Application.ensure_all_started/1` and `Application.put_env/3` are calls to the application controller, which is the process making them, so they exit with `calling_self`. OTP catches that exit and does not log it, and the upgrade goes on as if the work had been done. Reading is fine: `Application.get_env/2` and `Application.spec/2` return the new configuration and the new version.
+ * **It has to return quickly.** While it runs, nothing else on the node can start or stop an application.
+
+Most of the table needs neither: reading the version, asking another process to change its state and a broadcast are not calls to the application controller, and take a few milliseconds.
+So the callback can do them itself:
+
+```elixir
+# lib/my_app/application.ex
+@impl true
+def config_change(changed, new, removed) do
+  MyAppWeb.Endpoint.config_change(changed, removed)
+
+  # In `new` on the first hot upgrade after a boot, in `changed` on the following ones
+  if Keyword.has_key?(changed ++ new, :deployex_config_change) do
+    version = :my_app |> Application.spec(:vsn) |> to_string()
+
+    Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", {:hot_upgraded, version})
+  end
+
+  :ok
+end
+```
+
+Work that does need the application controller is handed to another process: a `spawn/1`, a `Task`, or a process the application supervises.
+
+#### Phoenix applications
+
+**Keep the digested assets, and set `hot_upgrade_config_change` on every release.**
+This is the recommended setup, and it is the one `mix phx.new` generates: `cache_static_manifest` stays in `config/prod.exs` and `mix assets.deploy` runs `phx.digest`.
+
+`phx.digest` output is cached in memory when the endpoint starts, so on its own a hot upgrade leaves pages linking to the old digested file names, see [Phoenix and LiveView pitfalls](https://github.com/deployex/beam-hotupgrades#phoenix-and-liveview-pitfalls).
+The `config_change/3` that `mix phx.new` generates calls `MyAppWeb.Endpoint.config_change/2`, and that function reloads the manifest every time it is called (checked with Phoenix 1.8):
+
+```elixir
+@impl true
+def config_change(changed, _new, removed) do
+  MyAppWeb.Endpoint.config_change(changed, removed)
+  :ok
+end
+```
+
+So the application needs no code change, and two things from its pipeline:
+
+ * **`"hot_upgrade_config_change": true` in every `current.json`.** The manifest changes whenever an asset does, so this is a constant of the application rather than a choice per release. Without it, pages rendered after a hot upgrade link to file names the new release may not have, and load without their styles and scripts.
+ * **Both versions built in the same directory.** `phx.digest` keeps the digested files it finds from earlier runs, so building the previous version and then the target, as a hot upgrade build already does for the appups, ships the old files in the new release. A page that was opened before the upgrade still requests them. A target built from a clean `priv/static` has only its own files, and those requests get a 404.
+
+With both in place, a page rendered after the upgrade links to the new files, and a page that was already open keeps the consistent set it loaded.
+
+Pages that are already open are not told that a new version is running: a hot upgrade does not disconnect anyone, so `Phoenix.LiveView.static_changed?/1` has no reconnect to report on.
+Broadcast from the callback, or from the process it hands the work to, and let the LiveViews that subscribed decide what to show:
+
+```elixir
+@impl true
+def config_change(changed, new, removed) do
+  MyAppWeb.Endpoint.config_change(changed, removed)
+
+  if Keyword.has_key?(changed ++ new, :deployex_config_change) do
+    Phoenix.PubSub.broadcast(MyApp.PubSub, "hot_upgrade", :hot_upgraded)
+  end
+
+  :ok
+end
+```
+
+**The alternative is stable file names, with no manifest.**
+Leaving `cache_static_manifest` out of `config/prod.exs` keeps asset file names the same from one release to the next.
+A hot upgrade then serves the new files under them as soon as it is installed, with nothing to reload and no flag to set, and a browser that revalidates a file gets the new one, since its `ETag` changed.
+It cannot be misconfigured, and it costs three things:
+
+ * A page that was already open gets the new files under the names it loaded, so it can end up running old markup and scripts against new styles.
+ * Browsers revalidate each file on every load instead of caching it by its content hash.
+ * `static_changed?/1` compares against the manifest, so without one it never reports a change, on a hot upgrade or a full deployment.
+
+## The steps DeployEx runs over RPC on the running node
+
+This follows the standard `release_handler` sequence described in [How a hot upgrade works](https://github.com/deployex/beam-hotupgrades#how-a-hot-upgrade-works), with DeployEx driving each step remotely:
 
 1. `release_handler:unpack_release/1` registers the new release and puts its code on disk. Nothing is loaded yet.
-2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head.
+2. `systools:make_relup/4` builds the plan. DeployEx inserts the resolved runtime configuration hook at its head, the pause of the Oban queues and the stop of the Broadway pipelines after its point of no return, the load of the consolidated protocols after the last module it loads, and at its end the instruction that moves the version on traces and logs, the start of the pipelines and the resume of the queues.
 3. `release_handler:check_install_release/1` evaluates the plan without applying it.
 4. `release_handler:install_release/2` rebuilds the application environments and then runs the plan. From this point the node is running the new code.
 5. `release_handler:make_permanent/1` makes the new version the one the node boots into next time.
@@ -76,239 +302,21 @@ After step 5, for a monitored app, DeployEx removes the release directories, `.r
 It also unregisters the removed versions from `release_handler`.
 DeployEx does not prune its own releases.
 
-**What happens to your processes**
-
-For each changed module the plan loads the new code, and for a stateful process it suspends the process, calls `code_change/3`, then resumes it.
-The process is never restarted and never loses its mailbox, it is paused for as long as the migration of its own state takes.
-Everything that follows in [Good practices](#good-practices-for-a-project-that-can-be-hot-upgraded) is about making sure the code holding that state can survive being replaced underneath it.
-
 ### Which version performs the upgrade
 
-A hot upgrade is carried out by the code already running, not by the code in the package.
-DeployEx unpacks the release, builds the relup and installs it using the version currently installed, and only afterwards is the new code in charge.
+DeployEx unpacks the release, builds the relup and installs it using the version currently installed, and only afterwards is the new code in charge, see [Which version performs the upgrade](https://github.com/deployex/beam-hotupgrades#which-version-performs-the-upgrade) for the consequences of that.
 
-That has one consequence worth remembering whenever a release fixes something in the hot upgrade path itself: the fix applies to upgrades performed **from** that version, not to the upgrade **into** it.
-Going from a version with the bug to a version with the fix still runs the bug, because the buggy code is what does the work.
+Where it matters, a release's changelog says so under `Backwards incompatible changes`, and the answer there is to apply it as a full deployment once, after which hot upgrades carry on normally.
 
-So when a release changes how hot upgrades behave, check its changelog before hot-upgrading into it.
-Where that matters the release says so under `Backwards incompatible changes`, and the answer there is to apply it as a full deployment once, after which hot upgrades carry on normally.
+## Good practices and pitfalls
 
-The same applies to a monitored application whose own upgrade instructions changed, its `.appup` is executed by the release being replaced.
+Coding practices that make a project hot-upgradable (closures, `code_change/3`, supervision tree changes, cross-version compatibility, native code) and framework-level pitfalls (Phoenix static assets, LiveView) are covered in [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades#good-practices-for-a-project-that-can-be-hot-upgraded). They apply to any project DeployEx hot-upgrades, not just this one.
 
-## Good practices for a project that can be hot-upgraded
-
-None of this is required to deploy.
-It is what makes the difference between a release that can be hot-upgraded and one that has to restart.
-
-**Build both versions with the same Erlang and Elixir.**
-A hot upgrade replaces application code inside the running VM, it cannot replace the runtime underneath it.
-If the two releases were built with different Elixir versions, `systools` asks for an appup that upgrades Elixir itself, which nobody ships:
-
-```bash
-[error] systools:make_relup failed for myphoenixapp 0.4.0 -> 0.4.2, reason: Could not open
-file /var/lib/deployex/service/myphoenixapp/myphoenixapp-4pvclf/current/lib/elixir-1.20.3/ebin/elixir.appup
-```
-
-Pin the toolchain in `.tool-versions` and keep it identical across the two builds.
-Bumping Erlang or Elixir is a full deployment, not a hot upgrade.
-
-**Assess every dependency you upgrade, one at a time.**
-Dependencies can be hot-upgraded, [Jellyfish][jyf] generates their appups the same way it does for your own applications.
-An appup only describes how to load the new code though, it says nothing about whether that library survives being replaced under load, so each one is a decision rather than a default.
-
-> [!WARNING]
-> Before performing a hot-upgrade for any dependency, treat it with the same caution as your own application code.
-> Check if the dependency officially supports hot-upgrades between the specific versions you're upgrading, review the changelog for breaking changes or structural modifications (e.g., process state changes, supervision tree changes, API changes), and pay special attention to stateful processes like GenServers, Agents, and ETS tables that may require special handling or coordinated state migration.
-
-Do that per dependency, not per release, and keep the number moving in a single hot upgrade small enough that the review stays realistic.
-
-Reading a dependency diff is worth handing to an LLM.
-Ask it to summarise what changed between the two versions and, specifically, whether anything there affects state held by a running process or the shape of a supervision tree.
-Treat the answer as a place to start looking, not as the verdict, and confirm what it reports against the changelog and the diff itself.
-
-**Do not let an anonymous function outlive the call that created it.**
-A function value is tied to the version of the module that built it.
-Once that module is replaced the value is dead, and calling it raises:
-
-```bash
-** (BadFunctionError) function #Function<0.17932506/0 in MyApp.Worker> is invalid,
-likely because it points to an old version of the code
-```
-
-This is about lifetime, not about anonymous functions being risky in themselves.
-Almost all of them are fine, and rewriting them would make the code worse for no gain.
-
-Fine, the value is created and used within the same call, so no upgrade can land between the two:
-
-```elixir
-def totals(entries) do
-  entries
-  |> Enum.filter(fn entry -> entry.status == :running end)
-  |> Enum.map(& &1.size)
-end
-
-def report(entries) do
-  render = fn entry -> "#{entry.name} #{entry.size}" end
-  Enum.map_join(entries, "\n", render)
-end
-```
-
-A problem, the value is stored and called later, and later can be after an upgrade:
-
-```elixir
-# in GenServer state
-{:ok, %{on_complete: fn result -> notify(result) end}}
-
-# in a message the process will handle afterwards
-send(self(), {:finished, fn -> cleanup(path) end})
-
-# handed to something that runs for a while
-Downloader.stream(url, on_progress: fn pct -> broadcast(pct) end)
-```
-
-Store `{module, function, args}` in those places and reach it with `apply/3`, which resolves against whatever is loaded at the time.
-
-Ask one question about a function value: **can this still be called after the current call returns?**
-If it can, it needs to be an MFA.
-The places where the answer is yes are GenServer state, ETS tables, `:persistent_term`, timers, messages already sitting in a mailbox, and callbacks handed to something long-running such as a download or a stream.
-
-Captures have the same lifetime rule.
-`&Module.fun/1` of a public function is as safe as an MFA, since it is resolved through the module.
-`&private_fun/1` and `&(&1 + n)` are closures over the current module version and are not.
-
-**Let long-running processes re-enter their loop through the module.**
-The VM keeps two versions of a module, the current one and the old one, and a process that is executing old code stays there until it makes a fully qualified call.
-Load a third version and the old code is purged, taking any process still lingering in it with it.
-
-OTP behaviours do this for you, since `GenServer`, `Supervisor` and friends invoke your callbacks through the module on every message, so a `GenServer` is on the new code as soon as the upgrade completes.
-A hand written process is not:
-
-```elixir
-# stays in old code forever, and dies at the next purge
-defp loop(state) do
-  receive do
-    msg -> loop(handle(state, msg))
-  end
-end
-
-# picks up the new code on the next message
-defp loop(state) do
-  receive do
-    msg -> __MODULE__.loop(handle(state, msg))
-  end
-end
-```
-
-The same applies to anything that runs for a long time inside one call, a `Task` looping over a queue or a stream consumed over hours.
-It keeps running the code it started with, and there is no supported way to change that from the outside.
-Write those as behaviours, or make the loop re-enter through the module so an upgrade has a point at which to take effect.
-
-**Give stateful processes a `code_change/3`.**
-An appup can suspend a process, load the new module and resume it, but only your code knows how to reshape the state it was holding.
-If a `GenServer` state changes shape between versions, write the migration.
-If it does not, there is nothing to do.
-
-**Treat a supervision tree change as a step of its own.**
-An upgrade changes code, it does not change the shape of the running system, so a server you added is not started and one you removed is not stopped.
-This is the one case where the generated appup is not enough on its own, and it has a section of its own below, [Adding or removing a process in the supervision tree](#adding-or-removing-a-process-in-the-supervision-tree).
-
-**Keep functions out of your configuration.**
-Application environment is written to `sys.config` and read back with `file:consult/1`, so every value has to be a term that can be written down and parsed again.
-An anonymous function cannot, and a configuration file that fails to parse is silently replaced with an empty one, which resets the environment of every application in the release.
-Use `&Module.fun/1` captures of exported functions, or plain data your code interprets.
-
-**Keep the two versions compatible at their boundaries.**
-For a while the old and the new version coexist: messages sent before the upgrade are handled after it, replicas are upgraded one at a time so they talk to each other across versions, and rows and ETS entries written by the old code are read by the new one.
-Anything crossing those boundaries has to be readable by both, which makes the usual expand then contract sequence the safe shape.
-The release that adds a field accepts both shapes, and the release that drops the old one comes after it.
-
-**Do not hot-upgrade native code.**
-A dependency that loads a NIF or a port driver brings a shared object that the VM loads outside the normal code path, and replacing it in a live node has rules of its own.
-Unless the library documents support for it, move those versions with a full deployment.
-
-**Give every build its own version.**
-Upgrades are computed from one version to another, so two builds sharing a version cannot be told apart, and the appup has nothing to describe.
-
-**Exercise the upgrade before production.**
-Build the current version, build the target, then apply one to the other against a real node.
-The local guides walk through exactly that on a machine, see [Local-Elixir](/guides/docs/local-elixir/README.md).
-Building the two versions the same way belongs in CI, so the artifact used for the real exercise is never built by hand.
-This project does that in [`hot_upgrade.yaml`](/.github/workflows/hot_upgrade.yaml): it checks out both tags, builds each, and publishes the target release with its hot-upgrade information as an artifact.
-It still does not apply the upgrade itself, that step is run by hand against a real node, the same way the local guide does it.
-The [Calori project](https://github.com/thiagoesteves/calori/blob/main/.github/workflows/hot-upgrade.yaml) shows the same build-in-CI approach for a monitored application.
-
-## Adding or removing a process in the supervision tree
-
-A hot upgrade replaces code, it does not restructure the running system.
-When a release adds a child to a supervisor, or removes one, the upgrade alone does not act on it:
-
- * A server you **added** is not started. Its module is loaded, its child specification is recorded, and nothing runs it.
- * A server you **removed** is not stopped. It keeps running, on the old code, until the node restarts.
-
-That is `{update, Module, supervisor}` doing what it is defined to do.
-It loads the new supervisor module and re-reads `init/1`, so the restart strategy and the child specifications the supervisor knows about are the new ones, but the children that are already running are left exactly as they are.
-
-**Jellyfish cannot generate this for you.**
-It builds the appup by comparing the compiled modules of the two versions, so it sees that a module was added, changed or deleted.
-A child specification lives inside `init/1`, which is data the comparison cannot reach, so no start or terminate instruction is generated.
-Nothing fails at build time and nothing fails during the upgrade either, the release installs cleanly and the new server simply is not there afterwards, which is the reason this one is worth knowing before it happens rather than after.
-
-**What the appup needs.**
-The instructions to add are `apply` ones, calling the supervisor API directly.
-An appup is `{NewVersion, [{FromVersion, UpInstructions}], [{FromVersion, DownInstructions}]}`, and adding a child looks like this:
-
-```erlang
-{"1.1.0",
- [{"1.0.0", [
-    {add_module, 'Elixir.MyApp.Cache'},
-    {update, 'Elixir.MyApp.Supervisor', supervisor},
-    {apply, {supervisor, restart_child, ['Elixir.MyApp.Supervisor', 'Elixir.MyApp.Cache']}}
-  ]}],
- [{"1.0.0", [
-    {apply, {supervisor, terminate_child, ['Elixir.MyApp.Supervisor', 'Elixir.MyApp.Cache']}},
-    {apply, {supervisor, delete_child, ['Elixir.MyApp.Supervisor', 'Elixir.MyApp.Cache']}},
-    {update, 'Elixir.MyApp.Supervisor', supervisor},
-    {delete_module, 'Elixir.MyApp.Cache'}
-  ]}]
-}.
-```
-
-Removing a child is the same list the other way round, terminate and delete the child, update the supervisor, then delete the module.
-Order is the part to get right: the module has to be loaded before a child using it is started, and the child has to be stopped before its module is deleted.
-`supervisor:restart_child/2` is what starts a child the supervisor knows about but is not running, which is exactly the state `{update, Module, supervisor}` leaves a newly added specification in.
-
-**Where to edit it.**
-[Jellyfish][jyf] can pause the release so you can edit the file it just generated:
-
-```bash
-EDIT_APPUP=true MIX_ENV=prod mix release
-# Press any key when you're done editing rel/appups/myphoenixapp/1.0.0_to_1.1.0.appup
-```
-
-The other way is to untar the release, edit `lib/<app>-<vsn>/ebin/<app>.appup`, and tar it again.
-Either way, keep the downgrade list consistent with the upgrade one, and remember that the appup is executed by the version being replaced, see [Which version performs the upgrade](#which-version-performs-the-upgrade).
-
-**Writing those instructions is a good task to hand to an LLM.**
-Give it the `init/1` of the supervisor in both versions and the appup Jellyfish generated, and ask it to add the instructions for the children that appeared or disappeared, in the correct order.
-It is a mechanical translation from a diff into a known instruction set, which is the kind of work it does well.
-Read the result yourself before shipping it, the same way you would read the diff of a dependency: check the order, check that the child ids match the ones in `init/1`, and check the downgrade list.
-Then apply the upgrade against a real node and confirm the tree, `Supervisor.which_children/1` tells you what actually runs after it.
-
-The alternative is always available and sometimes the better trade: ship the tree change as a full deployment, and keep the hot upgrades for changes that only touch code.
+The one DeployEx-specific addition: exercising the upgrade before production belongs in CI. This project does that in [`hot_upgrade.yaml`](/.github/workflows/hot_upgrade.yaml): it checks out both tags, builds each, and publishes the target release with its hot-upgrade information as an artifact. It still does not apply the upgrade itself, that step is run by hand against a real node. The local guides walk through exactly that on a machine, see [Local-Elixir](/guides/docs/local-elixir/README.md). The [Calori project](https://github.com/thiagoesteves/calori/blob/main/.github/workflows/hot-upgrade.yaml) shows the same build-in-CI approach for a monitored application.
 
 ## Checking whether a hot upgrade is possible
 
-**Compare the toolchains first.**
-If the `.tool-versions` used for the two builds differ in Erlang or Elixir, stop here, it is a full deployment.
-
-**Look for the upgrade metadata in the package.**
-An Elixir release carries a `jellyfish.json` per application, an Erlang one carries `.appup` files:
-
-```bash
-tar -tzf myphoenixapp-1.1.0.tar.gz | grep -E "jellyfish.json|[.]appup$"
-```
-
-Nothing listed means the release was built without hot-upgrade information and can only be deployed fully.
+See [Checking whether a hot upgrade is possible](https://github.com/deployex/beam-hotupgrades#checking-whether-a-hot-upgrade-is-possible) for the generic checks (toolchain comparison, package metadata, `release_handler:which_releases/0`). What follows is specific to DeployEx.
 
 **Check the versions it claims to upgrade from.**
 Extract a `jellyfish.json` and read its `from` and `to`.
@@ -349,6 +357,11 @@ To hot-upgrade DeployEx itself:
 
 1. Check the [GitHub hot-upgrade workflow](/.github/workflows/hot_upgrade.yaml) for release creation
 2. Review the Changelog to verify your current version supports upgrading to the target version
+
+The DeployEx dashboard serves digested assets, as it recommends for [Phoenix applications](#phoenix-applications), and follows the same two rules.
+DeployEx always forces `config_change/3` on itself during a self-upgrade, so the dashboard links to the new files as soon as the upgrade is installed, with nothing to set.
+The hot-upgrade workflow builds the current and the target version in the same checkout, so its release file ships the digested files of both and a dashboard page that was already open keeps working.
+A release file built from a clean checkout has only its own, so use the one that workflow produces for a hot upgrade.
 
 Then choose one of the following methods:
 
@@ -450,7 +463,7 @@ Each release publishes one artifact per OTP line and CPU, `deployex-ubuntu-24.04
 An arm64 host takes the same files with `-arm64` after the OS, such as `deployex-ubuntu-24.04-arm64-otp-28.tar.gz`.
 The validation below checks the OTP, not the CPU, so take the file for the host CPU.
 The file has to match the `otp_version` the installation runs, which is the one in its `deployex.yaml`.
-Picking the wrong one is the easiest way to hit the first entry of [When NOT to hot-upgrade](#when-not-to-hot-upgrade), updating Erlang OTP, without meaning to.
+Picking the wrong one is the easiest way to hit the first entry of [When NOT to hot-upgrade](https://github.com/deployex/beam-hotupgrades#when-not-to-hot-upgrade), updating Erlang OTP, without meaning to.
 
 A hot upgrade replaces application code inside the running VM, it cannot replace the VM or the language runtime underneath it.
 A release built for another OTP brings a different Erlang and Elixir, and `systools:make_relup/4` needs an `.appup` for every application whose version changes, which neither ships.
@@ -514,6 +527,13 @@ During that window some replicas run the new version and some the old, which is 
 ### When a monitored application upgrade fails
 
 A release only reaches the hot upgrade path when it shipped the `.appup` or `jellyfish.json` files saying it supports one.
+A release that ships them and also brings another runtime is not one: a different ERTS, or a new version of an application that has no `.appup` for the version that is running, as Elixir itself when the release was built with a newer one. No relup can be built for it, so DeployEx deploys it in full, and says why:
+
+```bash
+[warning] HOT UPGRADE version NOT DETECTED, full deployment required, reason: {:no_appup, ["eex 1.19.5 -> 1.19.6", "elixir 1.19.5 -> 1.19.6", "iex 1.19.5 -> 1.19.6", "logger 1.19.5 -> 1.19.6"]}
+[warning] HOT UPGRADE version NOT DETECTED, full deployment required, reason: {:runtime_changed, "erts 16.3 -> 16.4.0.6"}
+```
+
 What DeployEx does when that upgrade fails depends on whether the running node was already changed.
 
 If it failed before the release was installed, nothing on the node was touched, so there is nothing to recover and no reason to restart it.
@@ -555,6 +575,29 @@ There DeployEx does fall back to a full deployment, which restarts the instance 
 [error] Hot Upgrade failed, running for full deployment
 ```
 
+### Seeing what a hot upgrade did
+
+The relup is the plan the node ran: which applications had their code replaced, which modules were loaded, which processes were suspended for a `code_change`, and which functions the upgrade called.
+It is written into the release directory, which DeployEx removes when it prunes older releases, so DeployEx keeps a copy with the version history.
+
+ * It is kept just before the release is installed, with the instructions DeployEx adds, the runtime configuration, the consolidated protocols, the version on traces and logs, the stop and start of the Broadway pipelines and the pause and resume of the Oban queues, so it is what the node was given. An upgrade that failed after that point has its relup too.
+ * Only the upgrade is kept. A relup also describes the way back, which DeployEx never applies.
+ * It holds instructions, not configuration. The resolved configuration travels separately and is erased once the upgrade has applied it.
+ * The newest 20 are kept for each application, one for each pair of versions.
+
+On the Versions page of the application, a hot upgrade has a `relup` link. It opens under the row, with two views:
+
+ * **Steps** lists what the node ran, in the order it ran it: each instruction, such as `suspend`, `load`, `code_change` or `purge`, with the modules it acted on and a sentence on what it means. The two purge options of a `load` are spelled out: they do not restart anything, a process runs the new code from its next call into the module, and they only decide what happens to one that is still inside older code. The `load` of each module of an application reads as one step. Under the steps, the outcome sums the upgrade up.
+ * **Original file** shows the relup as text, with a button that copies it.
+
+`GET /v1/apps/:name/relups/:from_version/:to_version` of the [Agent API](/guides/docs/agent-api/README.md) returns the same: the `steps`, each with its `meaning`, the `summary` and the script. Each version in `/versions` and `/ghosted` has the `from_version` that goes in that path.
+The steps are the place to check that an appup edited by hand did what was meant, for instance that the `apply` restarting a child is there, and where it runs.
+
+The relups of DeployEx's own hot upgrades are kept the same way.
+DeployEx is not one of the monitored applications, so the Agent API has them under the node: `GET /v1/node/versions` lists the hot upgrades DeployEx applied to itself and `GET /v1/node/relups/:from_version/:to_version` returns the relup of one.
+The dashboard does not show them yet.
+The upgrade into the first version that keeps relups has none: it is run by the version that was installed, which did not keep them.
+
 ## Going back
 
 There is no hot downgrade.
@@ -566,23 +609,16 @@ The more of your release that is state living inside processes, the more that as
 
 ## Glossary
 
+The general `appup`/`relup`/`release_handler` terms are in [beam-hotupgrades' glossary](https://github.com/deployex/beam-hotupgrades#glossary). The one below is specific to DeployEx.
+
 | Term | What it is |
 | --- | --- |
-| `appup` | Per application upgrade instructions, from one version to another. Generated by [Jellyfish][jyf] as `jellyfish.json`, or written by hand as `.appup`. |
-| `relup` | The ordered plan for the whole release, built by `systools:make_relup/4` from two releases and their appups. |
-| `release_handler` | The OTP module that unpacks, installs and makes a release permanent on a live node. |
-| `unpacked` | Release status. The code is on disk and registered, nothing is loaded. |
-| `current` | Release status. Installed and running, but not yet the one the node would boot into. |
-| `permanent` | Release status. Installed and the one the node boots into next time. |
-| `old` | Release status. A previously permanent release that has been replaced. |
 | ghosted version | A version DeployEx has marked as not to be deployed again after it failed, skipped by later deployment checks until it is removed. |
 
 ## Additional Resources
 
+- [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades) - the BEAM hot upgrade mechanism, good practices, and pitfalls, not specific to DeployEx
 - [Jellyfish Documentation][jyf] - AppUp file generation
-- [Erlang OTP Design Principles: Release Handling](https://www.erlang.org/doc/system/release_handling.html) - what `release_handler` does and in what order
-- [Erlang Appup Cookbook](https://www.erlang.org/doc/system/appup_cookbook.html) - worked appups, including supervisors and special processes
-- [Erlang Compilation and Code Loading](https://www.erlang.org/doc/system/code_loading.html) - current and old code, purging, fully qualified calls
 - [Calori Project](https://github.com/thiagoesteves/calori) - Real-world implementation examples
 
 [jyf]: https://github.com/deployex/jellyfish

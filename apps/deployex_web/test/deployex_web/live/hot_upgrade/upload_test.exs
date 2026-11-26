@@ -324,7 +324,7 @@ defmodule DeployexWeb.HotUpgrade.UploadTest do
         assert_patch(live, ~p"/hotupgrade")
 
         html = render(live)
-        assert html =~ "Step 1 of 8: Starting the upgrade"
+        assert html =~ "Step 1 of 9: Starting the upgrade"
         assert html =~ "1.0.0 → 1.1.0"
         refute has_element?(live, "#hotupgrade-apply-deployex")
         refute html =~ "modal-open"
@@ -541,7 +541,7 @@ defmodule DeployexWeb.HotUpgrade.UploadTest do
       with_mock Deployer.HotUpgrade, [:passthrough], deployex_progress: &fixture_progress/0 do
         {:ok, live, html} = live(conn, ~p"/hotupgrade")
 
-        assert html =~ "Step 5 of 8: Resolving the runtime configuration"
+        assert html =~ "Step 5 of 9: Resolving the runtime configuration"
         refute has_element?(live, "#hotupgrade-progress-at")
 
         assert has_element?(
@@ -572,7 +572,7 @@ defmodule DeployexWeb.HotUpgrade.UploadTest do
 
       with_mock Deployer.HotUpgrade, [:passthrough], deployex_progress: &fixture_progress/0 do
         {:ok, live, _html} = live(conn, ~p"/hotupgrade")
-        assert render(live) =~ "Step 2 of 8: Unpacking release"
+        assert render(live) =~ "Step 2 of 9: Unpacking release"
 
         progress_fixture(run(:running, Enum.take(@announced, 3)))
 
@@ -581,10 +581,10 @@ defmodule DeployexWeb.HotUpgrade.UploadTest do
           {:hot_upgrade_progress, :other_node@localhost, "deployex", "Creating relup file"}
         )
 
-        assert render(live) =~ "Step 2 of 8: Unpacking release"
+        assert render(live) =~ "Step 2 of 9: Unpacking release"
 
         send(live.pid, {:hot_upgrade_progress, Node.self(), "deployex", "Creating relup file"})
-        assert render(live) =~ "Step 3 of 8: Creating relup file"
+        assert render(live) =~ "Step 3 of 9: Creating relup file"
       end
     end
 
@@ -604,7 +604,7 @@ defmodule DeployexWeb.HotUpgrade.UploadTest do
 
         assert has_element?(live, ~s(#hotupgrade-progress [role="status"]), success)
         leds = live |> element("#hotupgrade-progress-leds") |> render()
-        assert [_, _, _, _, _, _, _, _] = Regex.scan(~r/dx-led dx-led-done/, leds)
+        assert [_, _, _, _, _, _, _, _, _] = Regex.scan(~r/dx-led dx-led-done/, leds)
 
         live |> element("#hotupgrade-progress-done", "Done") |> render_click()
 
@@ -632,7 +632,7 @@ defmodule DeployexWeb.HotUpgrade.UploadTest do
 
         {:ok, live, _html} = live(conn, ~p"/hotupgrade")
 
-        assert has_element?(live, "#hotupgrade-progress-error", "Failed at step 4 of 8")
+        assert has_element?(live, "#hotupgrade-progress-error", "Failed at step 4 of 9")
         # A finished run shows when it ended, so an old failure does not read as current
         ended_at = DeployexWeb.HostTime.format(~U[2026-11-10 09:30:00Z], "%Y-%m-%d %H:%M")
         assert has_element?(live, "#hotupgrade-progress-at", ended_at)

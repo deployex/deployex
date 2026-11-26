@@ -24,6 +24,11 @@ defmodule DeployexWeb.RecentEventsTest do
                  recent("version_ghosted", %{name: "myerlangapp", version: "0.8.2", reason: nil})
                )
 
+      assert [%{tone: :error, title: "myapp-abc pipeline not started", detail: "MyApp.Orders"}] =
+               RecentEvents.item(
+                 recent("pipeline_not_started", %{sname: "myapp-abc", pipelines: ["MyApp.Orders"]})
+               )
+
       assert [%{tone: :error, title: "myapp-abc pre_command failed", detail: "eval Migrate.run"}] =
                RecentEvents.item(
                  recent("pre_command_failed", %{

@@ -107,6 +107,144 @@ defmodule Deployer.Installer.DeployexShTest do
     end
   end
 
+  describe "check_onepassword_env" do
+    # yq and systemctl are stand-ins: yq answers the two queries the check makes, systemctl
+    # prints what `systemctl show` would for the Environment and EnvironmentFiles properties
+    @run_check ~S"""
+    for name in onepassword_adapters service_env_names check_onepassword_env; do
+      eval "$(sed -n "/^${name}() {\$/,/^}\$/p" "${INSTALLER}")"
+    done
+    DEPLOYEX_SERVICE_NAME=deployex.service
+    check_onepassword_env /etc/deployex/deployex.yaml 2>"${ERR}"
+    """
+
+    @fake_yq ~S"""
+    #!/bin/bash
+    case "$1" in
+      .secrets_adapter) echo "\"${FAKE_SECRETS_ADAPTER:-aws}\"" ;;
+      *) if [[ -n "${FAKE_APP_ADAPTER}" ]]; then echo "${FAKE_APP_ADAPTER}"; fi; echo null ;;
+    esac
+    """
+
+    @fake_systemctl ~S"""
+    #!/bin/bash
+    case "$*" in
+      *"-p EnvironmentFiles"*) if [[ -n "${FAKE_ENV_FILE}" ]]; then echo "${FAKE_ENV_FILE} (ignore_errors=no)"; fi ;;
+      *"-p Environment"*) echo "LANG=C.UTF-8 ${FAKE_ENVIRONMENT} TERM=xterm-256color" ;;
+    esac
+    """
+
+    test "says nothing when no 1Password adapter is used", context do
+      assert check_onepassword_env(context, []) == {0, ""}
+    end
+
+    test "warns when the Connect server and its token are not given to the service", context do
+      {status, stderr} =
+        check_onepassword_env(context, [{"FAKE_SECRETS_ADAPTER", "1password-connect"}])
+
+      assert status == 0
+      assert stderr =~ "Warning: /etc/deployex/deployex.yaml uses the 1password-connect"
+      assert stderr =~ "OP_CONNECT_HOST and OP_CONNECT_TOKEN are not both set"
+
+      # One of the two is not enough, and neither is one without a value
+      {_status, stderr} =
+        check_onepassword_env(context, [
+          {"FAKE_SECRETS_ADAPTER", "1password-connect"},
+          {"FAKE_ENVIRONMENT", "OP_CONNECT_HOST=http://connect:8080 OP_CONNECT_TOKEN="}
+        ])
+
+      assert stderr =~ "are not both set"
+    end
+
+    test "finds the variables in a file of EnvironmentFile, and never prints a value",
+         %{tmp_dir: tmp_dir} = context do
+      env_file = Path.join(tmp_dir, "onepassword.env")
+
+      File.write!(env_file, """
+      # the Connect server
+      OP_CONNECT_HOST=http://connect.internal:8080
+      OP_CONNECT_TOKEN="the-connect-token"
+      """)
+
+      # The adapter of an application counts as much as the one of DeployEx
+      assert check_onepassword_env(context, [
+               {"FAKE_APP_ADAPTER", "1password-connect"},
+               {"FAKE_ENV_FILE", env_file}
+             ]) == {0, ""}
+
+      File.write!(env_file, "OP_CONNECT_HOST=http://connect.internal:8080\n")
+
+      {_status, stderr} =
+        check_onepassword_env(context, [
+          {"FAKE_APP_ADAPTER", "1password-connect"},
+          {"FAKE_ENV_FILE", env_file}
+        ])
+
+      assert stderr =~ "are not both set"
+      refute stderr =~ "connect.internal"
+    end
+
+    test "finds the variables set with Environment", context do
+      assert check_onepassword_env(context, [
+               {"FAKE_SECRETS_ADAPTER", "1password-connect"},
+               {"FAKE_ENVIRONMENT", "OP_CONNECT_HOST=http://connect:8080 OP_CONNECT_TOKEN=token"}
+             ]) == {0, ""}
+    end
+
+    test "the cli adapter needs op, and a service account or a Connect server",
+         %{bin: bin} = context do
+      {status, stderr} =
+        check_onepassword_env(context, [{"FAKE_SECRETS_ADAPTER", "1password-cli"}])
+
+      assert status == 0
+      assert stderr =~ "OP_SERVICE_ACCOUNT_TOKEN is not set for deployex.service"
+      assert stderr =~ "the 1Password CLI (op) is not installed"
+
+      op = Path.join(bin, "op")
+      File.write!(op, "#!/bin/bash\n")
+      File.chmod!(op, 0o755)
+
+      for environment <- [
+            "OP_SERVICE_ACCOUNT_TOKEN=ops_token",
+            "OP_CONNECT_HOST=http://connect:8080 OP_CONNECT_TOKEN=token"
+          ] do
+        assert check_onepassword_env(context, [
+                 {"FAKE_SECRETS_ADAPTER", "1password-cli"},
+                 {"FAKE_ENVIRONMENT", environment}
+               ]) == {0, ""}
+      end
+    end
+  end
+
+  defp check_onepassword_env(%{tmp_dir: tmp_dir, bin: bin}, env) do
+    err = Path.join(tmp_dir, "stderr")
+
+    for {name, script} <- [{"yq", @fake_yq}, {"systemctl", @fake_systemctl}] do
+      path = Path.join(bin, name)
+      File.write!(path, script)
+      File.chmod!(path, 0o755)
+    end
+
+    # Only the system directories after the stand-ins, so an op installed on the machine
+    # that runs the tests is not found. nil removes a variable the parent environment has
+    env =
+      Map.merge(
+        %{
+          "PATH" => bin <> ":/usr/bin:/bin",
+          "INSTALLER" => @installer,
+          "ERR" => err,
+          "FAKE_SECRETS_ADAPTER" => nil,
+          "FAKE_APP_ADAPTER" => nil,
+          "FAKE_ENVIRONMENT" => nil,
+          "FAKE_ENV_FILE" => nil
+        },
+        Map.new(env)
+      )
+
+    {_output, status} = System.cmd("bash", ["-c", @run_check], env: Enum.to_list(env))
+    {status, File.read!(err)}
+  end
+
   defp release_file_name(%{tmp_dir: tmp_dir, bin: bin}, arch) do
     err = Path.join(tmp_dir, "stderr")
     uname = Path.join(bin, "uname")

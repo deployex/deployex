@@ -265,6 +265,11 @@ CI builds artifacts for both OTP-28 and OTP-29 using the `.tool-versions` files 
 The release pipeline is in `.github/workflows/releases.yaml`.
 Hot upgrade testing has its own workflow: `.github/workflows/hot_upgrade.yaml`.
 
+`mix assets.deploy` digests the static assets of `deployex_web` (`phx.digest`), and `config/prod.exs` sets `cache_static_manifest`.
+The endpoint reads the manifest when it starts, so a hot upgrade of DeployEx reloads it through `config_change/3`, which `Deployer.HotUpgrade.Deployex` forces on every self-upgrade (`config_change: true` on the upgrade data).
+A page that was opened before the upgrade still requests the digested file names it loaded, so a hot upgrade release has to ship them: `hot_upgrade.yaml` builds the current and the target version in the same checkout, where `phx.digest` keeps the files of the earlier build.
+Do not clean `apps/deployex_web/priv/static` between those two builds.
+
 ---
 
 ## Changelog Maintenance
@@ -350,6 +355,13 @@ git diff $PREV..HEAD -- apps/*/lib | grep -nE "^\+.*(fn |&[A-Z])"
 
 **7. Supervision tree and applications.** Children added or removed, or a new application in the umbrella, need checking against the generated appup rather than assumed.
 
+**8. Static assets.** A change under `apps/deployex_web/assets` or `apps/deployex_web/priv/static` is hot-upgradable: the manifest is reloaded by the forced `config_change/3`.
+What needs checking is anything that changes how they are served: `cache_static_manifest` in `config/prod.exs`, the `Plug.Static` options in `DeployexWeb.Endpoint`, and `DeployexWeb.Application.config_change/3`, which has to keep calling `DeployexWeb.Endpoint.config_change/2`.
+
+```bash
+git diff $PREV..HEAD -- config/prod.exs apps/deployex_web/lib/deployex_web/endpoint.ex apps/deployex_web/lib/deployex_web/application.ex
+```
+
 ### Recording the answer
 
 - Hot upgrade supported, nothing to add.
@@ -359,7 +371,7 @@ One extra case, independent of the seven checks above: if the release fixes a bu
 Check whether the bug being fixed would fire during that upgrade, and if it would, say so under `### Backwards incompatible changes` with what it does and that a full deployment avoids it.
 See the `0.9.11` section for an example.
 
-The reasoning behind each check, and how to verify a built package, is in `guides/docs/hot-upgrades/README.md`.
+The reasoning behind each check is in [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades), and how to verify a built package against DeployEx specifically is in `guides/docs/hot-upgrades/README.md`.
 
 ---
 

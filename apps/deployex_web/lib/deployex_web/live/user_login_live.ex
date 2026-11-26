@@ -3,6 +3,11 @@ defmodule DeployexWeb.UserLoginLive do
 
   alias DeployexWeb.OAuth.Config
 
+  # The credentials the sign-in page is filled in with, for a developer. Read when DeployEx is
+  # compiled and not when it runs: only config/dev.exs sets them, so a release, which is built
+  # for production, has none whatever its configuration says afterwards
+  @dev_login Application.compile_env(:deployex_web, :dev_login, [])
+
   def render(assigns) do
     ~H"""
     <div
@@ -31,6 +36,7 @@ defmodule DeployexWeb.UserLoginLive do
               <.input
                 field={@form[:username]}
                 type="text"
+                value={@dev_login[:username]}
                 placeholder="Username"
                 autocomplete="username"
                 required
@@ -38,10 +44,14 @@ defmodule DeployexWeb.UserLoginLive do
               <.input
                 field={@form[:password]}
                 type="password"
+                value={@dev_login[:password]}
                 placeholder="Password"
                 autocomplete="current-password"
                 required
               />
+              <p :if={@dev_login != []} id="dev-login-note" class="text-xs text-slate-500">
+                Development: the default credentials are filled in.
+              </p>
 
               <:actions>
                 <.button phx-disable-with="Signing in..." class="w-full">
@@ -77,6 +87,7 @@ defmodule DeployexWeb.UserLoginLive do
       socket
       |> assign(form: form)
       |> assign(oauth_configured?: Config.configured?())
+      |> assign(dev_login: @dev_login)
 
     {:ok, socket, temporary_assigns: [form: form]}
   end

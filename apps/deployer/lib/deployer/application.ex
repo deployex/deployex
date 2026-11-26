@@ -13,6 +13,7 @@ defmodule Deployer.Application do
       [
         {Phoenix.PubSub, name: Deployer.PubSub},
         Deployer.Monitor.Supervisor,
+        Deployer.Lock,
         Deployer.Engine.Supervisor,
         Deployer.HotUpgrade.Application,
         {Finch, name: Deployer.Finch},

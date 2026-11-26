@@ -11,6 +11,7 @@ defmodule Deployer.Monitor.Service do
           ports: list(),
           env: list(),
           readiness: Readiness.t(),
+          secrets: Foundation.Yaml.Secrets.t() | nil,
           retry_delay_pre_commands: non_neg_integer()
         }
 
@@ -22,5 +23,6 @@ defmodule Deployer.Monitor.Service do
             ports: [],
             env: [],
             readiness: %Readiness{},
+            secrets: nil,
             retry_delay_pre_commands: :timer.seconds(1)
 end

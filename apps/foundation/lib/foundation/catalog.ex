@@ -288,6 +288,25 @@ defmodule Foundation.Catalog do
   def add_version(version), do: default().add_version(version)
 
   @doc """
+  Keep the relup of a hot upgrade of the application, with the summary of what it does.
+
+  The relup is the plan the node ran. It lives in the release directory, which is removed
+  when older releases are pruned, so a copy is kept here for the version history. The map
+  has `from_version` and `to_version`, which name it.
+  """
+  @impl true
+  @spec add_relup(String.t(), map()) :: :ok | {:error, any()}
+  def add_relup(name, relup), do: default().add_relup(name, relup)
+
+  @doc """
+  The relup kept for the hot upgrade of the application between two versions, nil when there
+  is none.
+  """
+  @impl true
+  @spec relup(String.t(), String.t(), String.t()) :: map() | nil
+  def relup(name, from_version, to_version), do: default().relup(name, from_version, to_version)
+
+  @doc """
   Retrieve the ghosted version history for the respective application
   """
   @impl true

@@ -37,11 +37,38 @@ vi rel/env.sh.eex
 #!/bin/sh
 # Set a default Erlang cookie value if not provided by ENV VAR.
 # This default is temporary; update it using AWS secrets and config provider.
-[ -z ${RELEASE_COOKIE} ] && export RELEASE_COOKIE="cookie"
-export RELEASE_DISTRIBUTION=sname
+#
+# Note: use if/fi here, not `[ cond ] && action`. When the guard is
+# skipped (the var is already set), that one-liner's exit status is the
+# condition's own failure, not 0 - and this file is sourced under `set
+# -e`, so if that one-liner were the last line, it would silently abort
+# the boot. if/fi always returns 0 when no branch runs.
+if [ -z "${RELEASE_COOKIE}" ]; then
+  export RELEASE_COOKIE="cookie"
+fi
+
+# Default to shortnames, but don't clobber a caller that already set
+# this (e.g. a CI hot-upgrade check sets its own RELEASE_DISTRIBUTION
+# for an ephemeral node, which an unconditional override here breaks).
+if [ -z "${RELEASE_DISTRIBUTION}" ]; then
+  export RELEASE_DISTRIBUTION=sname
+fi
 
 # save the file :wq
 ```
+
+### Set the number of ports of the VM (recommended)
+
+The Erlang VM sizes its table of ports from the limit of open files of its process, unless it is told how many it needs. On most hosts that limit is modest. In a Kubernetes pod, or under a systemd unit with `LimitNOFILE=infinity`, it can be about a billion, and the VM then asks for gigabytes of memory when it boots. Give it a number in `rel/vm.args.eex`:
+
+```bash
+vi rel/vm.args.eex
+# Add the following line:
+
++Q 65536
+```
+
+65536 is the default of the VM where the limit is low, and what DeployEx itself runs with. It is read when the VM boots, so it takes a full deployment to apply, not a hot upgrade. See [Running DeployEx in a container](../docker/README.md#on-kubernetes) for what it looks like without it.
 
 ## 4. Configuring your app to allow Hot upgrades (optional)
 Add [Jellyfish](https://github.com/deployex/jellyfish) library __ONLY__ if the application will need hotupgrades
@@ -78,12 +105,15 @@ Also, make sure you have added the `runtime_tools` to the release so DeployEx ca
   end
 ```
 
-Open the `config/prod.exs` and comment out the static manifest
+Keep the static manifest in `config/prod.exs`, as `mix phx.new` generates it:
 
 ```elixir
-#config :ectoapp, EctoappWeb.Endpoint,
-#  cache_static_manifest: "priv/static/cache_manifest.json"
+config :ectoapp, EctoappWeb.Endpoint,
+  cache_static_manifest: "priv/static/cache_manifest.json"
 ```
+
+A hot upgrade does not reload that manifest on its own, so every release asks DeployEx to call `config_change/3` on the application, with `hot_upgrade_config_change` in `current.json`.
+The `current.json` examples below include it, see [Phoenix applications](/guides/docs/hot-upgrades/README.md#phoenix-applications) for what it does and what it needs from the build.
 
 ## 5. Configuring your app as broadcast mode publishing metrics to DeployEx (optional)
 Add [Observer Web](https://github.com/deployex/observer_web)
@@ -220,7 +250,7 @@ Move the release file to the distributed folder and updated the version:
 ```bash
 export app_name=ectoapp
 cp _build/prod/${app_name}-0.1.0.tar.gz /tmp/deployex/bucket/dist/${app_name}
-echo "{\"version\":\"0.1.0\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
+echo "{\"version\":\"0.1.0\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\",\"hot_upgrade_config_change\": true}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
 ```
 
 ## 7. Running DeployEx and deploy the app
@@ -312,7 +342,7 @@ Check your digested files at "priv/static"
 ```bash
 export app_name=ectoapp
 cp _build/prod/${app_name}-0.1.1.tar.gz /tmp/deployex/bucket/dist/${app_name}
-echo "{\"version\":\"0.1.1\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
+echo "{\"version\":\"0.1.1\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\",\"hot_upgrade_config_change\": true}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
 ```
 
 3. You should then see the following messages in the DeployEx terminal while updating the app:
@@ -341,6 +371,7 @@ echo "{\"version\":\"0.1.1\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\"
 ### Hot-upgrades
 
 For this scenario, the project must first be compiled to the current version and subsequently compiled for the version it's expected to update to. The `current.json` file deployed includes the git hash representing the current application version. In this local testing phase, it suffices to compile for the previous version, such as `0.1.1`, and the subsequent version, like `0.1.2`, so the necessary files will be automatically populated.
+Build both versions in the same directory: `mix assets.deploy` keeps the digested files of the previous version in `priv/static`, and a page that was opened before the hot upgrade still requests them.
 
 1. Since the application is already compiled for `0.1.1`, change the `mix.exs` to `0.1.2`, apply any other changes if you want to test and execute the command:
 ```bash
@@ -362,7 +393,7 @@ Check your digested files at "priv/static"
 ```bash
 export app_name=ectoapp
 cp _build/prod/${app_name}-0.1.2.tar.gz /tmp/deployex/bucket/dist/${app_name}
-echo "{\"version\":\"0.1.2\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\"}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
+echo "{\"version\":\"0.1.2\",\"pre_commands\": [\"eval Ectoapp.Migrator.create\", \"eval Ectoapp.Migrator.migrate\"],\"hash\":\"local\",\"hot_upgrade_config_change\": true}" | jq > /tmp/deployex/bucket/versions/${app_name}/local/current.json
 ```
 
 You can then check that DeployEx had executed a hot upgrade in the application:
@@ -435,7 +466,12 @@ cd ectoapp
 vi rel/env.sh.eex
 # Add the following line
 #!/bin/sh
-export ELIXIR_ERL_OPTIONS="-proto_dist inet_tls -ssl_dist_optfile /tmp/inet_tls.conf"
+# Only set this when the cert config from step 3 actually exists, so
+# the release can still boot standalone (e.g. local testing, CI) before
+# mTLS is set up or outside of this guide's exact manual workflow.
+if [ -f /tmp/inet_tls.conf ]; then
+  export ELIXIR_ERL_OPTIONS="-proto_dist inet_tls -ssl_dist_optfile /tmp/inet_tls.conf"
+fi
 # save the file :q
 ```
 

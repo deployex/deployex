@@ -8,7 +8,9 @@ defmodule Foundation.Notifications do
   YAML list — subscribes only to the topics matching its `events` list at startup,
   so PubSub routing handles delivery without any filtering in the worker.  This means:
 
-  - **Callers are never blocked** — `Phoenix.PubSub.broadcast/3` returns immediately.
+  - **Callers are never blocked** — `Phoenix.PubSub.local_broadcast/3` returns immediately.
+  - **Each node sends its own events** — the broadcast is local, so a DeployEx that is
+    connected to others does not send theirs again.
   - **Channels are isolated** — a slow or crashing adapter only affects its own worker.
   - **Workers are supervised** — `Foundation.Notifications.Supervisor` restarts a
     crashed worker automatically.
@@ -31,6 +33,7 @@ defmodule Foundation.Notifications do
   | `"config_change_applied"`         | Pending config changes were successfully applied           | `node`, `changes_count`, `fields`                                           |
   | `"pre_command_failed"`            | A pre-command failed. Retries report each command once     | `node`, `sname`, `name`, `command`, `reason`                                |
   | `"version_ghosted"`               | A version was ghosted, this host does not deploy it again  | `node`, `sname`, `name`, `version`, `reason`                                |
+  | `"pipeline_not_started"`          | A pipeline is down after a hot upgrade that succeeded      | `node`, `sname`, `name`, `version`, `pipelines`                             |
   | `"deployment_rollback"`           | An instance starts to go back from a version ghosted here  | `node`, `sname`, `name`, `from_version`, `to_version`, `reason`             |
 
   ## Available adapters
@@ -126,7 +129,7 @@ defmodule Foundation.Notifications do
   def topic(event), do: "#{@topic_prefix}::#{event}"
 
   @doc """
-  Broadcasts `event` with `payload` to all workers subscribed to that event.
+  Broadcasts `event` with `payload` to all workers of this node subscribed to that event.
 
   Returns `:ok` immediately; delivery to each adapter happens asynchronously
   inside the respective `Foundation.Notifications.Worker` process.
@@ -134,7 +137,9 @@ defmodule Foundation.Notifications do
   @spec notify(event :: String.t(), payload :: map()) :: :ok
   def notify(event, payload) do
     Phoenix.PubSub.local_broadcast(Foundation.PubSub, @events_topic, {event, payload})
-    Phoenix.PubSub.broadcast(Foundation.PubSub, topic(event), {event, payload})
+    # Local: every DeployEx has workers of its own, and connected ones share the PubSub.
+    # A broadcast would have each of them send the event of this node again
+    Phoenix.PubSub.local_broadcast(Foundation.PubSub, topic(event), {event, payload})
   end
 
   @doc """

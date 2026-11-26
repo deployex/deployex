@@ -13,12 +13,16 @@ defmodule Foundation.Application do
 
   @impl true
   def start(_type, _args) do
+    # Before anything else logs: the YAML can ask for the logs as JSON
+    Foundation.LogFormat.apply()
+
     children =
       [
         {Phoenix.PubSub, name: Foundation.PubSub},
         {Finch, name: Foundation.Finch},
         Foundation.Notifications.Recent.Server,
         Foundation.Catalog.Local,
+        Foundation.Peers,
         Foundation.Certificates.Manager.Supervisor,
         Foundation.Notifications.Supervisor
       ]

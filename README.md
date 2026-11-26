@@ -16,6 +16,45 @@ Upon deployment, the following dashboard becomes available, providing easy acces
 
 ![Deployex Monitoring](guides/static/deployex_monitoring_app_tls.png)
 
+## 🧭 Is it for your project?
+
+DeployEx runs the release of a BEAM application on a host and keeps it running: it starts it, watches it, restarts it, deploys the next version and goes back when that one does not hold.
+It takes the place of the container and the orchestrator for applications that are better served by the node staying up.
+
+What a restart costs is the same for every team: the connections that were open, what the node held in memory, the work it was doing.
+How often you release decides what you get back.
+
+ * **You release many times a week, because the code moves fast.** Each release is a restart today, so availability goes down as the team gets faster. With hot upgrades most releases are not restarts, and shipping more stops costing more.
+ * **You release once a week, or less.** Each release carries more, and leaves you the time to prepare it as an upgrade: read what changes, write the instructions the generator cannot, apply it on staging first. The release of the week goes out in the middle of the day, without a maintenance window.
+
+ * **You have a fix that cannot wait for the next release.** Every team ships hotfixes, whatever its cadence, and a hotfix is the smallest release there is. As a hot upgrade it is loaded into the running nodes in seconds, when it is needed, without restarting everything to change a few lines.
+
+Either way you also get one place for the logs, a shell, the processes and the versions of every node, and a node that is restarted when it crashes and taken back to the previous version when a new one does not hold.
+
+**It does not replace your observability tools.**
+Datadog, Honeycomb, Grafana and the like keep doing what they are for: history, alerts, traces across services.
+DeployEx gives you the fast view that sits next to the deployment, with nothing to instrument and nothing to set up: the memory, processes, ports and atoms of each node, its applications and its processes, the live logs, a shell.
+It is what you open to see what a node is doing right now, and it works with those tools: a hot upgrade moves the version on traces and logs, so they keep telling one release from the next.
+
+What it asks for:
+
+ * **Hosts or virtual machines**, in a cloud or not. DeployEx runs the release on the host, and a hot upgrade changes the code of the node that was running. Where a deployment replaces the instance, as with containers, every release is a restart.
+ * **Your own clustering across hosts.** DeployEx connects the nodes of a host to each other, and connecting hosts is left to the application.
+
+An application that holds nothing, where a rolling restart behind a load balancer is already invisible, has little to gain from hot upgrades, and still gets the rest.
+
+**Hot upgrades are a choice for each release, not a commitment.**
+Every release can be deployed in full, and that is what DeployEx does unless the release carries what a hot upgrade needs.
+When it does, DeployEx applies it to the running node, and falls back to a full deployment when it cannot.
+A release with a new Erlang or Elixir, or a library with native code, is always a full deployment.
+
+**Preparing a release as an upgrade is work a coding agent can do.**
+Reading what changed in the code and in each dependency, and writing the few instructions the generator cannot, is what the [skills of the guide](https://github.com/deployex/beam-hotupgrades#skills-for-coding-agents) are for.
+What it produces does not have to be taken on trust: the upgrade is applied to a real node in CI, and DeployEx keeps the relup of every upgrade and what each step did, on the Versions page.
+
+What a hot upgrade asks of an application, what one real release looked like and the questions that come first are in [Before you decide](https://github.com/deployex/beam-hotupgrades#before-you-decide), in the guide that covers the mechanism for any tool.
+What DeployEx adds to it is in [Hot-Upgrades](guides/docs/hot-upgrades/README.md).
+
 ## 🔉 Features
 
 - Monitors multiple Beam application nodes (Elixir/Erlang/Gleam) and automatically restarts them if they crash for any reason.
@@ -27,7 +66,7 @@ Upon deployment, the following dashboard becomes available, providing easy acces
 - Supports hot code reloading for:
   - Elixir application (and libraries) using the [Jellyfish][jyf] library.
   - Elixir umbrella applications (and libraries) using the [Jellyfish][jyf] library.
-  - Erlang application using the [rebar3_appup_plugin](https://github.com/lrascao/rebar3_appup_plugin) plugin.
+  - Erlang application, umbrella application, and libraries using the [rebar3_jellyfish_plugin][r3jyf] plugin.
   - DeployEx (and libraries) itself (Isn't that awesome?)
 - Supports the following cloud providers (with terraform files):
   - Amazon Web Services (AWS)
@@ -71,7 +110,7 @@ Upon deployment, the following dashboard becomes available, providing easy acces
 - And much more ...
 
 > [!NOTE]
-> All examples and deployments in this project use NGINX as a reverse proxy and load balancer. However, DeployEx does not depend on NGINX; it is used here purely for convenience.
+> The cloud examples in this project use NGINX as a reverse proxy and load balancer, and the container trial uses HAProxy. DeployEx depends on neither; they are used here purely for convenience.
 
 ## ⚠️ What is coming next? 
 
@@ -115,7 +154,7 @@ Done in 993ms.
 [warning] No versions set yet for myphoenixapp
 ```
 
-Now you can visit [`localhost:5001`](http://localhost:5001) from your browser and enter the credentials for the admin user, _**username: admin password: deployex**_. You should expect the following dashboard:
+Now you can visit [`localhost:5001`](http://localhost:5001) from your browser and sign in as the admin user, _**username: admin password: deployex**_. In development the sign-in page comes with them filled in. If something else on your machine listens on 5001, start DeployEx with `DEPLOYEX_PORT` set to another port. You should expect the following dashboard:
 
 ![Empty Dashboard](guides/static/deployex_no_monitoring_app.png)
 
@@ -215,7 +254,7 @@ DeployEx retrieves its secrets from a Secret Manager (AWS, GCP, or local) throug
 
 ```yaml
 # Secrets Management
-secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp or env
+secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp, env, 1password-connect or 1password-cli
 secrets_path: "deployex-myphoenixapp-prod-secrets"       # Secret path to retrieve from
 ```
 
@@ -237,6 +276,7 @@ Learn how to run DeployEx locally and configure your application for mTLS, hot u
 - [Elixir Umbrella Application - No Ecto](guides/docs/local-elixir-umbrella/README.md)
 - [Gleam Application](guides/docs/local-gleam/README.md)
 - [Erlang Application](guides/docs/local-erlang/README.md)
+- [DeployEx in a container, with HAProxy in front](guides/docs/docker/README.md)
 
 ### Recommended Supporting Repositories
 
@@ -360,4 +400,5 @@ Copyright (c) 2024-2026, Thiago Esteves.
 DeployEx source code is licensed under the [MIT License](LICENSE.md).
 
 [jyf]: https://github.com/deployex/jellyfish
+[r3jyf]: https://github.com/deployex/rebar3_jellyfish_plugin
 [owb]: https://github.com/deployex/observer_web

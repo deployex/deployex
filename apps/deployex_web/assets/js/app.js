@@ -564,6 +564,21 @@ window.addEventListener("dx:copy", (e) => {
   });
 });
 
+// Copies the text of the element detail.from names, and the button says so for a moment
+window.addEventListener("dx:copy-text", (e) => {
+  const button = e.target;
+  const source = document.querySelector(e.detail.from);
+  if (!source) return;
+  copyText(source.textContent).then(() => {
+    const label = button.textContent;
+    button.textContent = "Copied";
+    announce("Copied");
+    setTimeout(() => {
+      button.textContent = label;
+    }, 1500);
+  });
+});
+
 // Copies the log rows shown in detail.from, one row a line, and the button says how many it copied. The
 // label sits in a phx-update="ignore" element, so a page update does not reset it early
 window.addEventListener("dx:copy-lines", (e) => {

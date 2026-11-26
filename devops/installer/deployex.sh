@@ -323,6 +323,68 @@ cleanup_release_dir() {
   trap "rm -rf '$(dirname "${RELEASE_PATH}")'" EXIT
 }
 
+# The 1Password secrets adapters the YAML asks for, one per line: the one of DeployEx
+# itself and the ones of its applications.
+onepassword_adapters() {
+  local yaml_file=$1
+
+    {
+      yq '.secrets_adapter' "${yaml_file}" 2>/dev/null
+      yq '.applications[].secrets.adapter' "${yaml_file}" 2>/dev/null
+    } | tr -d '"' | grep '^1password-' | sort -u
+}
+
+# The names of the variables systemd gives deployex.service a value for, with Environment=
+# and with the files of EnvironmentFile=. Only names are read out, never a value.
+service_env_names() {
+  local file
+
+    systemctl show "${DEPLOYEX_SERVICE_NAME}" -p Environment --value 2>/dev/null |
+      tr ' ' '\n' |
+      sed -n 's/^"\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)=..*/\1/p'
+
+    systemctl show "${DEPLOYEX_SERVICE_NAME}" -p EnvironmentFiles --value 2>/dev/null |
+      sed 's/ (ignore_errors=[a-z]*)$//' |
+      while IFS= read -r file; do
+        if [[ -r "${file}" ]]; then
+          sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=..*/\1/p' "${file}"
+        fi
+      done
+}
+
+# DeployEx reads 1Password with credentials from its own environment, which nothing in the
+# YAML can give it. Without them it does not start, or does not start its applications, and
+# the reason is only in its log, so say it here. A warning and not an error: the variables
+# can reach the service in a way this does not see.
+check_onepassword_env() {
+  local yaml_file=$1
+  local adapters names connect=0
+  local guide="see 'Secrets from 1Password' in guides/docs/yaml/README.md"
+
+    adapters=$(onepassword_adapters "${yaml_file}")
+    if [[ -z "${adapters}" ]]; then
+      return 0
+    fi
+
+    names=$(service_env_names)
+    if grep -qx 'OP_CONNECT_HOST' <<< "${names}" && grep -qx 'OP_CONNECT_TOKEN' <<< "${names}"; then
+      connect=1
+    fi
+
+    if grep -qx '1password-connect' <<< "${adapters}" && [[ ${connect} == 0 ]]; then
+      echo "Warning: ${yaml_file} uses the 1password-connect secrets adapter, but OP_CONNECT_HOST and OP_CONNECT_TOKEN are not both set for ${DEPLOYEX_SERVICE_NAME}, ${guide}" >&2
+    fi
+
+    if grep -qx '1password-cli' <<< "${adapters}"; then
+      if [[ ${connect} == 0 ]] && ! grep -qx 'OP_SERVICE_ACCOUNT_TOKEN' <<< "${names}"; then
+        echo "Warning: ${yaml_file} uses the 1password-cli secrets adapter, but OP_SERVICE_ACCOUNT_TOKEN is not set for ${DEPLOYEX_SERVICE_NAME}, ${guide}" >&2
+      fi
+      if ! command -v op >/dev/null 2>&1; then
+        echo "Warning: ${yaml_file} uses the 1password-cli secrets adapter, but the 1Password CLI (op) is not installed, ${guide}" >&2
+      fi
+    fi
+}
+
 update_deployex() {
   local OS_TARGET=$1
   local OTP_VERSION=$2
@@ -347,6 +409,7 @@ update_deployex() {
     echo "# Start systemd                            #"
     echo "# Start new service                        #"
     systemctl daemon-reload
+    check_onepassword_env "${config_file}"
     systemctl enable --now ${DEPLOYEX_SERVICE_NAME}
 }
 
@@ -588,6 +651,10 @@ elif [ $operation == update ]; then
     update_deployex $os_target $otp_version $base_release
 elif [ $operation == uninstall ]; then
     remove_deployex
+    # The drop-ins of the service, which is where the credentials DeployEx reads 1Password
+    # with are kept. --install leaves them, so they survive a reinstall
+    rm -rf "${DEPLOYEX_SYSTEMD_PATH}.d"
+    systemctl daemon-reload
     # Remove user and group (only if they exist)
     if id "deployex" &>/dev/null; then
         deluser --remove-home deployex 2>/dev/null || true

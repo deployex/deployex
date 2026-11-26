@@ -214,7 +214,7 @@ defmodule Sentinel.Config.Watcher do
   end
 
   defp check_for_changes(state) do
-    case Yaml.load(%Yaml{config_checksum: state.current_config.config_checksum}) do
+    case load_yaml(state) do
       {:ok, %Yaml{} = yaml_config} ->
         handle_yaml_change(state, yaml_config)
 
@@ -232,6 +232,14 @@ defmodule Sentinel.Config.Watcher do
         Logger.error("ConfigWatcher: Failed to load YAML configuration: #{inspect(reason)}")
         state
     end
+  end
+
+  # A value the YAML does not take raises when it is parsed. That stops DeployEx when it
+  # starts, and here it is an error like any other: the file is read again at the next check
+  defp load_yaml(state) do
+    Yaml.load(%Yaml{config_checksum: state.current_config.config_checksum})
+  rescue
+    error -> {:error, Exception.message(error)}
   end
 
   defp handle_yaml_change(state, yaml_config) do
@@ -414,6 +422,19 @@ defmodule Sentinel.Config.Watcher do
     end
   end
 
+  # An application loaded by a version without secrets reads as having none. An instance
+  # that already runs keeps the secrets it was started with until its next deployment
+  defp add_secrets_changes(acc, old_app, new_app, strategy) do
+    old_secrets = Map.get(old_app, :secrets)
+    new_secrets = Map.get(new_app, :secrets)
+
+    if old_secrets == new_secrets do
+      acc
+    else
+      Map.put(acc, :secrets, %{old: old_secrets, new: new_secrets, apply_strategy: strategy})
+    end
+  end
+
   defp add_replica_ports_changes(acc, old_app, new_app, strategy) do
     old_replica_ports = Enum.map(old_app.replica_ports, &"#{&1.key}=#{&1.base}") |> Enum.sort()
     new_replica_ports = Enum.map(new_app.replica_ports, &"#{&1.key}=#{&1.base}") |> Enum.sort()
@@ -482,9 +503,11 @@ defmodule Sentinel.Config.Watcher do
     |> add_number_changes(:replicas, old_app, new_app, :immediate)
     |> add_number_changes(:deploy_rollback_timeout_ms, old_app, new_app, :immediate)
     |> add_number_changes(:deploy_schedule_interval_ms, old_app, new_app, :immediate)
+    |> add_number_changes(:shutdown_timeout_ms, old_app, new_app, :immediate)
     |> add_replica_ports_changes(old_app, new_app, :full_deploy)
     |> add_env_changes(old_app, new_app, :next_deploy)
     |> add_readiness_changes(old_app, new_app, :next_deploy)
+    |> add_secrets_changes(old_app, new_app, :next_deploy)
     |> add_monitoring_changes(old_app, new_app, :immediate)
     |> add_certificates_changes(old_app, new_app, :immediate)
   end

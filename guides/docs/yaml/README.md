@@ -46,7 +46,7 @@ release_adapter: "s3"                                    # Release adapter: s3, 
 release_bucket: "myphoenixapp-prod-distribution"         # Release distribution bucket name
 
 # Secrets Management
-secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp or env
+secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp, env, 1password-connect or 1password-cli
 secrets_path: "deployex-myphoenixapp-prod-secrets"       # Secret path to retrieve from
 
 # Cloud Provider Configuration
@@ -58,6 +58,8 @@ version: "0.10.0"                                        # DeployEx version
 otp_version: 28                                          # OTP version (must match monitored apps)
 os_target: "ubuntu-24.04"                                # Target OS server. The installer picks the amd64 or arm64 build
 enable_release_check: true                               # Hourly GitHub check for a newer DeployEx (optional, default: true)
+log_format: "text"                                       # Logs of DeployEx: text, json, datadog, gcp or elastic (optional, default: text)
+peers_dns_query: "deployex.default.svc.cluster.local"    # DNS name that resolves to every DeployEx, to connect them (optional)
 
 # Path Configuration (optional with defaults)
 otp_tls_certificates: "/usr/local/share/ca-certificates" # Path to TLS certificates
@@ -65,6 +67,7 @@ install_path: "/opt/deployex"                            # DeployEx installation
 var_path: "/var/lib/deployex"                            # DeployEx managed data path (default: /var/lib/deployex)
 log_path: "/var/log/deployex"                            # DeployEx logs path (default: /var/log/deployex)
 monitored_app_log_path: "/var/log/monitored-apps"        # Monitored apps log path (default: /var/log/monitored-apps)
+monitored_app_log_stdout: false                          # Also write the output of the apps to the output of DeployEx, for a container (optional, default: false)
 
 # Data Retention (optional with defaults)
 metrics_retention_time_ms: 3600000                       # Metrics retention: 1 hour (default: 3600000)
@@ -102,6 +105,7 @@ notifications:
       - "config_change_applied"                          # Pending config changes successfully applied
       - "pre_command_failed"                             # A pre-command failed. Retries report each command once
       - "version_ghosted"                                # A version was ghosted, this host does not deploy it again
+      - "pipeline_not_started"                           # A Broadway pipeline is down after a hot upgrade that succeeded
       - "deployment_rollback"                            # An instance starts to go back from a version ghosted here
 
   # Slack Incoming Webhook adapter
@@ -210,6 +214,7 @@ applications:
     # Deployment Configuration (optional with defaults)
     deploy_rollback_timeout_ms: 600000 # Max deployment time before rollback, and max time for hot upgrade pre-commands to start and to run (default: 600000)
     deploy_schedule_interval_ms: 5000  # Check for new deployments interval (default: 5000)
+    shutdown_timeout_ms: 5000          # Time the application has to stop by itself before it is killed (default: 5000)
 
     # Readiness Configuration (optional with defaults)
     readiness:
@@ -242,6 +247,12 @@ applications:
         value: "myphoenixapp-prod-secrets"
       - key: AWS_REGION
         value: "sa-east-1"
+
+    # Secrets (optional). The fields of a 1Password item, passed to the monitored app as
+    # environment variables every time it starts. See "Secrets from 1Password"
+    secrets:
+      adapter: "1password-connect"     # 1password-connect or 1password-cli
+      path: "vaults/production/items/myphoenixapp"
     
     # Application-Level Monitoring (optional with defaults)
     # Supported types are atom, process and port, any other type is rejected
@@ -314,6 +325,116 @@ applications:
         value: "sa-east-1"
 ```
 
+## Secrets from 1Password
+
+DeployEx can read secrets from 1Password in two places:
+
+- **Its own secrets**, with `secrets_adapter` and `secrets_path` at the top of the file, like the `aws`, `gcp` and `env` adapters.
+- **The secrets of a monitored application**, with the `secrets` section of the application. DeployEx reads them every time it starts the application and passes them to it as environment variables. This is what the 1Password Kubernetes operator does with a Secret and `envFrom`.
+
+Both take the same two values. The adapter says how 1Password is reached, the path says which item holds the secrets:
+
+```yaml
+secrets_adapter: "1password-connect"
+secrets_path: "vaults/production/items/deployex"
+
+applications:
+  - name: "myphoenixapp"
+    secrets:
+      adapter: "1password-connect"
+      path: "vaults/production/items/myphoenixapp"
+```
+
+### The item
+
+The path is `vaults/<vault>/items/<item>`, the format of the operator's `item-path` annotation.
+Each part is a name or an ID, and a name cannot contain a `/`.
+When several vaults or items share a name the oldest one is used, as the operator does.
+
+Each field of the item is one secret: the label of the field is its name and the value of the field is its value.
+For DeployEx's own secrets the labels are the names in the README, such as `DEPLOYEX_SECRET_KEY_BASE`.
+For an application they are the names of the environment variables it reads, such as `DATABASE_URL`.
+
+- A field without a value is left out, and when two fields have the same label the later one wins. The operator does the same.
+- The notes of the item, its URLs and its file attachments are not read. The operator does read them.
+- A field of an application is left out when its label is not a valid environment variable name, or starts with `RELEASE_` or `DEPLOYEX_`, which DeployEx removes from the environment of every application it starts. The labels left out are logged, values never are.
+
+### Reaching 1Password
+
+| Adapter | How | Needs |
+|---|---|---|
+| `1password-connect` | The REST API of a [1Password Connect server](https://developer.1password.com/docs/connect/) | `OP_CONNECT_HOST` (for example `http://connect.internal:8080`) and `OP_CONNECT_TOKEN` |
+| `1password-cli` | The `op` command line tool, version 2.30 or later, in the `PATH` of DeployEx | `OP_SERVICE_ACCOUNT_TOKEN`, a [service account](https://developer.1password.com/docs/service-accounts/) token. `op` uses a Connect server instead when `OP_CONNECT_HOST` and `OP_CONNECT_TOKEN` are set |
+
+These are the variable names the 1Password tools use, and they are read from the environment of DeployEx.
+They cannot come from the secrets adapter, which is what they give access to.
+On a host installed with `deployex.sh`, give them to the service with a systemd drop-in that points to a file only root can read:
+
+```bash
+sudo install -d -m 0700 /etc/systemd/system/deployex.service.d
+sudo install -m 0600 /dev/null /etc/systemd/system/deployex.service.d/onepassword.env
+sudoedit /etc/systemd/system/deployex.service.d/onepassword.env
+# OP_CONNECT_HOST=http://connect.internal:8080
+# OP_CONNECT_TOKEN=...
+printf '[Service]\nEnvironmentFile=/etc/systemd/system/deployex.service.d/onepassword.env\n' |
+  sudo tee /etc/systemd/system/deployex.service.d/onepassword.conf
+sudo systemctl daemon-reload
+sudo systemctl restart deployex.service
+```
+
+- **Use `EnvironmentFile=`, not `Environment=`.** systemd shows the `Environment=` lines of a unit to every user of the host, with `systemctl show`, whatever the mode of the file they are written in. Of an `EnvironmentFile=` it shows only the path.
+- **`deployex.sh --install` and `--update` keep the drop-in**, they only rewrite the unit file. `--uninstall` removes the whole `deployex.service.d` directory, the credentials with it.
+- **`deployex.sh` warns when they are missing.** On `--install` and `--update`, when the YAML uses a 1Password adapter and the service is not given the variables that adapter needs, or `op` is not installed for `1password-cli`, it prints a warning before it starts the service. It reads the names of the variables, never their values.
+
+A monitored application starts as a child of DeployEx, so DeployEx removes these three variables from the environment of every application it starts.
+An application that needs 1Password credentials of its own gets them as fields of its item.
+
+### What to expect for an application
+
+- **The secrets are read at every start**: a full deployment, a restart from the dashboard and a restart after a crash. A value changed in 1Password reaches the application at its next start.
+- **A hot upgrade reads them again.** The application keeps its OS process, so DeployEx puts the secrets in the environment of the running node before it resolves the configuration of the new version: a changed value and a new secret are set, and a secret that left the item is removed. What the new `runtime.exs` reads is then what the item holds now.
+- **A name the YAML sets is left alone on a hot upgrade.** The `env` and the ports of the application, and `PATH`, win over a secret with the same name at a start, so a hot upgrade neither sets nor removes them.
+- **A hot upgrade changes the configuration, not what already used it.** The application gets the keys that changed in `config_change/3`. A value read on each use is the new one from then on. A value a process took when it started, such as the password of a database pool, stays until that process restarts, which the application does from `config_change/3` or a restart from the dashboard does.
+- **A hot upgrade goes on when the secrets cannot be refreshed.** The node keeps the secrets it has and DeployEx logs a warning. A release that needs a secret the node does not have then fails to resolve its configuration and is not installed.
+- **An application is not started without its secrets.** When the item cannot be read at the first start of an instance, DeployEx logs why and tries again, as it does for a failing pre-command.
+- **A restart does not depend on 1Password being reachable.** When the item cannot be read at a later start, the instance starts with the secrets of its previous start and DeployEx logs a warning. They are kept in memory, and not across a restart of DeployEx.
+- **The pre-commands get the same secrets**, so a migration can reach the database.
+- **The values are not written anywhere.** They are passed in the environment of the process, not on its command line, and they are not in the logs, the dashboard or the Agent API. The dashboard shows only the adapter and the path.
+
+### An application that reads its own secrets
+
+The `secrets` section is not the only way for an application to get fresh secrets on a hot upgrade.
+An application whose release has a [Config Provider](https://hexdocs.pm/elixir/Config.Provider.html) that reads its secrets itself, from 1Password, AWS or anywhere else, needs nothing from DeployEx for it:
+
+```elixir
+releases: [
+  myphoenixapp: [
+    config_providers: [{Myphoenixapp.SecretsProvider, "myphoenixapp-prod-secrets"}]
+  ]
+]
+```
+
+DeployEx runs the Config Providers of the application again on every hot upgrade, on the running node, and applies what they return, see [What happens to configuration during a hot-upgrade](/guides/docs/hot-upgrades/README.md#what-happens-to-configuration-during-a-hot-upgrade).
+A provider that reads the secret store returns what it holds at that moment, and the application gets the keys that changed in `config_change/3`.
+
+How the two compare:
+
+| | `secrets` section | Config Provider of the application |
+|---|---|---|
+| Who reads the secret store | DeployEx | The application, with its own credentials |
+| Where the values end up | The environment of the OS process, then the configuration through `runtime.exs` | The configuration of the application, never its environment |
+| On a start | Read by DeployEx before the application starts. A restart falls back to the secrets of the previous start | Read by the application while it boots. A store that cannot be reached stops the boot |
+| On a hot upgrade | Read again and set on the running node | Read again by the provider |
+| When the store cannot be reached on a hot upgrade | The upgrade goes on with the secrets the node has | The provider fails, and the release is not installed |
+
+Three things to know about a provider on a hot upgrade:
+
+ * It runs on the node as it is, in the version that is being replaced. A fix to the provider itself only takes effect after a full deployment.
+ * It runs in a system that is already started. A provider that starts a process under a fixed name, such as an HTTP client pool, has to tolerate that process already being there.
+ * It changes the configuration, not what already used it, as with the `secrets` section.
+
+Both can be used by the same application: the provider runs after the environment is set, so it can read from it.
+
 ## Running behind a TLS-terminating proxy
 
 DeployEx can run behind anything that terminates TLS and forwards plain HTTP to the box: an
@@ -374,10 +495,12 @@ If the secret is missing when the `auth` section is applied, DeployEx logs a war
 - `language` - Application language (Elixir, Erlang, Gleam)
 - `replicas` - Number of application instances
 - `deploy_rollback_timeout_ms` - Deployment rollback timeout. A hot upgrade also gives its pre-commands this long to start, and this long to run once they start
+- `shutdown_timeout_ms` - How long the application has to stop by itself. To stop it, DeployEx sends it a SIGTERM, which starts the shutdown of the VM, and waits for its process to be gone. What is left after this time is killed, and a warning is logged. It is used wherever an application is stopped: the previous instance of a full deployment, a restart from the dashboard or by the watchdog, a deployment that is rolled back, and when DeployEx itself is stopped. Give it the time the application needs to finish what it is doing, to drain its connections in `prep_stop/1` for instance. Where something else stops DeployEx, it has to wait at least as long: `terminationGracePeriodSeconds` of a Kubernetes pod, `TimeoutStopSec` of a systemd unit. `0` kills the application at once, as DeployEx did before this option
 - `deploy_schedule_interval_ms` - Deployment check interval
 - `replica_ports` - Port configuration for replicas
 - `env` - Environment variables
 - `readiness` - When a started application counts as ready, which is when the previous version stops. Applied on the next deployment. See [Application Readiness](#application-readiness)
+- `secrets` - Where the application's secrets are read from. Applied on the next deployment, an instance that already runs keeps the secrets it was started with. See [Secrets from 1Password](#secrets-from-1password)
 
 #### Application Readiness
 
@@ -443,12 +566,15 @@ These fields require a **full DeployEx restart**:
 - `otp_tls_certificates` - TLS certificate path
 - `os_target` - Target operating system
 - `enable_release_check` - GitHub check for a newer DeployEx release
+- `log_format` - The format of the logs DeployEx writes to its output. `text` is the default. `json`, `datadog`, `gcp` and `elastic` write one JSON object a line, in the shape of the [LoggerJSON](https://hexdocs.pm/logger_json) formatter of that name, each with `service: "deployex"`, which is `service.name` with `elastic`. For DeployEx in a container, where a collector reads the output: with `monitored_app_log_stdout` the lines of the applications are in the same output, and their `service` tells them apart. The few lines the VM logs while it boots, before the YAML is read, stay text. A value that is not one of these stops DeployEx when it starts, and is logged as an error when the file is changed while it runs
+- `peers_dns_query` - A DNS name that resolves to the address of every DeployEx, the headless Service of a Kubernetes StatefulSet for instance. Each DeployEx resolves it every five seconds and connects to the others, and the applications they run are then connected to each other too, with nothing in them for it. Not set, a DeployEx does not look for others. DeployEx names its nodes with short names, so the short host name of each one has to resolve from the others: on Kubernetes, a StatefulSet with a headless Service, and that Service in the DNS search list of the pods (`dnsConfig.searches`). Where it does not, the pods of a Deployment for instance, start DeployEx with the environment variable `DEPLOYEX_NODE_HOST` set to the address of its host, on Kubernetes `status.podIP` through the downward API. DeployEx and the applications it runs then have long names, `deployex@10.244.0.14`, and a peer is reached at its address. It is an environment variable and not a key of this file because the node is named before the file is read, and its value is not the same on every host. An Elixir application needs nothing for it. An Erlang release has to name its node with `-name ${RELEASE_NODE}` in its `vm.args`
 
 #### Installation Paths
 - `install_path` - DeployEx installation directory
 - `var_path` - Managed data directory
 - `log_path` - DeployEx logs directory
 - `monitored_app_log_path` - Monitored apps logs directory
+- `monitored_app_log_stdout` - Also writes what the applications print to the output of DeployEx itself, without a prefix and one whole line at a time: their stdout to its stdout and their stderr to its stderr. For DeployEx in a container, where the logs are collected from the output of the main process. The files and the logs of the dashboard stay as they are
 
 ### How Runtime Upgrades Work
 

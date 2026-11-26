@@ -37,6 +37,7 @@ defmodule Deployer.Monitor do
           started_at: nil | DateTime.t(),
           last_crash_at: nil | DateTime.t(),
           readiness: Readiness.t(),
+          secrets: Foundation.Yaml.Secrets.t() | nil,
           retry_delay_pre_commands: integer(),
           pre_commands_run: map() | nil,
           reported_pre_commands: [String.t()]
@@ -59,6 +60,7 @@ defmodule Deployer.Monitor do
             started_at: nil,
             last_crash_at: nil,
             readiness: %Readiness{},
+            secrets: nil,
             retry_delay_pre_commands: nil,
             pre_commands_run: nil,
             reported_pre_commands: []
@@ -132,6 +134,22 @@ defmodule Deployer.Monitor do
           {:ok, reference()} | {:error, :not_running}
   def start_pre_commands(sname, pre_commands, app_bin_path),
     do: default().start_pre_commands(sname, pre_commands, app_bin_path)
+
+  @doc """
+  Read the secrets of the application again and put them in the environment of its running
+  node, for a hot upgrade.
+
+  A hot upgrade keeps the OS process of the application, and with it the environment it was
+  started with. The runtime configuration of the new version is resolved on that node, so a
+  secret the new version needs, or one that changed, has to be in its environment first.
+  A secret that is no longer in the secret store is removed.
+
+  It returns an error when the secrets cannot be read or the node cannot be updated. The
+  reason never holds a value.
+  """
+  @impl true
+  @spec refresh_secrets(sname :: String.t()) :: :ok | {:error, any()}
+  def refresh_secrets(sname), do: default().refresh_secrets(sname)
 
   @doc """
   Stop the pre_commands run that `ref` asked for. No result is sent for it.

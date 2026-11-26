@@ -44,7 +44,15 @@ defmodule Deployer.Release do
         version
     end
     |> Common.cast_schema_fields(%Deployer.Release.Version{})
+    |> only_boolean_config_change()
   end
+
+  # current.json is written by hand or by a pipeline, anything but true or false reads as unset
+  defp only_boolean_config_change(%{hot_upgrade_config_change: value} = release)
+       when is_boolean(value) or is_nil(value),
+       do: release
+
+  defp only_boolean_config_change(release), do: %{release | hot_upgrade_config_change: nil}
 
   @doc """
   Download and unpack the application

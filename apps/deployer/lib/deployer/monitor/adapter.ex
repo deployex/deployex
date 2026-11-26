@@ -20,4 +20,5 @@ defmodule Deployer.Monitor.Adapter do
   @callback start_pre_commands(String.t(), list(), bin_path()) ::
               {:ok, reference()} | {:error, :not_running}
   @callback cancel_pre_commands(String.t(), reference()) :: :ok
+  @callback refresh_secrets(String.t()) :: :ok | {:error, any()}
 end

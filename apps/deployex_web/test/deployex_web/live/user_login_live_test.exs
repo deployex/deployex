@@ -25,6 +25,20 @@ defmodule DeployexWeb.UserLoginLiveTest do
     end
 
     @tag :capture_log
+    test "has no credentials filled in outside development, whatever is configured at runtime",
+         %{conn: conn} do
+      # config/dev.exs is the only place that sets them, and they are read at compile time
+      Application.put_env(:deployex_web, :dev_login, username: "admin", password: "deployex")
+      on_exit(fn -> Application.delete_env(:deployex_web, :dev_login) end)
+
+      {:ok, _lv, html} = live(conn, ~p"/users/log_in")
+
+      refute html =~ "dev-login-note"
+      refute html =~ ~s(value="admin")
+      refute html =~ ~s(value="deployex")
+    end
+
+    @tag :capture_log
     test "names the credential fields so password managers stay on this form", %{conn: conn} do
       {:ok, _lv, html} = live(conn, ~p"/users/log_in")
 

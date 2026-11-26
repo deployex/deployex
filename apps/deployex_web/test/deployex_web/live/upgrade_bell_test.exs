@@ -43,7 +43,7 @@ defmodule DeployexWeb.UpgradeBellLiveTest do
       assert has_element?(
                live,
                "#upgrade-bell-run",
-               "Step 5 of 8: Resolving the runtime configuration"
+               "Step 5 of 9: Resolving the runtime configuration"
              )
 
       assert has_element?(live, "#upgrade-bell-leds.dx-leds-compact")
@@ -66,18 +66,18 @@ defmodule DeployexWeb.UpgradeBellLiveTest do
 
     with_mock Deployer.HotUpgrade, [:passthrough], deployex_progress: &fixture_progress/0 do
       {:ok, live, _html} = live_isolated(conn, DeployexWeb.UpgradeBellLive)
-      assert has_element?(live, "#upgrade-bell-run", "Step 2 of 8")
+      assert has_element?(live, "#upgrade-bell-run", "Step 2 of 9")
 
       progress_fixture(@running)
       send(live.pid, :unrelated)
-      assert has_element?(live, "#upgrade-bell-run", "Step 2 of 8")
+      assert has_element?(live, "#upgrade-bell-run", "Step 2 of 9")
 
       send(
         live.pid,
         {:hot_upgrade_progress, Node.self(), "deployex", "Resolving the runtime configuration"}
       )
 
-      assert has_element?(live, "#upgrade-bell-run", "Step 5 of 8")
+      assert has_element?(live, "#upgrade-bell-run", "Step 5 of 9")
     end
   end
 
