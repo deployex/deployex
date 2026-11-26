@@ -7,6 +7,8 @@ defmodule DeployexWeb.ApplicationsLive.View do
   alias DeployexWeb.HostTime
   alias DeployexWeb.RecentEvents
   alias Foundation.Certificates.PublicKey
+  alias Foundation.Yaml.Liveness
+  alias Foundation.Yaml.Readiness
 
   # Only DeployEx has the host memory, its watchdog restarts the app that uses the most of it
   @limit_types [
@@ -94,9 +96,19 @@ defmodule DeployexWeb.ApplicationsLive.View do
 
   defp app(status, usage, now) do
     instances =
-      Enum.map(status.children, &instance(&1, status.language, Map.get(usage, &1.node, %{}), now))
+      Enum.map(
+        status.children,
+        &instance(
+          &1,
+          status.language,
+          Map.get(usage, &1.node, %{}),
+          now,
+          status.readiness,
+          status.liveness
+        )
+      )
 
-    running = Enum.count(status.children, &running?/1)
+    running = Enum.count(status.children, &Deployer.Status.running?/1)
     total = max(status.replicas, length(status.children))
 
     tls = tls(status, @tls_warn_days)
@@ -142,9 +154,10 @@ defmodule DeployexWeb.ApplicationsLive.View do
     }
   end
 
-  defp instance(child, language, usage, now) do
+  defp instance(child, language, usage, now, readiness, liveness) do
     limits = limits(usage)
     warnings = Enum.flat_map(limits, & &1.warning)
+    probe = probe_state(child.status, readiness)
 
     child.resources
     |> resources()
@@ -152,9 +165,10 @@ defmodule DeployexWeb.ApplicationsLive.View do
       sname: child.sname,
       node: child.node && to_string(child.node),
       version: child.version,
-      status: instance_status(child.status),
-      running: running?(child),
+      status: instance_status(child.status, probe),
+      running: Deployer.Status.running?(child),
       otp: child.otp,
+      liveness: liveness_badge(child.status, child.sname, liveness),
       restarts: restarts([child], now),
       ports: Enum.map(List.wrap(child.ports), &Map.take(&1, [:key, :base])),
       urls: List.wrap(child.urls),
@@ -168,6 +182,33 @@ defmodule DeployexWeb.ApplicationsLive.View do
       age: age(child.deployed_at, now)
     })
   end
+
+  # The readiness type while an instance waits on its probe, nil once running or with the default
+  # timeout type, which has no probe of its own to report
+  defp probe_state(:starting, %Readiness{type: type}) when type != :timeout, do: %{type: type}
+  defp probe_state(_status, _readiness), do: nil
+
+  # The latest liveness result of a running instance, nil with no liveness configured. A liveness
+  # probe only runs while the monitor reports :running, so this mirrors `Sentinel.Liveness`'s own
+  # gating rather than showing a result for an instance it never probed
+  defp liveness_badge(:running, sname, %Liveness{type: type}) do
+    case Sentinel.Liveness.state(sname) do
+      %{notified: true, consecutive_failures: n} ->
+        %{
+          tone: :error,
+          icon: "warning",
+          text: "#{type} liveness probe failed #{n} times in a row"
+        }
+
+      %{consecutive_failures: n} when n > 0 ->
+        %{tone: :warning, icon: "warning", text: "#{type} liveness probe failing, #{n} in a row"}
+
+      _data ->
+        %{tone: :success, icon: "check-circle", text: "#{type} liveness probe passing"}
+    end
+  end
+
+  defp liveness_badge(_status, _sname, _liveness), do: nil
 
   # The CPU and memory of an instance, the values for the app's sums and the texts
   defp resources(nil),
@@ -248,6 +289,16 @@ defmodule DeployexWeb.ApplicationsLive.View do
 
   defp ghosted(_status, _instances), do: nil
 
+  # Why the version never became ready within deploy_rollback_timeout_ms, so the ghosted version
+  # explains its cause rather than only naming the deadline
+  defp ghost_reason(%Readiness{type: :timeout}),
+    do: "It did not stay running within the rollback timeout."
+
+  defp ghost_reason(%Readiness{type: type}),
+    do: "It did not pass its #{type} readiness probe within the rollback timeout."
+
+  defp ghost_reason(_readiness), do: "It did not stay running within the rollback timeout."
+
   defp deploy(_status, %{at: at}, _now) do
     %{type: :ghosted, label: "ghosted", when: at && HostTime.format(at, "%H:%M")}
   end
@@ -272,6 +323,8 @@ defmodule DeployexWeb.ApplicationsLive.View do
 
   # A title, a line on what it means for the app, and a tone: red when nothing runs, amber when it still runs
   defp alert(status, %{version: version}, running) do
+    reason = ghost_reason(status.readiness)
+
     detail =
       if running == 0,
         do: "No earlier version runs on this host, so the app is down.",
@@ -283,8 +336,8 @@ defmodule DeployexWeb.ApplicationsLive.View do
       tone: if(running == 0, do: :error, else: :warning),
       version: version,
       title: "#{version} failed and is ghosted",
-      detail: detail,
-      text: "#{version} failed and is ghosted. #{detail}"
+      detail: "#{reason} #{detail}",
+      text: "#{version} failed and is ghosted. #{reason} #{detail}"
     }
   end
 
@@ -336,15 +389,6 @@ defmodule DeployexWeb.ApplicationsLive.View do
       text: "#{child.sname} runs its pre_commands for #{child.version}."
     }
   end
-
-  @doc """
-  Whether an instance runs. A hot upgrade's pre_commands run while it runs, and the status keeps it
-  connected.
-  """
-  @spec running?(map()) :: boolean()
-  def running?(%{status: :running}), do: true
-  def running?(%{status: :pre_commands, otp: :connected}), do: true
-  def running?(_child), do: false
 
   # The problems that show under the row, so they need no open app: a TLS certificate within 7 days, an
   # instance at its restart threshold, and a running instance that DeployEx cannot reach over OTP
@@ -516,13 +560,17 @@ defmodule DeployexWeb.ApplicationsLive.View do
     end
   end
 
-  defp instance_status(:running), do: %{text: "running", tone: :success}
-  defp instance_status(:starting), do: %{text: "starting", tone: :warning}
-  defp instance_status(:pre_commands), do: %{text: "pre_commands", tone: :warning}
-  defp instance_status(_status), do: %{text: "stopped", tone: :error}
+  defp instance_status(:running, _probe), do: %{text: "running", tone: :success}
+
+  defp instance_status(:starting, %{type: type}),
+    do: %{text: "starting · #{type} readiness", tone: :warning}
+
+  defp instance_status(:starting, nil), do: %{text: "starting", tone: :warning}
+  defp instance_status(:pre_commands, _probe), do: %{text: "pre_commands", tone: :warning}
+  defp instance_status(_status, _probe), do: %{text: "stopped", tone: :error}
 
   defp sub(status) do
-    child = Enum.find(status.children, &running?/1) || List.first(status.children)
+    child = Enum.find(status.children, &Deployer.Status.running?/1) || List.first(status.children)
 
     parts =
       case child do
@@ -549,24 +597,28 @@ defmodule DeployexWeb.ApplicationsLive.View do
   defp pinned(_config), do: nil
 
   defp running_version(status) do
-    case Enum.find(status.children, &running?/1) do
+    case Enum.find(status.children, &Deployer.Status.running?/1) do
       %{version: version} when is_binary(version) -> version
       _ -> "The current version"
     end
   end
 
-  # One count for the board, amber only for crashes. The tooltip tells crashes, operator and watchdog
-  # restarts apart, and lists the latest ones newest first, each a link to the logs at its time
+  # One count for the board, amber only for crashes. The tooltip tells crashes, operator, watchdog
+  # and liveness restarts apart, and lists the latest ones newest first, each a link to the logs at
+  # its time
   defp restarts(children, now) do
     crash = Enum.reduce(children, 0, &(&1.crash_restart_count + &2))
     forced = Enum.reduce(children, 0, &(&1.force_restart_count + &2))
     watchdog = Enum.reduce(children, 0, &(Map.get(&1, :watchdog_restart_count, 0) + &2))
+    liveness = Enum.reduce(children, 0, &(Map.get(&1, :liveness_restart_count, 0) + &2))
+    operator = forced - watchdog - liveness
 
     totals =
       [
         crash > 0 && crashes(crash),
-        forced > watchdog && "#{forced - watchdog} by an operator",
-        watchdog > 0 && "#{watchdog} by the watchdog"
+        operator > 0 && "#{operator} by an operator",
+        watchdog > 0 && "#{watchdog} by the watchdog",
+        liveness > 0 && "#{liveness} by the liveness probe"
       ]
       |> Enum.filter(& &1)
 

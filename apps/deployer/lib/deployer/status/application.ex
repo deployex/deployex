@@ -84,7 +84,10 @@ defmodule Deployer.Status.Application do
                                               deploy_rollback_timeout_ms,
                                             deploy_schedule_interval_ms:
                                               deploy_schedule_interval_ms
-                                          } ->
+                                          } = app_config ->
+        readiness = Map.get(app_config, :readiness, %Foundation.Yaml.Readiness{})
+        liveness = Map.get(app_config, :liveness)
+
         children =
           Enum.reduce(deployed_monitored_apps[name] || [], [], fn app_info, acc ->
             # credo:disable-for-lines:1
@@ -139,7 +142,9 @@ defmodule Deployer.Status.Application do
           config: current_config,
           children: children,
           monitoring: monitoring,
-          certificates: certificates
+          certificates: certificates,
+          readiness: readiness,
+          liveness: liveness
         }
       end)
 
@@ -401,6 +406,7 @@ defmodule Deployer.Status.Application do
       force_restart_count: force_restart_count,
       # A monitor state written before a relup has no restart history until its next update
       watchdog_restart_count: Map.get(monitor_state, :watchdog_restart_count, 0),
+      liveness_restart_count: Map.get(monitor_state, :liveness_restart_count, 0),
       restarts: Map.get(monitor_state, :restarts, []),
       uptime: Common.uptime_to_string(start_time),
       # A monitor state written before a relup has no started_at until its next update
