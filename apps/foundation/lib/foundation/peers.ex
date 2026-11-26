@@ -21,7 +21,8 @@ defmodule Foundation.Peers do
       resolves back to. `10.244.0.14`, which resolves to
       `dx-1.dx.default.svc.cluster.local`, is `deployex@dx-1`. That name has to resolve from
       the other hosts too, see the YAML guide.
-    * **Long names** - the address itself, `deployex@10.244.0.14`.
+    * **Long names**, with which DeployEx is started when `DEPLOYEX_NODE_HOST` is set - the
+      address itself, `deployex@10.244.0.14`.
 
   The server is not started when `peers_dns_query` is not set.
   """

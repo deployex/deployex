@@ -196,7 +196,7 @@ defmodule Foundation.Catalog.Local do
         parse_sname.(sname, node, hostname)
 
       [sname] ->
-        {:ok, hostname} = :inet.gethostname()
+        hostname = Common.node_host()
         node = String.to_atom("#{sname}@#{hostname}")
         parse_sname.(sname, node, hostname)
     end
