@@ -8,6 +8,7 @@ defmodule DeployexWeb.DockLive do
   """
   use DeployexWeb, :live_view
 
+  alias DeployexWeb.Authorization
   alias DeployexWeb.HostTime
   alias DeployexWeb.Instances
   alias DeployexWeb.LogLines
@@ -373,8 +374,14 @@ defmodule DeployexWeb.DockLive do
 
   @impl true
   def mount(_params, session, socket) do
+    # The session is made by the layout, for the user of the page. A dock without a role
+    # has read-only access: log tabs, and no shell
+    role = if session["role"] == "admin", do: :admin, else: :read_only
+
     {:ok,
      socket
+     |> Authorization.guard_events(role)
+     |> assign(:role, role)
      |> assign(:user, session["user"])
      |> assign(:tabs, [])
      |> assign(:subscribed, MapSet.new())

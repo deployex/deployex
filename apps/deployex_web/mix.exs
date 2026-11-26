@@ -66,6 +66,8 @@ defmodule DeployexWeb.MixProject do
       {:bandit, "~> 1.5"},
       {:observer_web, "~> 0.2.0"},
       {:assent, "~> 0.3"},
+      # The tokens of Cloudflare Access
+      {:jose, "~> 1.11"},
       # Static Analysis
       {:mox, "~> 1.0", only: :test},
       {:mock, "~> 0.3.0", only: :test},

@@ -10,6 +10,7 @@ defmodule DeployexWeb.Layouts do
   """
   use DeployexWeb, :html
 
+  alias DeployexWeb.Authorization
   alias DeployexWeb.Helper
   alias DeployexWeb.HostInfo
   alias DeployexWeb.UI.Bell
@@ -26,9 +27,9 @@ defmodule DeployexWeb.Layouts do
     %{path: "/fleet", label: "Fleet", icon: "signal"},
     # One item for the Logs page, which switches between Live and History itself
     %{path: "/logs/live", label: "Logs", icon: "lines", section: "/logs/"},
-    %{path: "/embedded-observer", label: "Observer Web", icon: "observer-web"},
-    %{path: "/terminal", label: "Terminal", icon: "command-line"},
-    %{path: "/hotupgrade", label: "Hot Upgrade", icon: "arrow-up-circle"},
+    %{path: "/embedded-observer", label: "Observer Web", icon: "observer-web", admin: true},
+    %{path: "/terminal", label: "Terminal", icon: "command-line", admin: true},
+    %{path: "/hotupgrade", label: "Hot Upgrade", icon: "arrow-up-circle", admin: true},
     %{path: "/documentation", label: "Documentation", icon: "book-open"}
   ]
 
@@ -72,9 +73,13 @@ defmodule DeployexWeb.Layouts do
 
   def app(assigns) do
     # Read on each render, so the version changes with a hot upgrade of DeployEx
+    admin? = Authorization.admin?(assigns.current_user)
+
+    # The pages for admins are not offered to a read-only user, who could not open them
     assigns =
       assigns
-      |> assign(:nav_items, @nav_items)
+      |> assign(:admin?, admin?)
+      |> assign(:nav_items, Enum.filter(@nav_items, &(admin? or not Map.get(&1, :admin, false))))
       |> assign(:version, Helper.deployex_version())
 
     ~H"""
@@ -120,6 +125,9 @@ defmodule DeployexWeb.Layouts do
           <:button>{initials(@current_user)}</:button>
           <div class="mb-1.5 border-b border-(--dx-base-300) px-2.5 pt-2 pb-2.5">
             <div class="truncate text-[0.875rem] font-semibold">{display_name(@current_user)}</div>
+            <div :if={not @admin?} id="account-role" class="dx-muted text-[0.8125rem]">
+              Read-only access
+            </div>
           </div>
           <Menu.item href={~p"/users/log_out"} method="delete">
             <Icons.icon name="logout" class="dx-ico size-4" /> Log out
@@ -144,7 +152,10 @@ defmodule DeployexWeb.Layouts do
         {live_render(@socket, DeployexWeb.DockLive,
           id: "dock-live",
           sticky: true,
-          session: %{"user" => DeployexWeb.TerminalLive.user_key(@current_user)}
+          session: %{
+            "user" => DeployexWeb.TerminalLive.user_key(@current_user),
+            "role" => Atom.to_string(Authorization.role(@current_user))
+          }
         )}
       </:dock>
       {render_slot(@inner_block)}

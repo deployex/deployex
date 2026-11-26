@@ -635,6 +635,11 @@ defmodule DeployexWeb.ApplicationsLive.Board do
             id={"instance-#{@instance.sname}-otp"}
             otp={@instance.otp}
           />
+          <.liveness
+            :if={@instance.liveness}
+            id={"instance-#{@instance.sname}-liveness"}
+            liveness={@instance.liveness}
+          />
         </div>
         <.cpu
           id={"instance-#{@instance.sname}-cpu"}
@@ -908,6 +913,29 @@ defmodule DeployexWeb.ApplicationsLive.Board do
         </.link>
       </span>
     </div>
+    """
+  end
+
+  attr :id, :string, required: true
+
+  attr :liveness, :map,
+    required: true,
+    doc: "tone and text, from DeployexWeb.ApplicationsLive.View"
+
+  # The latest liveness probe result of a running instance, next to its status
+  defp liveness(assigns) do
+    ~H"""
+    <span id={@id} class="inline-flex" phx-hook="Tip">
+      <span
+        role="img"
+        aria-label={@liveness.text}
+        class="inline-flex"
+        style={"color: #{Tags.tone(@liveness.tone)}"}
+      >
+        <Icons.icon name={@liveness.icon} stroke="2" class="dx-ico size-4" />
+      </span>
+      <span popover="manual" class="dx-tip" aria-hidden="true">{@liveness.text}</span>
+    </span>
     """
   end
 

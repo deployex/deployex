@@ -146,6 +146,11 @@ notifications:
 # A domain entry trusts every GitHub account that has ever verified an address
 # at that domain, including people who have left. Prefer allowed_emails, and
 # remove the entry to end a person's access.
+# allowed_emails and allowed_domains sign in as admins, read_only_emails and
+# read_only_domains with read-only access: the applications, their versions,
+# the logs and the documentation, and nothing that changes an application. The
+# Terminal, Observer Web and Hot Upgrade pages are for admins. An email on both
+# lists is an admin. The built-in admin user is always an admin.
 
 auth:
   provider: "github"                                     # Provider: github
@@ -155,6 +160,33 @@ auth:
     - "alice@example.com"
   allowed_domains:                                       # Whole domains allowed to sign in
     - "example.com"
+  read_only_emails:                                      # Exact emails that sign in with read-only access (optional)
+    - "bob@example.com"
+  read_only_domains:                                     # Whole domains that sign in with read-only access (optional)
+    - "partner.example.com"
+
+# Or, with DeployEx behind Cloudflare Access: the token Cloudflare puts on every
+# request is the sign-in, there is no login page. DeployEx checks its signature
+# with the keys of the team, that it is for the team and for the application
+# (audience), and that it has not expired. A user is an admin or has read-only
+# access by the same lists of emails and domains, or by the groups the identity
+# provider of the team says the user is in. A user with neither is not signed
+# in. Nothing is kept on the server, so any DeployEx with the same secret takes
+# the session. The built-in password login stays, for a request that does not
+# come through Cloudflare. Service tokens are not signed in.
+
+auth:
+  provider: "cloudflare_access"                          # Provider: cloudflare_access
+  team_domain: "myteam.cloudflareaccess.com"             # Required, the domain of the Cloudflare Access team
+  audience: "f1e2d3c4b5a6..."                            # Required, the Application Audience (AUD) tag of the Access application
+  admin_groups:                                          # Groups of the identity provider that sign in as admins (optional)
+    - "deployex-admins"
+  read_only_groups:                                      # Groups that sign in with read-only access (optional)
+    - "engineering"
+  allowed_emails:                                        # Exact emails that sign in as admins (optional)
+    - "alice@example.com"
+  read_only_emails:                                      # Exact emails that sign in with read-only access (optional)
+    - "bob@example.com"
 
 # ============================================================================
 # AGENT API (optional)

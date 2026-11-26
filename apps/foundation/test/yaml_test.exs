@@ -43,6 +43,10 @@ defmodule Foundation.YamlTest do
   @yaml_notifications_all "#{@file_paths}/deployex-notifications-all.yaml"
   @yaml_self_upgrade "#{@file_paths}/deployex-self-upgrade.yaml"
   @yaml_auth "#{@file_paths}/deployex-auth.yaml"
+  @yaml_auth_read_only "#{@file_paths}/deployex-auth-read-only.yaml"
+  @yaml_auth_cloudflare "#{@file_paths}/deployex-auth-cloudflare.yaml"
+  @yaml_auth_cloudflare_error "#{@file_paths}/deployex-auth-cloudflare-error.yaml"
+  @yaml_auth_cloudflare_blank "#{@file_paths}/deployex-auth-cloudflare-blank.yaml"
   @yaml_auth_provider_case "#{@file_paths}/deployex-auth-provider-case.yaml"
   @yaml_auth_emails_error "#{@file_paths}/deployex-auth-emails-error.yaml"
 
@@ -1589,6 +1593,75 @@ defmodule Foundation.YamlTest do
   end
 
   describe "auth" do
+    test "parses Cloudflare Access, with its team, audience and groups" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_cloudflare end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+
+        assert %Foundation.Yaml.Auth{
+                 provider: DeployexWeb.OAuth.CloudflareAccess,
+                 team_domain: "myteam.cloudflareaccess.com",
+                 audience: "f1e2d3c4b5a6",
+                 client_id: nil,
+                 allowlist: %{
+                   emails: ["alice@example.com"],
+                   domains: [],
+                   admin_groups: ["deployex-admins"],
+                   read_only_groups: ["engineering"]
+                 }
+               } = config.auth
+      end
+    end
+
+    test "refuses Cloudflare Access without its audience" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_cloudflare_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     "auth provider cloudflare_access needs team_domain and audience",
+                     fn -> Yaml.load() end
+      end
+    end
+
+    test "refuses Cloudflare Access with a blank audience" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_cloudflare_blank end]}
+      ]) do
+        assert_raise RuntimeError,
+                     "auth provider cloudflare_access needs team_domain and audience",
+                     fn -> Yaml.load() end
+      end
+    end
+
+    test "parses who signs in with read-only access, next to the admins" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_read_only end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+
+        assert config.auth.allowlist == %{
+                 emails: ["alice@example.com", "bob@example.com"],
+                 domains: ["example.com"],
+                 read_only_emails: ["carol@example.com"],
+                 read_only_domains: ["partner.example.com"]
+               }
+      end
+    end
+
+    test "leaves the read-only lists out when the YAML has none" do
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert Map.keys(config.auth.allowlist) == [:domains, :emails]
+      end
+    end
+
     test "parses the auth section" do
       with_mocks([
         {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth end]}

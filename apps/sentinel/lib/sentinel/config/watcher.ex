@@ -43,7 +43,7 @@ defmodule Sentinel.Config.Watcher do
   @pubsub_topic_auth_apply "deployex::config::auth::apply"
 
   # Keys of the :deployex_web OAuth env that come from the YAML auth section
-  @auth_env_keys [:provider, :client_id, :redirect_uri, :allowlist]
+  @auth_env_keys [:provider, :client_id, :redirect_uri, :team_domain, :audience, :allowlist]
 
   defmodule State do
     @moduledoc false

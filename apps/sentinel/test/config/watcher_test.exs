@@ -2368,10 +2368,12 @@ defmodule Sentinel.Config.WatcherTest do
 
       assert Application.get_env(:deployex_web, DeployexWeb.OAuth) |> Enum.sort() == [
                allowlist: @auth.allowlist,
+               audience: nil,
                client_id: @auth.client_id,
                client_secret: "secret",
                provider: @auth.provider,
-               redirect_uri: @auth.redirect_uri
+               redirect_uri: @auth.redirect_uri,
+               team_domain: nil
              ]
     end
 
