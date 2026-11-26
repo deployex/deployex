@@ -30,6 +30,7 @@ defmodule Foundation.Notifications.Slack do
             - "version_ghosted"
             - "pipeline_not_started"
             - "deployment_rollback"
+            - "liveness_probe_failed"
           options:
             username: "DeployEx"        # optional, default: "DeployEx"
             icon_emoji: ":rocket:"      # optional, default: ":robot_face:"
@@ -71,6 +72,7 @@ defmodule Foundation.Notifications.Slack do
   | `version_ghosted`               | 👻    | A version was ghosted, it is not deployed again here  |
   | `pipeline_not_started`          | ⛔    | A pipeline is down after a hot upgrade that succeeded |
   | `deployment_rollback`           | ↩️    | An instance starts to go back from a ghosted version  |
+  | `liveness_probe_failed`         | 🤒    | A liveness probe failed failure_threshold times in a row |
   """
 
   @behaviour Foundation.Notifications.Adapter
@@ -250,6 +252,20 @@ defmodule Foundation.Notifications.Slack do
     """
     ↩️ *deployment_rollback* — `#{payload.sname}` on `#{payload.node}`
     From *#{payload.from_version}* to *#{payload.to_version}*, reason: #{payload.reason}\
+    """
+  end
+
+  defp format_message("liveness_probe_failed", %{action: :restart} = payload) do
+    """
+    🤒 *liveness_probe_failed* — `#{payload.sname}` on `#{payload.node}`
+    Failed *#{payload.consecutive_failures}* probes, restarting\
+    """
+  end
+
+  defp format_message("liveness_probe_failed", payload) do
+    """
+    🤒 *liveness_probe_failed* — `#{payload.sname}` on `#{payload.node}`
+    Failed *#{payload.consecutive_failures}* probes, restart is disabled\
     """
   end
 

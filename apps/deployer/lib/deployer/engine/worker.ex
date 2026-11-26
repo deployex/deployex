@@ -39,6 +39,7 @@ defmodule Deployer.Engine.Worker do
           deploy_rollback_timeout_ms: non_neg_integer(),
           deploy_schedule_interval_ms: non_neg_integer(),
           readiness: Foundation.Yaml.Readiness.t(),
+          liveness: Foundation.Yaml.Liveness.t() | nil,
           secrets: Foundation.Yaml.Secrets.t() | nil,
           pending_pre_commands: map() | nil
         }
@@ -56,6 +57,7 @@ defmodule Deployer.Engine.Worker do
             deploy_rollback_timeout_ms: 0,
             deploy_schedule_interval_ms: 0,
             readiness: %Foundation.Yaml.Readiness{},
+            liveness: nil,
             secrets: nil,
             pending_pre_commands: nil
 
@@ -88,6 +90,7 @@ defmodule Deployer.Engine.Worker do
       state
       |> Map.put_new(:pending_pre_commands, nil)
       |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
+      |> Map.put_new(:liveness, nil)
       |> Map.put_new(:secrets, nil)
 
     # Subscribe before reading, in this order. A change made in between then arrives as a
@@ -620,12 +623,13 @@ defmodule Deployer.Engine.Worker do
   # built by a version without the field does not ask
   defp config_change?(release), do: Map.get(release, :hot_upgrade_config_change) == true
 
-  # An older version built the state without pending_pre_commands, readiness or secrets, or
+  # An older version built the state without pending_pre_commands, readiness, liveness or secrets, or
   # deployments without a field
   defp upgrade_state(state) do
     state
     |> Map.put_new(:pending_pre_commands, nil)
     |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
+    |> Map.put_new(:liveness, nil)
     |> Map.put_new(:secrets, nil)
     |> Map.update!(
       :deployments,
@@ -847,6 +851,7 @@ defmodule Deployer.Engine.Worker do
           ports: ports,
           env: env,
           readiness: state.readiness,
+          liveness: state.liveness,
           secrets: state.secrets
         })
 
@@ -921,6 +926,7 @@ defmodule Deployer.Engine.Worker do
       ports: ports,
       env: state.env,
       readiness: state.readiness,
+      liveness: state.liveness,
       secrets: state.secrets
     })
   end
@@ -1474,6 +1480,7 @@ defmodule Deployer.Engine.Worker do
         ports: available_ports,
         env: env,
         readiness: state.readiness,
+        liveness: state.liveness,
         secrets: state.secrets
       })
     end)

@@ -259,6 +259,25 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
     assert %{count: 1, crash: false, totals: "1 by an operator"} = operated.restarts
     assert %{count: 1, totals: "1 crash", latest: []} = none.restarts
 
+    # A restart the liveness probe asked for is not counted as an operator's
+    probed =
+      child(%{
+        force_restart_count: 3,
+        watchdog_restart_count: 1,
+        liveness_restart_count: 1,
+        restarts: [
+          %{at: ~U[2026-10-28 15:40:00Z], cause: :liveness, detail: "failed 3 liveness probes"}
+        ]
+      })
+
+    assert [%{restarts: probed_restarts}] = View.apps([app([probed])], %{}, @now)
+
+    assert %{
+             count: 3,
+             totals: "1 by an operator, 1 by the watchdog, 1 by the liveness probe",
+             latest: [%{text: "liveness, failed 3 liveness probes"}]
+           } = probed_restarts
+
     assert [%{restarts: %{count: 0, totals: "No restarts"}}] =
              View.apps([app([child(%{})])], %{}, @now)
 
