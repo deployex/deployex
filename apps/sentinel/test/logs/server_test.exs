@@ -128,6 +128,10 @@ defmodule Sentinel.Logs.ServerTest do
     assert_receive {:logs_new_data, ^sname, ^log_type, %Message{timestamp: _, log: _message}},
                    1_000
 
+    # The server notifies before it records the type, so it is asked for its state to let
+    # it finish with the message
+    :sys.get_state(pid)
+
     log_types = Server.get_types_by_sname(sname)
     assert log_type in log_types
   end

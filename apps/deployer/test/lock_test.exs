@@ -91,20 +91,22 @@ defmodule Deployer.LockTest do
     send(holder, :stop)
     assert_receive {:DOWN, ^ref, :process, ^holder, _reason}
 
-    # The server that owns the table has seen it too
-    :sys.get_state(Lock)
-    assert Enum.filter(Lock.list(), &(&1.name == name)) == []
+    # The server that owns the table sees it too, on its own time: its :DOWN message is
+    # not ordered against the one this test just received for the same process
+    assert eventually?(fn -> Enum.filter(Lock.list(), &(&1.name == name)) == [] end)
 
     # :global frees the lock of a process that is gone a moment after it is gone
     assert acquired_within?(name, 1_000)
     Lock.release(name)
   end
 
-  defp acquired_within?(name, ms) do
+  defp acquired_within?(name, ms), do: eventually?(fn -> Lock.acquire(name, @info) == :ok end, ms)
+
+  defp eventually?(fun, ms \\ 1_000) do
     cond do
-      Lock.acquire(name, @info) == :ok -> true
+      fun.() -> true
       ms <= 0 -> false
-      true -> Process.sleep(20) && acquired_within?(name, ms - 20)
+      true -> Process.sleep(20) && eventually?(fun, ms - 20)
     end
   end
 
