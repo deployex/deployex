@@ -4,7 +4,7 @@
 
 DeployEx is an Elixir **umbrella application** that manages deployments for BEAM applications (Elixir, Erlang, Gleam).
 It monitors running nodes, performs full deployments and hot upgrades, manages TLS certificates, sends notifications, and exposes a Phoenix LiveView dashboard.
-It does **not** use Docker or Kubernetes - it relies purely on OTP distribution.
+It runs as a service on a host (bare metal, a virtual machine) or inside a container (Docker, Kubernetes), and relies on OTP distribution to reach the applications it runs.
 
 The project version lives in `mix/shared.exs` (`Mix.Shared.version/0`) - do not hardcode it elsewhere.
 Elixir requirement is `~> 1.19`; the exact toolchain is pinned in `.tool-versions` (Erlang 29.1.2, Elixir 1.20.5-otp-29).
