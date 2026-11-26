@@ -131,10 +131,13 @@ defmodule Deployer.Lock do
   @doc """
   The locks held and waited for on this node and on every DeployEx it is connected to.
 
-  A node that does not answer is left out.
+  A node that does not answer is left out. For each application, the one that deploys is
+  first, then the ones that wait, the longest wait first.
   """
   @spec fleet() :: [entry()]
-  def fleet, do: Enum.sort_by(list() ++ peers_list(), &{&1.name, &1.since})
+  def fleet do
+    Enum.sort_by(list() ++ peers_list(), &{&1.name, &1.state == :waiting, &1.since})
+  end
 
   @doc """
   Ends the deployment of the application `name` on `node`, which gives its lock back.
