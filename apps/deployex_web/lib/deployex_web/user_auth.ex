@@ -174,7 +174,8 @@ defmodule DeployexWeb.UserAuth do
       on user_token.
       Redirects to login page if there's no logged user.
       For an OAuth session, checks the access again when the auth config
-      changes at runtime, and redirects to the login page once it is lost.
+      changes at runtime, and redirects to the login page once it is lost
+      or the role it was mounted with changes.
 
     * `:redirect_if_user_is_authenticated` - Authenticates the user from the session.
       Redirects to signed_in_path if there's a logged user.
@@ -257,12 +258,14 @@ defmodule DeployexWeb.UserAuth do
   def handle_oauth_access(_message, socket), do: {:cont, socket}
 
   defp check_oauth_access(socket, oauth_token) do
-    if oauth_user(oauth_token) do
-      socket
-    else
-      socket
-      |> Phoenix.LiveView.put_flash(:error, "Not authorized for this instance.")
-      |> Phoenix.LiveView.redirect(to: ~p"/users/log_in")
+    case oauth_user(oauth_token) do
+      %{role: role} when role == socket.assigns.current_user.role ->
+        socket
+
+      _ ->
+        socket
+        |> Phoenix.LiveView.put_flash(:error, "Not authorized for this instance.")
+        |> Phoenix.LiveView.redirect(to: ~p"/users/log_in")
     end
   end
 

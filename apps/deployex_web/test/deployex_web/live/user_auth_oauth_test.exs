@@ -187,6 +187,17 @@ defmodule DeployexWeb.UserAuthOAuthTest do
     end
 
     @tag :capture_log
+    test "redirects to the login page when the role changes", %{conn: conn} do
+      {:ok, liveview, _html} = conn |> oauth_session() |> live(~p"/applications")
+
+      put_oauth_config(%{emails: [], domains: [], read_only_emails: ["me@co.com"]})
+      send(liveview.pid, {:watcher_auth_apply, Node.self()})
+
+      flash = assert_redirect(liveview, ~p"/users/log_in")
+      assert flash["error"] == "Not authorized for this instance."
+    end
+
+    @tag :capture_log
     test "redirects to the login page when OAuth is turned off", %{conn: conn} do
       {:ok, liveview, _html} = conn |> oauth_session() |> live(~p"/applications")
 
