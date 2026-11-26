@@ -555,6 +555,57 @@ defmodule Sentinel.Config.WatcherTest do
       end
     end
 
+    test "applies the changes by itself when the YAML has config_auto_apply" do
+      test_pid = self()
+
+      with_mocks([
+        {Upgradable, [],
+         [
+           from_app_env: fn -> @default_upgradable end,
+           from_yaml: fn _config ->
+             Map.merge(@default_upgradable, %{
+               config_checksum: "new_checksum",
+               metrics_retention_time_ms: 45_000
+             })
+           end
+         ]},
+        {Yaml, [],
+         [
+           load: fn %Yaml{config_checksum: checksum} ->
+             if checksum == "current_checksum",
+               do: {:ok, %Yaml{config_auto_apply: true}},
+               else: {:error, :unchanged}
+           end
+         ]},
+        {Application, [:passthrough],
+         [
+           put_all_env: fn updates ->
+             send(test_pid, {:applied, updates})
+             :ok
+           end
+         ]}
+      ]) do
+        Watcher.subscribe_apply_new_config()
+
+        log =
+          capture_log(fn ->
+            {:ok, _pid} = Watcher.start_link(name: :test_auto_apply, check_interval_ms: 100)
+
+            assert_receive {:applied, _updates}, 1_000
+            assert_receive {:watcher_config_apply, _node, %{changes_count: 1}}, 1_000
+
+            state = :sys.get_state(:test_auto_apply)
+            assert state.pending_config == nil
+            assert state.pending_changes == nil
+            assert state.current_config.metrics_retention_time_ms == 45_000
+            assert state.current_config.config_checksum == "new_checksum"
+          end)
+
+        assert log =~ "config_auto_apply is on, applying the change(s)"
+        assert log =~ "Successfully applied configuration updates"
+      end
+    end
+
     test "detects changes in the YAML file before apply" do
       test_pid = self()
       ref = make_ref()
