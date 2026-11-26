@@ -46,8 +46,10 @@ defmodule Deployer.Monitor.Supervisor do
       id: Monitor.Application,
       start: {Monitor.Application, :start_link, [service]},
       restart: :transient,
-      # When DeployEx stops, the monitor gives the application its time to stop
-      shutdown: Monitor.Application.shutdown_timeout_ms(service.sname) + @stop_margin_ms
+      # shutdown_timeout_ms is read live, so a change is used without restarting the
+      # monitor. A spec is set once when the child starts, so it cannot track that:
+      # the monitor traps exits and bounds its own stop by it, terminate/2 always returns
+      shutdown: :infinity
     }
 
     name
