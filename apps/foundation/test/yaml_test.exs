@@ -38,6 +38,8 @@ defmodule Foundation.YamlTest do
   @yaml_log_format_error "#{@file_paths}/deployex-log-format-error.yaml"
   @yaml_peers "#{@file_paths}/deployex-peers.yaml"
   @yaml_peers_error "#{@file_paths}/deployex-peers-error.yaml"
+  @yaml_shutdown "#{@file_paths}/deployex-shutdown.yaml"
+  @yaml_shutdown_error "#{@file_paths}/deployex-shutdown-error.yaml"
   @yaml_notifications_all "#{@file_paths}/deployex-notifications-all.yaml"
   @yaml_self_upgrade "#{@file_paths}/deployex-self-upgrade.yaml"
   @yaml_auth "#{@file_paths}/deployex-auth.yaml"
@@ -320,6 +322,7 @@ defmodule Foundation.YamlTest do
                    language: "elixir",
                    deploy_rollback_timeout_ms: 600_000,
                    deploy_schedule_interval_ms: 5000,
+                   shutdown_timeout_ms: 5000,
                    replica_ports: [%Foundation.Yaml.Ports{key: "PORT", base: 4000}],
                    certificates: []
                  },
@@ -331,6 +334,7 @@ defmodule Foundation.YamlTest do
                    language: "erlang",
                    deploy_rollback_timeout_ms: 600_000,
                    deploy_schedule_interval_ms: 5000,
+                   shutdown_timeout_ms: 5000,
                    replica_ports: [%Foundation.Yaml.Ports{key: "PORT", base: 4050}],
                    certificates: []
                  }
@@ -887,6 +891,39 @@ defmodule Foundation.YamlTest do
         {:ok, config} = Yaml.load()
         assert config.scheme == nil
         assert config.check_origin == nil
+      end
+    end
+  end
+
+  describe "shutdown_timeout_ms" do
+    test "parses the time an application has to stop" do
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_shutdown end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert [30_000, 0] == Enum.map(config.applications, & &1.shutdown_timeout_ms)
+      end
+    end
+
+    test "is five seconds when absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.applications != []
+        assert Enum.all?(config.applications, &(&1.shutdown_timeout_ms == 5_000))
+      end
+    end
+
+    test "rejects what is not a number of milliseconds" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_shutdown_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(shutdown_timeout_ms "30s" not supported, expected milliseconds, 0 or more),
+                     fn -> Yaml.load() end
       end
     end
   end
