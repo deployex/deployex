@@ -5,7 +5,7 @@ defmodule DeployexWeb.UserAuth do
   import Plug.Conn
   import Phoenix.Controller
 
-  alias DeployexWeb.OAuth.{Allowlist, Config}
+  alias DeployexWeb.OAuth.{Allowlist, CloudflareAccess, Config}
   alias Foundation.Accounts
   alias Sentinel.Config.Watcher
 
@@ -118,10 +118,18 @@ defmodule DeployexWeb.UserAuth do
   def fetch_current_user(conn, _opts) do
     {user_token, conn} = ensure_user_token(conn)
 
+    # Behind Cloudflare Access the request says who the user is, and it is put in the
+    # session for the LiveViews. A password login made without it comes first
+    {conn, access_user} =
+      if user_token, do: {conn, nil}, else: CloudflareAccess.authenticate(conn)
+
     user =
       cond do
         user_token ->
           Accounts.get_user_by_session_token(user_token)
+
+        access_user ->
+          access_user
 
         oauth_token = get_session(conn, :oauth_token) ->
           oauth_user(oauth_token)
@@ -173,9 +181,9 @@ defmodule DeployexWeb.UserAuth do
       and assigns the current_user to socket assigns based
       on user_token.
       Redirects to login page if there's no logged user.
-      For an OAuth session, checks the access again when the auth config
-      changes at runtime, and redirects to the login page once it is lost
-      or the role it was mounted with changes.
+      For an OAuth or Cloudflare Access session, checks the access again when the auth
+      config changes at runtime, and redirects to the login page once it is lost or the
+      role it was mounted with changes.
 
     * `:redirect_if_user_is_authenticated` - Authenticates the user from the session.
       Redirects to signed_in_path if there's a logged user.
@@ -226,19 +234,29 @@ defmodule DeployexWeb.UserAuth do
     end
   end
 
-  # Each request checks an OAuth session again, but a mounted LiveView keeps running, so it
-  # checks the session when a change to the auth config, such as a removed email, is applied
+  # Each request checks an OAuth or Cloudflare Access session again, but a mounted LiveView
+  # keeps running, so it checks the session when a change to the auth config, such as a
+  # removed email, is applied
   defp watch_oauth_access(socket, %{"user_token" => user_token}) when is_binary(user_token),
     do: socket
 
-  defp watch_oauth_access(socket, %{"oauth_token" => oauth_token}) do
+  defp watch_oauth_access(socket, session) do
+    if Map.has_key?(session, "oauth_token") or
+         Map.has_key?(session, CloudflareAccess.session_key()) do
+      watch_access(socket, session)
+    else
+      socket
+    end
+  end
+
+  defp watch_access(socket, session) do
     if Phoenix.LiveView.connected?(socket) do
       Watcher.subscribe_auth_apply()
 
       # The hook lives as long as the LiveView, so it is a remote capture resolved at each
       # call, which keeps working after a hot upgrade purges the old code of this module
       socket
-      |> Phoenix.LiveView.put_private(:oauth_token, oauth_token)
+      |> Phoenix.LiveView.put_private(:access_session, session)
       |> Phoenix.LiveView.attach_hook(
         :oauth_access,
         :handle_info,
@@ -249,16 +267,14 @@ defmodule DeployexWeb.UserAuth do
     end
   end
 
-  defp watch_oauth_access(socket, _session), do: socket
-
   @doc false
   def handle_oauth_access({:watcher_auth_apply, _node}, socket),
-    do: {:halt, check_oauth_access(socket, socket.private.oauth_token)}
+    do: {:halt, check_access(socket, socket.private.access_session)}
 
   def handle_oauth_access(_message, socket), do: {:cont, socket}
 
-  defp check_oauth_access(socket, oauth_token) do
-    case oauth_user(oauth_token) do
+  defp check_access(socket, session) do
+    case access_user(session) do
       %{role: role} when role == socket.assigns.current_user.role ->
         socket
 
@@ -269,10 +285,14 @@ defmodule DeployexWeb.UserAuth do
     end
   end
 
+  defp access_user(%{"oauth_token" => oauth_token}), do: oauth_user(oauth_token)
+  defp access_user(session), do: CloudflareAccess.user_from_session(session)
+
   defp mount_current_user(socket, session) do
     Phoenix.Component.assign_new(socket, :current_user, fn ->
       cond do
         user_token = session["user_token"] -> Accounts.get_user_by_session_token(user_token)
+        access_user = CloudflareAccess.user_from_session(session) -> access_user
         oauth_token = session["oauth_token"] -> oauth_user(oauth_token)
         true -> nil
       end

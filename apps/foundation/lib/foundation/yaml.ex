@@ -354,17 +354,28 @@ defmodule Foundation.Yaml do
     provider. A missing `auth:` section leaves OAuth off.
     """
 
-    defstruct [:provider, :client_id, :redirect_uri, allowlist: %{emails: [], domains: []}]
+    defstruct [
+      :provider,
+      :client_id,
+      :redirect_uri,
+      :team_domain,
+      :audience,
+      allowlist: %{emails: [], domains: []}
+    ]
 
     @type t :: %__MODULE__{
             provider: module(),
             client_id: String.t() | nil,
             redirect_uri: String.t() | nil,
+            team_domain: String.t() | nil,
+            audience: String.t() | nil,
             allowlist: %{
               required(:emails) => [String.t()],
               required(:domains) => [String.t()],
               optional(:read_only_emails) => [String.t()],
-              optional(:read_only_domains) => [String.t()]
+              optional(:read_only_domains) => [String.t()],
+              optional(:admin_groups) => [String.t()],
+              optional(:read_only_groups) => [String.t()]
             }
           }
   end
@@ -624,10 +635,31 @@ defmodule Foundation.Yaml do
   defp parse_auth(nil), do: nil
 
   defp parse_auth(data) do
+    data |> build_auth() |> validate_auth()
+  end
+
+  # Cloudflare Access is not safe without both: any team, or any application of the team.
+  # A blank value is caught here too, so it fails loudly at load instead of silently
+  # leaving CloudflareAccess.configured?/0 to disable sign-in with no warning
+  defp validate_auth(%Foundation.Yaml.Auth{provider: DeployexWeb.OAuth.CloudflareAccess} = auth) do
+    if blank?(auth.team_domain) or blank?(auth.audience) do
+      raise "auth provider cloudflare_access needs team_domain and audience"
+    end
+
+    auth
+  end
+
+  defp validate_auth(auth), do: auth
+
+  defp blank?(value), do: is_nil(value) or value == ""
+
+  defp build_auth(data) do
     %Foundation.Yaml.Auth{
       provider: parse_auth_provider(data["provider"]),
       client_id: data["client_id"],
       redirect_uri: data["redirect_uri"],
+      team_domain: parse_auth_string("team_domain", data["team_domain"]),
+      audience: parse_auth_string("audience", data["audience"]),
       allowlist:
         %{
           emails: parse_auth_list("allowed_emails", data["allowed_emails"]),
@@ -635,6 +667,8 @@ defmodule Foundation.Yaml do
         }
         |> put_auth_list(:read_only_emails, "read_only_emails", data["read_only_emails"])
         |> put_auth_list(:read_only_domains, "read_only_domains", data["read_only_domains"])
+        |> put_auth_list(:admin_groups, "admin_groups", data["admin_groups"])
+        |> put_auth_list(:read_only_groups, "read_only_groups", data["read_only_groups"])
     }
   end
 
@@ -649,10 +683,18 @@ defmodule Foundation.Yaml do
   defp parse_auth_provider(nil), do: DeployexWeb.OAuth.Provider.GitHub
 
   defp parse_auth_provider(provider) do
-    if provider |> to_string() |> String.downcase() == "github",
-      do: DeployexWeb.OAuth.Provider.GitHub,
-      else: raise("Auth provider #{provider} not supported")
+    case provider |> to_string() |> String.downcase() do
+      "github" -> DeployexWeb.OAuth.Provider.GitHub
+      "cloudflare_access" -> DeployexWeb.OAuth.CloudflareAccess
+      _other -> raise("Auth provider #{provider} not supported")
+    end
   end
+
+  defp parse_auth_string(_key, nil), do: nil
+  defp parse_auth_string(_key, value) when is_binary(value), do: value
+
+  defp parse_auth_string(key, value),
+    do: raise("auth #{key} #{inspect(value)} not supported, expected a string")
 
   # Validated at load, because a wrong type only fails at the first sign-in
   defp parse_auth_list(_key, nil), do: []
