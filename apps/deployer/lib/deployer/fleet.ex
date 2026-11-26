@@ -13,6 +13,7 @@ defmodule Deployer.Fleet do
   alias Deployer.Status
   alias Foundation.Catalog
   alias Foundation.Peers
+  alias Foundation.Rpc
 
   @rpc_timeout 3_000
 
@@ -60,13 +61,14 @@ defmodule Deployer.Fleet do
   @doc """
   The summary of this node, then the one of each connected DeployEx, by host name.
   """
-  @spec summaries() :: [summary()]
-  def summaries do
-    peers = Peers.list()
+  @spec summaries([node()]) :: [summary()]
+  def summaries(peers \\ Peers.list())
+  def summaries([] = _peers), do: [node_summary()]
 
+  def summaries(peers) do
     remote =
       peers
-      |> :erpc.multicall(__MODULE__, :node_summary, [], @rpc_timeout)
+      |> Rpc.multicall(__MODULE__, :node_summary, [], @rpc_timeout)
       |> Enum.zip(peers)
       |> Enum.map(fn
         {{:ok, %{node: _node} = summary}, _peer} -> summary
@@ -133,8 +135,7 @@ defmodule Deployer.Fleet do
     %{
       sname: child.sname,
       version: child.version,
-      running?:
-        child.status == :running or (child.status == :pre_commands and child.otp == :connected)
+      running?: Status.running?(child)
     }
   end
 

@@ -132,6 +132,44 @@ defmodule DeployexWeb.Fleet.IndexTest do
   end
 
   @tag :capture_log
+  test "Cancel does nothing and warns when the deployment already moved on", %{conn: conn} do
+    with_mocks [
+      {Deployer.Fleet, [:passthrough], summaries: fn -> fleet() end},
+      {Deployer.Lock, [:passthrough], cancel: fn _node, _name -> :ok end}
+    ] do
+      {:ok, view, _html} = live(conn, ~p"/fleet")
+
+      view |> element("#fleet-cancel-dx-1-myapp") |> render_click()
+
+      # The lock dx-1 held is gone by the time the cancel is confirmed
+      next_fleet = List.update_at(fleet(), 1, &%{&1 | locks: []})
+      :meck.expect(Deployer.Fleet, :summaries, fn -> next_fleet end)
+      send(view.pid, :refresh)
+      render(view)
+
+      html = view |> element("#fleet-cancel-confirm") |> render_click()
+
+      assert html =~ "Could not cancel the deployment of myapp on dx-1"
+      assert_not_called(Deployer.Lock.cancel(:_, :_))
+    end
+  end
+
+  @tag :capture_log
+  test "Cancel warns when the deployment does not cancel", %{conn: conn} do
+    with_mocks [
+      {Deployer.Fleet, [:passthrough], summaries: fn -> fleet() end},
+      {Deployer.Lock, [:passthrough], cancel: fn _node, _name -> {:error, :timeout} end}
+    ] do
+      {:ok, view, _html} = live(conn, ~p"/fleet")
+
+      view |> element("#fleet-cancel-dx-1-myapp") |> render_click()
+      html = view |> element("#fleet-cancel-confirm") |> render_click()
+
+      assert html =~ "Could not cancel the deployment of myapp on dx-1"
+    end
+  end
+
+  @tag :capture_log
   test "the menu has the page", %{conn: conn} do
     with_mock Deployer.Fleet, [:passthrough],
       summaries: fn -> [summary("dx-0", node: Node.self())] end do

@@ -12,7 +12,8 @@ defmodule DeployexWeb.FleetLive do
   alias DeployexWeb.UI.Icons
 
   @refresh_ms 2_000
-  @columns "grid grid-cols-[minmax(140px,1fr)_minmax(90px,0.6fr)_minmax(220px,2fr)_minmax(240px,2fr)] items-start gap-x-4"
+  @columns "grid grid-cols-[minmax(140px,1fr)_minmax(90px,0.6fr)_minmax(220px,2fr)_minmax(240px,2fr)] " <>
+             "items-start gap-x-4"
 
   @impl true
   def render(assigns) do
@@ -166,12 +167,25 @@ defmodule DeployexWeb.FleetLive do
 
   def handle_event("keep", _params, socket), do: {:noreply, assign(socket, :asking, nil)}
 
-  # The host comes from the page, so the node is looked up in what was loaded
+  # The host comes from the page, so the node and the lock are looked up again in what was
+  # last loaded, since the deployment the dialog asked about may have moved on by the time
+  # it is confirmed
   def handle_event("confirm-cancel", _params, %{assigns: %{asking: {host, name}}} = socket) do
-    case Enum.find(socket.assigns.nodes, &(&1.host == host)) do
-      %{node: node} -> Lock.cancel(node, name)
-      nil -> :ok
-    end
+    socket =
+      case Enum.find(socket.assigns.nodes, &(&1.host == host)) do
+        %{node: node} = node_summary ->
+          if held_lock?(node_summary, name) do
+            case Lock.cancel(node, name) do
+              :ok -> socket
+              {:error, _reason} -> flash_cancel_failed(socket, name, host)
+            end
+          else
+            flash_cancel_failed(socket, name, host)
+          end
+
+        nil ->
+          flash_cancel_failed(socket, name, host)
+      end
 
     {:noreply, socket |> assign(:asking, nil) |> load()}
   end
@@ -202,6 +216,12 @@ defmodule DeployexWeb.FleetLive do
     do: "#{Enum.count(instances, & &1.running?)}/#{length(instances)} running"
 
   defp since(%{since: since}), do: DateTime.from_unix!(since, :millisecond)
+
+  defp held_lock?(%{locks: locks}, name),
+    do: Enum.any?(locks, &(&1.name == name and &1.state == :held))
+
+  defp flash_cancel_failed(socket, name, host),
+    do: put_flash(socket, :error, "Could not cancel the deployment of #{name} on #{host}")
 
   defp lock_label(:held), do: "Deploying"
   defp lock_label(:waiting), do: "Waiting"

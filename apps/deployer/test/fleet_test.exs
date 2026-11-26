@@ -78,4 +78,31 @@ defmodule Deployer.FleetTest do
 
     assert [%{node: :nonode@nohost, applications: []}] = Fleet.summaries()
   end
+
+  test "summaries/1 sorts the peers that answer by host, and flags the ones that do not" do
+    stub(Deployer.StatusMock, :monitoring, fn -> {:ok, []} end)
+
+    peer_summary = %{
+      node: :"deployex@dx-1",
+      host: "dx-1",
+      answers?: true,
+      deployex_version: "0.10.0",
+      applications: [],
+      locks: []
+    }
+
+    stub(Foundation.RpcMock, :multicall, fn [:"deployex@dx-1", :"deployex@dx-2"],
+                                            Fleet,
+                                            :node_summary,
+                                            [],
+                                            _timeout ->
+      [{:ok, peer_summary}, {:error, :timeout}]
+    end)
+
+    assert [
+             %{node: :nonode@nohost},
+             %{node: :"deployex@dx-1", answers?: true},
+             %{node: :"deployex@dx-2", answers?: false}
+           ] = Fleet.summaries([:"deployex@dx-1", :"deployex@dx-2"])
+  end
 end

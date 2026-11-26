@@ -191,7 +191,7 @@ defmodule DeployexWeb.GhostedLive do
 
   defp summary(children, replicas) do
     total = max(replicas, length(children))
-    running = Enum.count(children, &View.running?/1)
+    running = Enum.count(children, &Status.running?/1)
     count = if total == 1, do: "1 instance", else: "#{total} instances"
     "#{count} · #{running}/#{total} running"
   end
