@@ -83,8 +83,24 @@ defmodule DeployexWeb.UserAuthOAuthTest do
   test "an allowed OAuth session authenticates", %{conn: conn} do
     conn = oauth_session(conn)
 
-    assert UserAuth.fetch_current_user(conn, []).assigns.current_user == %{email: "me@co.com"}
-    assert mount_user(conn) == %{email: "me@co.com"}
+    assert UserAuth.fetch_current_user(conn, []).assigns.current_user ==
+             %{email: "me@co.com", role: :admin}
+
+    assert mount_user(conn) == %{email: "me@co.com", role: :admin}
+  end
+
+  test "an email on the read-only list authenticates with read-only access", %{conn: conn} do
+    conn = oauth_session(conn)
+    put_oauth_config(%{emails: [], domains: [], read_only_emails: ["me@co.com"]})
+
+    assert mount_user(conn) == %{email: "me@co.com", role: :read_only}
+
+    put_oauth_config(%{emails: [], domains: [], read_only_domains: ["co.com"]})
+    assert mount_user(conn) == %{email: "me@co.com", role: :read_only}
+
+    # The admin list wins
+    put_oauth_config(%{emails: ["me@co.com"], domains: [], read_only_domains: ["co.com"]})
+    assert mount_user(conn) == %{email: "me@co.com", role: :admin}
   end
 
   test "an email removed from the allowlist loses access", %{conn: conn} do
@@ -164,6 +180,17 @@ defmodule DeployexWeb.UserAuthOAuthTest do
       {:ok, liveview, _html} = conn |> oauth_session() |> live(~p"/applications")
 
       put_oauth_config(%{emails: ["someone@co.com"], domains: []})
+      send(liveview.pid, {:watcher_auth_apply, Node.self()})
+
+      flash = assert_redirect(liveview, ~p"/users/log_in")
+      assert flash["error"] == "Not authorized for this instance."
+    end
+
+    @tag :capture_log
+    test "redirects to the login page when the role changes", %{conn: conn} do
+      {:ok, liveview, _html} = conn |> oauth_session() |> live(~p"/applications")
+
+      put_oauth_config(%{emails: [], domains: [], read_only_emails: ["me@co.com"]})
       send(liveview.pid, {:watcher_auth_apply, Node.self()})
 
       flash = assert_redirect(liveview, ~p"/users/log_in")

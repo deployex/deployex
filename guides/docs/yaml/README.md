@@ -146,6 +146,11 @@ notifications:
 # A domain entry trusts every GitHub account that has ever verified an address
 # at that domain, including people who have left. Prefer allowed_emails, and
 # remove the entry to end a person's access.
+# allowed_emails and allowed_domains sign in as admins, read_only_emails and
+# read_only_domains with read-only access: the applications, their versions,
+# the logs and the documentation, and nothing that changes an application. The
+# Terminal, Observer Web and Hot Upgrade pages are for admins. An email on both
+# lists is an admin. The built-in admin user is always an admin.
 
 auth:
   provider: "github"                                     # Provider: github
@@ -155,6 +160,10 @@ auth:
     - "alice@example.com"
   allowed_domains:                                       # Whole domains allowed to sign in
     - "example.com"
+  read_only_emails:                                      # Exact emails that sign in with read-only access (optional)
+    - "bob@example.com"
+  read_only_domains:                                     # Whole domains that sign in with read-only access (optional)
+    - "partner.example.com"
 
 # ============================================================================
 # AGENT API (optional)
