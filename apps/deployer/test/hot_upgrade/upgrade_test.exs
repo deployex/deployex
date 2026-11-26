@@ -129,6 +129,8 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
   ]
 
   @expected_timeout 60_000
+  # install_release/2 is also given the time its instructions wait for jobs and pipelines
+  @install_timeout 125_000
 
   setup do
     FixtureCatalog.cleanup()
@@ -268,6 +270,221 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
              assert File.exists?("#{current_releases_path}/#{app_name}.tar.gz")
            end) =~
              "HOT UPGRADE version DETECTED - [%Deployer.HotUpgrade.Jellyfish{name: \"cowboy\", type: \"dependency\", from: \"0.1.0\", to: \"0.2.0\"}]"
+  end
+
+  describe "check/1 with the files of another upgrade in the release" do
+    setup %{
+      app_name: app_name,
+      current_path: current_path,
+      new_path: new_path,
+      from_version: from_version,
+      to_version: to_version,
+      var_path: var_path
+    } do
+      File.mkdir_p!("#{current_path}/releases/#{to_version}")
+      File.write!("#{var_path}/#{app_name}-#{to_version}.tar.gz", "")
+
+      # The upgrade of the project itself, from the running version to the new one
+      write_upgrade!(new_path, "#{app_name}-#{to_version}", app_name, @valid_jellyfish_file)
+
+      # The release that is running, as DeployEx keeps its .rel once installed
+      File.write!(
+        "#{current_path}/releases/#{app_name}-#{from_version}.rel",
+        rel(app_name, from_version, [{app_name, from_version}, {"cowboy", "0.2.0"}])
+      )
+
+      # The new one, as it is built
+      File.mkdir_p!("#{new_path}/releases/#{to_version}")
+
+      File.write!(
+        "#{new_path}/releases/#{to_version}/#{app_name}.rel",
+        rel(app_name, to_version, [{app_name, to_version}, {"cowboy", "0.2.0"}])
+      )
+
+      :ok
+    end
+
+    test "ignores a dependency that the running release already has at that version", context do
+      # cowboy went from 0.1.0 to 0.2.0 in an earlier release, and has not moved since
+      write_upgrade!(context.new_path, "cowboy-0.2.0", "cowboy", @valid_jellyfish_library_file)
+
+      log = capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :hot_upgrade, jellyfish_info: [info]}}
+      assert %{name: "testapp", type: "project"} = info
+      assert log =~ "Ignoring the jellyfish.json of another upgrade: lib/cowboy-0.2.0/ebin/"
+    end
+
+    test "keeps a dependency that the running release has at another version", context do
+      File.write!(
+        "#{context.current_path}/releases/#{context.app_name}-#{context.from_version}.rel",
+        rel(context.app_name, context.from_version, [
+          {context.app_name, context.from_version},
+          {"cowboy", "0.1.0"}
+        ])
+      )
+
+      write_upgrade!(context.new_path, "cowboy-0.2.0", "cowboy", @valid_jellyfish_library_file)
+
+      capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :hot_upgrade, jellyfish_info: infos}}
+      assert ["cowboy", "testapp"] = infos |> Enum.map(& &1.name) |> Enum.sort()
+    end
+
+    test "ignores the upgrade of a previous version of the project, packed with the release",
+         context do
+      # What a rebar3 release built in the same directory carries: 0.0.9 to 0.1.0
+      previous = """
+        {"name": "testapp", "type": "project", "from": "0.0.9", "to": "0.1.0"}
+      """
+
+      write_upgrade!(context.new_path, "#{context.app_name}-0.1.0", context.app_name, previous)
+
+      capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :hot_upgrade, jellyfish_info: [info]}}
+      assert %{from: "0.1.0", to: "0.2.0"} = info
+    end
+
+    test "checks every file when the release has no .rel", context do
+      File.rm!("#{context.new_path}/releases/#{context.to_version}/#{context.app_name}.rel")
+
+      previous = """
+        {"name": "testapp", "type": "project", "from": "0.0.9", "to": "0.1.0"}
+      """
+
+      write_upgrade!(context.new_path, "#{context.app_name}-0.1.0", context.app_name, previous)
+
+      log = capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :full_deployment}}
+      assert log =~ "reason: :no_match_versions"
+    end
+
+    test "a release built with another ERTS is a full deployment", context do
+      File.write!(
+        "#{context.new_path}/releases/#{context.to_version}/#{context.app_name}.rel",
+        rel(
+          context.app_name,
+          context.to_version,
+          [{context.app_name, context.to_version}, {"cowboy", "0.2.0"}],
+          "14.2"
+        )
+      )
+
+      log = capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :full_deployment}}
+      assert log =~ ~s(reason: {:runtime_changed, "erts 14.1.1 -> 14.2"})
+    end
+
+    test "an application that changes version with no appup is a full deployment", context do
+      write_rels!(context, {"elixir", "1.19.5"}, {"elixir", "1.19.6"})
+
+      log = capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :full_deployment}}
+      assert log =~ ~s(reason: {:no_appup, ["elixir 1.19.5 -> 1.19.6"]})
+    end
+
+    test "an appup that does not upgrade from the running version is a full deployment",
+         context do
+      write_rels!(context, {"kernel", "9.9"}, {"kernel", "10.0"})
+      write_appup!(context.new_path, "kernel", "10.0", ~s({"10.0",[{"9.8",[]}],[{"9.8",[]}]}.))
+
+      capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :full_deployment}}
+    end
+
+    test "an appup that names the running version, as it is or as an expression, is a hot upgrade",
+         context do
+      write_rels!(context, {"kernel", "9.9"}, {"kernel", "10.0"})
+
+      for upgrade_from <- [~s("9.9"), ~S(<<"^9\\.9$">>)] do
+        write_appup!(
+          context.new_path,
+          "kernel",
+          "10.0",
+          "{\"10.0\",[{#{upgrade_from},[]}],[{#{upgrade_from},[]}]}."
+        )
+
+        capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+        assert_received {:checked, %Check{deploy: :hot_upgrade}}
+      end
+    end
+
+    test "an application the release adds needs no appup", context do
+      File.write!(
+        "#{context.new_path}/releases/#{context.to_version}/#{context.app_name}.rel",
+        rel(context.app_name, context.to_version, [
+          {context.app_name, context.to_version},
+          {"cowboy", "0.2.0"},
+          {"added", "1.0.0"}
+        ])
+      )
+
+      capture_log(fn -> assert {:ok, %Check{}} = check_upgrade(context) end)
+
+      assert_received {:checked, %Check{deploy: :hot_upgrade}}
+    end
+
+    # The running release and the new one, each with one more application
+    defp write_rels!(context, running, new) do
+      File.write!(
+        "#{context.current_path}/releases/#{context.app_name}-#{context.from_version}.rel",
+        rel(context.app_name, context.from_version, [
+          {context.app_name, context.from_version},
+          {"cowboy", "0.2.0"},
+          running
+        ])
+      )
+
+      File.write!(
+        "#{context.new_path}/releases/#{context.to_version}/#{context.app_name}.rel",
+        rel(context.app_name, context.to_version, [
+          {context.app_name, context.to_version},
+          {"cowboy", "0.2.0"},
+          new
+        ])
+      )
+    end
+
+    defp write_appup!(new_path, app, version, appup) do
+      ebin = "#{new_path}/lib/#{app}-#{version}/ebin"
+      File.mkdir_p!(ebin)
+      File.write!("#{ebin}/#{app}.appup", appup)
+    end
+
+    defp check_upgrade(context) do
+      result =
+        UpgradeApp.check(%Check{
+          sname: context.sname,
+          name: context.app_name,
+          language: "elixir",
+          download_path: "#{context.var_path}/#{context.app_name}-#{context.to_version}.tar.gz",
+          current_path: context.current_path,
+          new_path: context.new_path,
+          from_version: context.from_version,
+          to_version: context.to_version
+        })
+
+      with {:ok, check} <- result, do: send(self(), {:checked, check})
+      result
+    end
+
+    defp write_upgrade!(new_path, lib, app, jellyfish) do
+      ebin = "#{new_path}/lib/#{lib}/ebin"
+      File.mkdir_p!(ebin)
+      File.write!("#{ebin}/#{app}.appup", @valid_appup_file)
+      File.write!("#{ebin}/jellyfish.json", jellyfish)
+    end
+
+    defp rel(name, version, libs, erts \\ "14.1.1") do
+      apps = Enum.map_join(libs, ",", fn {app, vsn} -> "{#{app},\"#{vsn}\"}" end)
+      "{release,{\"#{name}\",\"#{version}\"},{erts,\"#{erts}\"},[#{apps}]}.\n"
+    end
   end
 
   @tag :capture_log
@@ -412,7 +629,8 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                         from_version: from_version,
                         to_version: to_version
                       })
-           end) =~ "HOT UPGRADE version NOT DETECTED, full deployment required, result"
+           end) =~
+             "HOT UPGRADE version NOT DETECTED, full deployment required, reason: :not_found"
   end
 
   @tag :capture_log
@@ -425,17 +643,18 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
     to_version: to_version,
     var_path: var_path
   } do
+    # rebar3_jellyfish_plugin writes both files straight into lib/<app>-<vsn>/ebin/ at
+    # build time (via a relx overlay), so that is where this test puts them.
     new_lib_ebin_path = "#{new_path}/lib/#{app_name}-#{to_version}/ebin"
-    new_lib_priv_path = "#{new_path}/lib/#{app_name}-#{to_version}/priv/appup"
     new_releases_path = "#{new_path}/releases"
     current_releases_path = "#{current_path}/releases/#{to_version}"
 
     File.mkdir_p!(new_lib_ebin_path)
-    File.mkdir_p!(new_lib_priv_path)
     File.mkdir_p!(new_releases_path)
     File.mkdir_p!(current_releases_path)
 
-    File.write("#{new_lib_priv_path}/#{app_name}.appup", @valid_appup_file)
+    File.write("#{new_lib_ebin_path}/#{app_name}.appup", @valid_appup_file)
+    File.write("#{new_lib_ebin_path}/jellyfish.json", @valid_jellyfish_file)
     File.write("#{new_releases_path}/#{app_name}.rel", @release_file)
     File.write("#{var_path}/#{app_name}-#{to_version}.tar.gz", "")
 
@@ -457,7 +676,8 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
              assert File.exists?("#{new_releases_path}/#{app_name}-#{to_version}.rel")
              refute File.exists?("#{new_releases_path}/#{app_name}.rel")
              assert File.exists?("#{current_releases_path}/#{app_name}.tar.gz")
-           end) =~ "HOT UPGRADE version DETECTED, from: #{from_version} to: #{to_version}"
+           end) =~
+             "HOT UPGRADE version DETECTED - [%Deployer.HotUpgrade.Jellyfish{name: \"testapp\", type: \"project\", from: \"0.1.0\", to: \"0.2.0\"}]"
   end
 
   @tag :capture_log
@@ -613,15 +833,14 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
   } do
     root = ~c"/tmp/deployex/varlib/service/#{app_name}/1/current"
 
-    new_lib_priv_path = "#{new_path}/lib/#{app_name}-#{to_version}/priv/appup"
-    current_lib_ebin_path = "#{current_path}/lib/#{app_name}-#{to_version}/ebin"
+    # The only erlang-specific behavior of do_make_relup is the .rel rename below:
+    # rebar3_jellyfish_plugin writes the .appup straight into lib/<app>-<vsn>/ebin/ at
+    # build time, and release_handler:unpack_release/1 carries it into current_path
+    # as-is, so there is no fixture file to seed for it.
     current_releases_path = "#{current_path}/releases"
 
-    File.mkdir_p!(new_lib_priv_path)
-    File.mkdir_p!(current_lib_ebin_path)
     File.mkdir_p!(current_releases_path)
 
-    File.write("#{new_lib_priv_path}/#{app_name}.appup", @valid_appup_file)
     File.write("#{current_releases_path}/#{app_name}.rel", @release_file)
 
     Foundation.RpcMock
@@ -644,7 +863,6 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                to_version: to_version
              })
 
-    assert File.exists?("#{current_lib_ebin_path}/#{app_name}.appup")
     assert File.exists?("#{current_releases_path}/#{app_name}-#{to_version}.rel")
     refute File.exists?("#{current_releases_path}/#{app_name}.rel")
   end
@@ -824,7 +1042,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                         :release_handler,
                         :install_release,
                         [^to_version, [{:update_paths, true}]],
-                        @expected_timeout ->
+                        @install_timeout ->
       {:ok, :any, :any}
     end)
 
@@ -848,7 +1066,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       function = @function
 
       Foundation.RpcMock
-      |> expect(:call, fn ^node, :release_handler, ^function, _params, @expected_timeout ->
+      |> expect(:call, fn ^node, :release_handler, ^function, _params, _timeout ->
         {:badrpc, :nodedown}
       end)
 
@@ -868,7 +1086,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                         :release_handler,
                         :install_release,
                         [^to_version, [{:update_paths, true}]],
-                        @expected_timeout ->
+                        @install_timeout ->
       {:error, :badrpc}
     end)
 
@@ -1125,6 +1343,196 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
              })
   end
 
+  describe "add_config_change_marker/2" do
+    # The applications the node reports as loaded, in the shape application:loaded_applications/0 uses
+    defp stub_loaded_applications(node, applications) do
+      Foundation.RpcMock
+      |> stub(:call, fn ^node, :application, :loaded_applications, [], @expected_timeout ->
+        for application <- applications, do: {application, ~c"description", ~c"0.1.0"}
+      end)
+    end
+
+    test "adds nothing, and asks the node nothing, unless the upgrade asks for it", %{
+      node: node,
+      current_path: current_path
+    } do
+      Foundation.RpcMock
+      |> stub(:call, fn _node, _module, _function, _args, _timeout ->
+        flunk("no rpc call expected")
+      end)
+
+      runtime_config = [testapp: [key: "value"]]
+
+      data = %Execute{
+        node: node,
+        name: "testapp",
+        current_path: current_path,
+        to_version: ~c"0.2.0"
+      }
+
+      assert UpgradeApp.add_config_change_marker(data, runtime_config) == runtime_config
+
+      # Upgrade data built by a version without the field
+      assert data
+             |> Map.delete(:config_change)
+             |> UpgradeApp.add_config_change_marker(runtime_config) == runtime_config
+
+      # No application can be named without the release name
+      assert UpgradeApp.add_config_change_marker(
+               %{data | name: nil, config_change: true},
+               runtime_config
+             ) == runtime_config
+    end
+
+    @tag :capture_log
+    test "marks the application named after the release when it ships no jellyfish.json", %{
+      node: node,
+      current_path: current_path
+    } do
+      stub_loaded_applications(node, [:kernel, :stdlib, :testapp])
+
+      data = %Execute{
+        node: node,
+        name: "testapp",
+        language: "erlang",
+        current_path: current_path,
+        to_version: ~c"0.2.0",
+        config_change: true
+      }
+
+      # Erlang and Gleam resolve no runtime configuration, the marker is all the hook applies
+      assert UpgradeApp.add_config_change_marker(data, []) ==
+               [testapp: [deployex_config_change: "0.2.0"]]
+    end
+
+    @tag :capture_log
+    test "keeps the configuration the application already resolved", %{
+      node: node,
+      current_path: current_path
+    } do
+      stub_loaded_applications(node, [:logger, :testapp])
+
+      runtime_config = [
+        testapp: [{Testapp.Repo, [pool_size: 10]}, deployex_config_change: "0.1.0"],
+        logger: [level: :info]
+      ]
+
+      data = %Execute{
+        node: node,
+        name: "testapp",
+        current_path: current_path,
+        to_version: "0.2.0",
+        config_change: true
+      }
+
+      marked = UpgradeApp.add_config_change_marker(data, runtime_config)
+
+      assert marked[:testapp][Testapp.Repo] == [pool_size: 10]
+      assert Keyword.get_values(marked[:testapp], :deployex_config_change) == ["0.2.0"]
+      assert marked[:logger] == [level: :info]
+    end
+
+    @tag :capture_log
+    test "marks every project application of an umbrella, for this version only", %{
+      node: node,
+      current_path: current_path
+    } do
+      write_jellyfish = fn dir, content ->
+        ebin = "#{current_path}/lib/#{dir}/ebin"
+        File.mkdir_p!(ebin)
+        File.write!("#{ebin}/jellyfish.json", content)
+      end
+
+      write_jellyfish.("app_one-0.2.0", ~s({"name": "app_one", "from": "0.1.0", "to": "0.2.0"}))
+
+      write_jellyfish.(
+        "app_two-0.2.0",
+        ~s({"name": "app_two", "type": "project", "from": "0.1.0", "to": "0.2.0"})
+      )
+
+      # A dependency, and the file an earlier upgrade left behind, do not get the marker
+      write_jellyfish.("cowboy-2.0.0", @valid_jellyfish_library_file)
+
+      write_jellyfish.(
+        "app_old-0.1.0",
+        ~s({"name": "app_old", "type": "project", "from": "0.0.9", "to": "0.1.0"})
+      )
+
+      stub_loaded_applications(node, [:app_old, :app_one, :app_two, :cowboy, :myumbrella])
+
+      data = %Execute{
+        node: node,
+        name: "myumbrella",
+        current_path: current_path,
+        to_version: ~c"0.2.0",
+        config_change: true
+      }
+
+      marked = UpgradeApp.add_config_change_marker(data, app_one: [key: "value"])
+
+      assert marked |> Keyword.keys() |> Enum.sort() == [:app_one, :app_two]
+      assert marked[:app_one] == [key: "value", deployex_config_change: "0.2.0"]
+      assert marked[:app_two] == [deployex_config_change: "0.2.0"]
+    end
+
+    test "leaves out an application the node has not loaded", %{
+      node: node,
+      current_path: current_path
+    } do
+      # Nothing has loaded the application the release is named after
+      stub_loaded_applications(node, [:kernel, :stdlib])
+
+      data = %Execute{
+        node: node,
+        name: "an_application_no_node_has_loaded",
+        current_path: current_path,
+        to_version: ~c"0.2.0",
+        config_change: true
+      }
+
+      log =
+        capture_log(fn ->
+          assert UpgradeApp.add_config_change_marker(data, []) == []
+        end)
+
+      # A request that marks nothing is reported, the version record still says requested
+      assert log =~ "config_change/3 was requested but none of"
+      assert log =~ "an_application_no_node_has_loaded"
+
+      # The name was only compared, it never became an atom
+      assert_raise ArgumentError, fn ->
+        String.to_existing_atom("an_application_no_node_has_loaded")
+      end
+    end
+
+    test "adds nothing when the node does not answer", %{
+      node: node,
+      current_path: current_path
+    } do
+      Foundation.RpcMock
+      |> stub(:call, fn ^node, :application, :loaded_applications, [], @expected_timeout ->
+        {:badrpc, :nodedown}
+      end)
+
+      runtime_config = [testapp: [key: "value"]]
+
+      data = %Execute{
+        node: node,
+        name: "testapp",
+        current_path: current_path,
+        to_version: ~c"0.2.0",
+        config_change: true
+      }
+
+      log =
+        capture_log(fn ->
+          assert UpgradeApp.add_config_change_marker(data, runtime_config) == runtime_config
+        end)
+
+      assert log =~ "config_change/3 is not forced for this upgrade"
+    end
+  end
+
   test "install_runtime_config_hook/2 makes no rpc call when there is nothing to apply", %{
     node: node
   } do
@@ -1347,7 +1755,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -1519,7 +1927,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, _module, :load, [_cfg, _arg], @expected_timeout ->
         {:badrpc, {:EXIT, {{:badmatch, {:error, {:already_started, self()}}}, []}}}
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         flunk("install_release must not run once the configuration cannot be resolved")
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -1674,7 +2082,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -1778,7 +2186,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -1872,7 +2280,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -1966,7 +2374,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -2066,7 +2474,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -2394,7 +2802,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
         ^node, :persistent_term, :put, _params, @expected_timeout ->
           :ok
 
-        ^node, :release_handler, :install_release, _params, @expected_timeout ->
+        ^node, :release_handler, :install_release, _params, @install_timeout ->
           {:ok, :any, :any}
 
         ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -2464,7 +2872,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
         ^node, :persistent_term, :put, _params, @expected_timeout ->
           :ok
 
-        ^node, :release_handler, :install_release, _params, @expected_timeout ->
+        ^node, :release_handler, :install_release, _params, @install_timeout ->
           {:ok, :any, :any}
 
         ^node, :release_handler, :make_permanent, _params, @expected_timeout ->
@@ -2893,6 +3301,9 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
                "Checking release can be installed",
                "Resolving the runtime configuration",
                "Adding the runtime configuration to the relup",
+               "Adding the protocol reload to the relup",
+               "Adding the version update to the relup",
+               "Adding the pipeline and job handling to the relup",
                "Installing release",
                "Making release 0.2.0 permanent",
                "Hot upgrade applied successfully, 0.1.0 -> 0.2.0"
@@ -2994,7 +3405,7 @@ defmodule Deployer.HotUpgrade.ApplicationTest do
       ^node, :persistent_term, :put, _params, @expected_timeout ->
         :ok
 
-      ^node, :release_handler, :install_release, _params, @expected_timeout ->
+      ^node, :release_handler, :install_release, _params, @install_timeout ->
         {:ok, :any, :any}
 
       ^node, :release_handler, :make_permanent, _params, @expected_timeout ->

@@ -100,6 +100,9 @@ defmodule DeployexWeb.RecentEvents do
   defp describe("version_ghosted", p),
     do: {:ghost, "#{p[:name]} #{p[:version]} ghosted", reason(p[:reason])}
 
+  defp describe("pipeline_not_started", p),
+    do: {:error, "#{p[:sname]} pipeline not started", Enum.join(List.wrap(p[:pipelines]), ", ")}
+
   defp describe("pre_command_failed", p),
     do: {:error, "#{p[:sname]} pre_command failed", to_string(p[:command])}
 

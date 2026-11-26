@@ -127,6 +127,10 @@ defmodule Deployex.MixProject do
           filename: "guide-local-gleam",
           title: "Local-Gleam"
         ],
+        "guides/docs/docker/README.md": [
+          filename: "guide-docker",
+          title: "Docker"
+        ],
         "guides/docs/yaml/README.md": [
           filename: "guide-yaml",
           title: "YAML"

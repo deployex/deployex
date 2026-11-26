@@ -9,7 +9,8 @@ import Config
 # Binding to loopback ipv4 address prevents access from other machines.
 config :deployex_web, DeployexWeb.Endpoint,
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}, port: 5001],
+  # DEPLOYEX_PORT moves it off 5001 when something else on the machine listens there
+  http: [ip: {127, 0, 0, 1}, port: String.to_integer(System.get_env("DEPLOYEX_PORT", "5001"))],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
@@ -51,6 +52,11 @@ config :deployex_web, DeployexWeb.Endpoint,
       ~r"lib/deployex_web/(controllers|live|components)/.*(ex|heex)$"
     ]
   ]
+
+# The sign-in page comes with the default credentials filled in, one click signs in. They
+# are the ones of config/config.exs. Only this file sets them, and they are compiled into
+# the page, so a release never has them
+config :deployex_web, :dev_login, username: "admin", password: "deployex"
 
 # Enable dev routes for dashboard and mailbox
 config :deployex_web, dev_routes: true

@@ -218,11 +218,49 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
              )
   end
 
+  test "an instance waiting on an http readiness probe shows the type" do
+    readiness = %Readiness{type: :http, port_key: "PORT", path: "/ready"}
+
+    assert [%{instances: [%{status: %{text: "starting · http readiness"}}]}] =
+             View.apps([app([child(%{status: :starting})], %{readiness: readiness})], %{}, @now)
+  end
+
+  test "a running instance shows a liveness probe that fails, and one already reported" do
+    :ets.new(:deployex_liveness_data, [:set, :public, :named_table])
+    %{sname: sname} = instance = child(%{})
+    status = [app([instance], %{liveness: %Liveness{}})]
+
+    :ets.insert(
+      :deployex_liveness_data,
+      {sname, %Sentinel.Liveness.Data{consecutive_failures: 1}}
+    )
+
+    assert [%{instances: [%{liveness: %{tone: :warning, text: text}}]}] =
+             View.apps(status, %{}, @now)
+
+    assert text == "otp liveness probe failing, 1 in a row"
+
+    :ets.insert(
+      :deployex_liveness_data,
+      {sname, %Sentinel.Liveness.Data{consecutive_failures: 3, notified: true}}
+    )
+
+    assert [%{instances: [%{liveness: %{tone: :error, text: text}}]}] =
+             View.apps(status, %{}, @now)
+
+    assert text == "otp liveness probe failed 3 times in a row"
+  end
+
   test "a running instance with liveness configured shows its latest result, nil without one" do
     assert [%{instances: [%{liveness: nil}]}] = View.apps([app([child(%{})])], %{}, @now)
 
-    assert [%{instances: [%{liveness: %{tone: :success, text: "liveness probe passing"}}]}] =
+    assert [%{instances: [%{liveness: %{tone: :success, text: "otp liveness probe passing"}}]}] =
              View.apps([app([child(%{})], %{liveness: %Liveness{}})], %{}, @now)
+
+    http = %Liveness{type: :http, port_key: "PORT", path: "/live"}
+
+    assert [%{instances: [%{liveness: %{text: "http liveness probe passing"}}]}] =
+             View.apps([app([child(%{})], %{liveness: http})], %{}, @now)
 
     # Not running yet: no liveness result to show, even with one configured
     assert [%{instances: [%{liveness: nil}]}] =
@@ -333,6 +371,25 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
     assert %{count: 3, totals: "2 crashes, 1 by the watchdog", latest: [_, _]} = watched.restarts
     assert %{count: 1, crash: false, totals: "1 by an operator"} = operated.restarts
     assert %{count: 1, totals: "1 crash", latest: []} = none.restarts
+
+    # A restart the liveness probe asked for is not counted as an operator's
+    probed =
+      child(%{
+        force_restart_count: 3,
+        watchdog_restart_count: 1,
+        liveness_restart_count: 1,
+        restarts: [
+          %{at: ~U[2026-10-28 15:40:00Z], cause: :liveness, detail: "failed 3 liveness probes"}
+        ]
+      })
+
+    assert [%{restarts: probed_restarts}] = View.apps([app([probed])], %{}, @now)
+
+    assert %{
+             count: 3,
+             totals: "1 by an operator, 1 by the watchdog, 1 by the liveness probe",
+             latest: [%{text: "liveness, failed 3 liveness probes"}]
+           } = probed_restarts
 
     assert [%{restarts: %{count: 0, totals: "No restarts"}}] =
              View.apps([app([child(%{})])], %{}, @now)

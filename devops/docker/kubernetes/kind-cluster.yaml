@@ -1,0 +1,17 @@
+# A one-node cluster for the trial, made by `make k8s-up` from the root of the repository.
+# The bucket of the Docker trial is mounted in the node, so `make docker-app` publishes to
+# it as before, and two node ports are mapped to the host: the application through HAProxy
+# on 8090, the DeployEx dashboard on 5011.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: deployex-trial
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: devops/docker/bucket
+        containerPath: /bucket
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8090
+      - containerPort: 30501
+        hostPort: 5011

@@ -202,6 +202,9 @@ defmodule Deployer.Status.Application do
       version: release.version,
       hash: release.hash,
       pre_commands: release.pre_commands,
+      # A release map built by a version without the field
+      hot_upgrade_config_change: Map.get(release, :hot_upgrade_config_change),
+      from_version: Keyword.get(attrs, :from_version),
       sname: sname,
       name: name,
       deployment: Keyword.get(attrs, :deployment),
@@ -403,6 +406,7 @@ defmodule Deployer.Status.Application do
       force_restart_count: force_restart_count,
       # A monitor state written before a relup has no restart history until its next update
       watchdog_restart_count: Map.get(monitor_state, :watchdog_restart_count, 0),
+      liveness_restart_count: Map.get(monitor_state, :liveness_restart_count, 0),
       restarts: Map.get(monitor_state, :restarts, []),
       uptime: Common.uptime_to_string(start_time),
       # A monitor state written before a relup has no started_at until its next update

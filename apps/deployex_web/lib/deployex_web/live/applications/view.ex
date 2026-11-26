@@ -108,7 +108,7 @@ defmodule DeployexWeb.ApplicationsLive.View do
         )
       )
 
-    running = Enum.count(status.children, &running?/1)
+    running = Enum.count(status.children, &Deployer.Status.running?/1)
     total = max(status.replicas, length(status.children))
 
     tls = tls(status, @tls_warn_days)
@@ -166,7 +166,7 @@ defmodule DeployexWeb.ApplicationsLive.View do
       node: child.node && to_string(child.node),
       version: child.version,
       status: instance_status(child.status, probe),
-      running: running?(child),
+      running: Deployer.Status.running?(child),
       otp: child.otp,
       liveness: liveness_badge(child.status, child.sname, liveness),
       restarts: restarts([child], now),
@@ -191,16 +191,20 @@ defmodule DeployexWeb.ApplicationsLive.View do
   # The latest liveness result of a running instance, nil with no liveness configured. A liveness
   # probe only runs while the monitor reports :running, so this mirrors `Sentinel.Liveness`'s own
   # gating rather than showing a result for an instance it never probed
-  defp liveness_badge(:running, sname, %Liveness{}) do
+  defp liveness_badge(:running, sname, %Liveness{type: type}) do
     case Sentinel.Liveness.state(sname) do
       %{notified: true, consecutive_failures: n} ->
-        %{tone: :error, icon: "warning", text: "liveness probe failed #{n} times in a row"}
+        %{
+          tone: :error,
+          icon: "warning",
+          text: "#{type} liveness probe failed #{n} times in a row"
+        }
 
       %{consecutive_failures: n} when n > 0 ->
-        %{tone: :warning, icon: "warning", text: "liveness probe failing, #{n} in a row"}
+        %{tone: :warning, icon: "warning", text: "#{type} liveness probe failing, #{n} in a row"}
 
       _data ->
-        %{tone: :success, icon: "check-circle", text: "liveness probe passing"}
+        %{tone: :success, icon: "check-circle", text: "#{type} liveness probe passing"}
     end
   end
 
@@ -386,15 +390,6 @@ defmodule DeployexWeb.ApplicationsLive.View do
     }
   end
 
-  @doc """
-  Whether an instance runs. A hot upgrade's pre_commands run while it runs, and the status keeps it
-  connected.
-  """
-  @spec running?(map()) :: boolean()
-  def running?(%{status: :running}), do: true
-  def running?(%{status: :pre_commands, otp: :connected}), do: true
-  def running?(_child), do: false
-
   # The problems that show under the row, so they need no open app: a TLS certificate within 7 days, an
   # instance at its restart threshold, and a running instance that DeployEx cannot reach over OTP
   defp urgent(tls, instances, unreachable) do
@@ -575,7 +570,7 @@ defmodule DeployexWeb.ApplicationsLive.View do
   defp instance_status(_status, _probe), do: %{text: "stopped", tone: :error}
 
   defp sub(status) do
-    child = Enum.find(status.children, &running?/1) || List.first(status.children)
+    child = Enum.find(status.children, &Deployer.Status.running?/1) || List.first(status.children)
 
     parts =
       case child do
@@ -602,24 +597,28 @@ defmodule DeployexWeb.ApplicationsLive.View do
   defp pinned(_config), do: nil
 
   defp running_version(status) do
-    case Enum.find(status.children, &running?/1) do
+    case Enum.find(status.children, &Deployer.Status.running?/1) do
       %{version: version} when is_binary(version) -> version
       _ -> "The current version"
     end
   end
 
-  # One count for the board, amber only for crashes. The tooltip tells crashes, operator and watchdog
-  # restarts apart, and lists the latest ones newest first, each a link to the logs at its time
+  # One count for the board, amber only for crashes. The tooltip tells crashes, operator, watchdog
+  # and liveness restarts apart, and lists the latest ones newest first, each a link to the logs at
+  # its time
   defp restarts(children, now) do
     crash = Enum.reduce(children, 0, &(&1.crash_restart_count + &2))
     forced = Enum.reduce(children, 0, &(&1.force_restart_count + &2))
     watchdog = Enum.reduce(children, 0, &(Map.get(&1, :watchdog_restart_count, 0) + &2))
+    liveness = Enum.reduce(children, 0, &(Map.get(&1, :liveness_restart_count, 0) + &2))
+    operator = forced - watchdog - liveness
 
     totals =
       [
         crash > 0 && crashes(crash),
-        forced > watchdog && "#{forced - watchdog} by an operator",
-        watchdog > 0 && "#{watchdog} by the watchdog"
+        operator > 0 && "#{operator} by an operator",
+        watchdog > 0 && "#{watchdog} by the watchdog",
+        liveness > 0 && "#{liveness} by the liveness probe"
       ]
       |> Enum.filter(& &1)
 

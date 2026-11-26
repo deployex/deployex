@@ -27,6 +27,24 @@ defmodule Deployer.ReleaseTest do
              Release.get_current_version_map("myelixir")
   end
 
+  test "get_current_version_map/1 reads hot_upgrade_config_change, true, false or unset" do
+    for {current_json, expected} <- [
+          {%{"version" => "1.0.0", "hash" => "local", "hot_upgrade_config_change" => true}, true},
+          {%{"version" => "1.0.0", "hash" => "local", "hot_upgrade_config_change" => false},
+           false},
+          # A release that does not say is not asking
+          {%{"version" => "1.0.0", "hash" => "local"}, nil},
+          # Anything but true or false reads as unset
+          {%{"version" => "1.0.0", "hash" => "local", "hot_upgrade_config_change" => "yes"}, nil}
+        ] do
+      Deployer.ReleaseMock
+      |> expect(:download_version_map, fn _app_name -> current_json end)
+
+      assert %Release.Version{version: "1.0.0", hot_upgrade_config_change: ^expected} =
+               Release.get_current_version_map("myelixir")
+    end
+  end
+
   test "get_current_version_map/1 manual mode non-optional field" do
     name = "myelixir"
     config = Catalog.config(name)

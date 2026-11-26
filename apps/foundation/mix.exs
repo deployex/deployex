@@ -38,6 +38,8 @@ defmodule Foundation.MixProject do
       {:plug_crypto, "~> 2.2"},
       {:bcrypt_elixir, "~> 3.0"},
       {:phoenix_pubsub, "~> 2.0"},
+      # The logs as JSON, when the YAML asks for it
+      {:logger_json, "~> 7.0"},
       # Certificate handling
       {:x509, "~> 0.9"},
       {:ex_aws_acm, "~> 1.0"},

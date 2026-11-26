@@ -75,4 +75,102 @@ defmodule DeployexWeb.AgentApi.NodeControllerTest do
 
     assert conn |> get("/v1/node") |> json_response(503)
   end
+
+  describe "the hot upgrades of DeployEx itself" do
+    setup do
+      relup = %{
+        from_version: "1.2.2",
+        to_version: "1.2.3",
+        summary: %{
+          applications: [{"deployer", "1.2.3"}, {"deployex_web", "1.2.3"}],
+          modules: 5,
+          updated: [],
+          removed: [],
+          applies: [],
+          runtime_config: true,
+          restart_emulator: false,
+          instructions: 12
+        },
+        text: "{\"1.2.3\",[{\"1.2.2\",[],[point_of_no_return]}],[]}.\n",
+        inserted_at: ~N[2026-11-23 10:00:00]
+      }
+
+      :ok = Foundation.Catalog.add_relup("deployex", relup)
+
+      on_exit(fn ->
+        File.rm_rf(
+          Path.join([
+            Application.fetch_env!(:foundation, :var_path),
+            "storage",
+            "deployex",
+            "deployex",
+            "relup"
+          ])
+        )
+      end)
+
+      :ok
+    end
+
+    test "GET /v1/node/versions returns them, with the version each one started from", %{
+      conn: conn
+    } do
+      stub(Deployer.StatusMock, :history_version_list, fn "deployex", [] ->
+        [
+          FixtureStatus.version(%{
+            version: "1.2.3",
+            name: "deployex",
+            sname: "deployex",
+            deployment: :hot_upgrade,
+            from_version: "1.2.2"
+          }),
+          # Recorded by a version without the field
+          %{
+            version: "1.2.2",
+            name: "deployex",
+            sname: "deployex",
+            deployment: :hot_upgrade
+          }
+          |> FixtureStatus.version()
+          |> Map.delete(:from_version)
+        ]
+      end)
+
+      assert %{
+               "versions" => [
+                 %{
+                   "version" => "1.2.3",
+                   "from_version" => "1.2.2",
+                   "deployment" => "hot_upgrade"
+                 },
+                 %{"version" => "1.2.2", "from_version" => nil}
+               ]
+             } = conn |> get("/v1/node/versions") |> json_response(200)
+    end
+
+    test "GET /v1/node/relups/:from_version/:to_version returns the relup that was kept", %{
+      conn: conn
+    } do
+      assert %{
+               "from_version" => "1.2.2",
+               "to_version" => "1.2.3",
+               "inserted_at" => "2026-11-23T10:00:00Z",
+               "summary" => %{
+                 "applications" => [
+                   %{"name" => "deployer", "version" => "1.2.3"},
+                   %{"name" => "deployex_web", "version" => "1.2.3"}
+                 ],
+                 "modules" => 5,
+                 "runtime_config" => true
+               },
+               "relup" => "{\"1.2.3\"" <> _script
+             } = conn |> get("/v1/node/relups/1.2.2/1.2.3") |> json_response(200)
+    end
+
+    test "GET /v1/node/relups returns 404 for an upgrade that has no relup, or a version that is not one",
+         %{conn: conn} do
+      assert conn |> get("/v1/node/relups/1.2.1/1.2.2") |> json_response(404)
+      assert conn |> get("/v1/node/relups/..%2F..%2Fetc/1.2.3") |> json_response(404)
+    end
+  end
 end

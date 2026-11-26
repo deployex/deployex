@@ -97,7 +97,11 @@ defmodule Deployer.HotUpgrade.Deployex do
             node: Node.self(),
             make_permanent_async: make_permanent_async,
             sync_execution: sync_execution,
-            after_async_make_permanent: {__MODULE__, :add_hot_upgrade_version, [to_version]}
+            after_async_make_permanent:
+              {__MODULE__, :add_hot_upgrade_version, [to_version, to_string(current_version)]},
+            # DeployexWeb serves digested assets, and its endpoint only reloads the manifest
+            # from config_change/3, so every self-upgrade has to call it
+            config_change: true
           },
           Map.from_struct(check)
         )
@@ -133,11 +137,16 @@ defmodule Deployer.HotUpgrade.Deployex do
   captured function. `install_release` swaps this module before the call happens, and an
   anonymous function built by the previous version does not survive that, it raises
   `BadFunctionError` and takes the caller down with the version unrecorded.
+
+  The version it came from names the relup that was kept for the upgrade. It is optional, as
+  the call that a version before this one built passes only the new version.
   """
-  @spec add_hot_upgrade_version(to_version :: String.t()) :: :ok
-  def add_hot_upgrade_version(to_version) do
+  @spec add_hot_upgrade_version(to_version :: String.t(), from_version :: String.t() | nil) ::
+          :ok
+  def add_hot_upgrade_version(to_version, from_version \\ nil) do
     Catalog.add_version(%Catalog.Version{
       version: to_version,
+      from_version: from_version,
       sname: @deployex_name,
       name: @deployex_name,
       deployment: :hot_upgrade,

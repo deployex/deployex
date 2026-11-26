@@ -28,6 +28,7 @@ defmodule Deployer.Status do
           crash_restart_count: non_neg_integer(),
           force_restart_count: non_neg_integer(),
           watchdog_restart_count: non_neg_integer(),
+          liveness_restart_count: non_neg_integer(),
           restarts: [Deployer.Monitor.restart()],
           uptime: String.t() | nil,
           started_at: DateTime.t() | nil,
@@ -69,6 +70,7 @@ defmodule Deployer.Status do
             crash_restart_count: 0,
             force_restart_count: 0,
             watchdog_restart_count: 0,
+            liveness_restart_count: 0,
             restarts: [],
             uptime: nil,
             started_at: nil,
@@ -198,6 +200,15 @@ defmodule Deployer.Status do
   @spec set_mode(name :: String.t(), mode :: :automatic | :manual, version :: String.t()) ::
           {:ok, map()} | {:error, :rescued}
   def set_mode(name, mode, version), do: default().set_mode(name, mode, version)
+
+  @doc """
+  Whether an instance runs. A hot upgrade's pre_commands run while it runs, and the status
+  keeps it connected.
+  """
+  @spec running?(t()) :: boolean()
+  def running?(%__MODULE__{status: :running}), do: true
+  def running?(%__MODULE__{status: :pre_commands, otp: :connected}), do: true
+  def running?(%__MODULE__{}), do: false
 
   ### ==========================================================================
   ### Private functions

@@ -13,6 +13,7 @@ defmodule Deployer.Monitor.Service do
           env: list(),
           readiness: Readiness.t(),
           liveness: Liveness.t() | nil,
+          secrets: Foundation.Yaml.Secrets.t() | nil,
           retry_delay_pre_commands: non_neg_integer()
         }
 
@@ -25,5 +26,6 @@ defmodule Deployer.Monitor.Service do
             env: [],
             readiness: %Readiness{},
             liveness: nil,
+            secrets: nil,
             retry_delay_pre_commands: :timer.seconds(1)
 end
