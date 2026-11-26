@@ -268,6 +268,27 @@ defmodule DeployexWeb.OAuth.CloudflareAccessTest do
       log = capture_log(fn -> assert {_conn, nil} = user(conn, token(key)) end)
       assert log =~ "keys of Cloudflare Access could not be read"
     end
+
+    test "a failed read is not retried on every request", %{conn: conn, key: key} do
+      Cloudflare.set(test: self(), keys: :none, identity: {:ok, %{}})
+
+      capture_log(fn -> assert {_conn, nil} = user(conn, token(key)) end)
+      assert_received :keys_read
+      refute_received :keys_read
+
+      capture_log(fn -> assert {_conn, nil} = user(conn, token(key)) end)
+      refute_received :keys_read
+    end
+
+    test "a key Cloudflare sends in a shape that cannot be parsed signs nobody in", %{
+      conn: conn,
+      key: key
+    } do
+      Cloudflare.set(test: self(), keys: [%{"kty" => "bogus"}], identity: {:ok, %{}})
+
+      log = capture_log(fn -> assert {_conn, nil} = user(conn, token(key)) end)
+      assert log =~ "keys of Cloudflare Access could not be read"
+    end
   end
 
   describe "the dashboard" do
@@ -307,6 +328,18 @@ defmodule DeployexWeb.OAuth.CloudflareAccessTest do
     @tag :capture_log
     test "asks for the password without a token", %{conn: conn} do
       assert {:error, {:redirect, %{to: "/users/log_in"}}} = live(conn, ~p"/documentation")
+    end
+
+    @tag :capture_log
+    test "redirects to the login page when the auth config changes", %{conn: conn, key: key} do
+      {:ok, liveview, _html} =
+        conn |> put_req_header(@header, token(key)) |> live(~p"/documentation")
+
+      put_config(%{emails: [], domains: [], read_only_emails: ["admin@co.com"]})
+      send(liveview.pid, {:watcher_auth_apply, Node.self()})
+
+      flash = assert_redirect(liveview, ~p"/users/log_in")
+      assert flash["error"] == "Not authorized for this instance."
     end
 
     test "does not take a session whose token has expired", %{key: key} do

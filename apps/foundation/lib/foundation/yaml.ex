@@ -593,9 +593,11 @@ defmodule Foundation.Yaml do
     data |> build_auth() |> validate_auth()
   end
 
-  # Cloudflare Access is not safe without both: any team, or any application of the team
+  # Cloudflare Access is not safe without both: any team, or any application of the team.
+  # A blank value is caught here too, so it fails loudly at load instead of silently
+  # leaving CloudflareAccess.configured?/0 to disable sign-in with no warning
   defp validate_auth(%Foundation.Yaml.Auth{provider: DeployexWeb.OAuth.CloudflareAccess} = auth) do
-    if is_nil(auth.team_domain) or is_nil(auth.audience) do
+    if blank?(auth.team_domain) or blank?(auth.audience) do
       raise "auth provider cloudflare_access needs team_domain and audience"
     end
 
@@ -603,6 +605,8 @@ defmodule Foundation.Yaml do
   end
 
   defp validate_auth(auth), do: auth
+
+  defp blank?(value), do: is_nil(value) or value == ""
 
   defp build_auth(data) do
     %Foundation.Yaml.Auth{

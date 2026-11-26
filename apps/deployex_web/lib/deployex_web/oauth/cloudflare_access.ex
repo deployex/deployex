@@ -273,21 +273,35 @@ defmodule DeployexWeb.OAuth.CloudflareAccess do
   end
 
   defp read_keys(domain, now, kept) do
-    case http().get_json("https://#{domain}/cdn-cgi/access/certs", []) do
-      {:ok, %{"keys" => keys}} when is_list(keys) ->
-        keys = Enum.map(keys, &JOSE.JWK.from_map/1)
-        :persistent_term.put({__MODULE__, :keys}, {domain, keys, now})
-        keys
-
+    with {:ok, %{"keys" => keys}} when is_list(keys) <-
+           http().get_json("https://#{domain}/cdn-cgi/access/certs", []),
+         {:ok, keys} <- jwks(keys) do
+      :persistent_term.put({__MODULE__, :keys}, {domain, keys, now})
+      keys
+    else
       other ->
         Logger.warning("The keys of Cloudflare Access could not be read: #{inspect(other)}")
 
-        # The keys it had still verify what they signed
-        case kept do
-          {^domain, keys, _read_at} -> keys
-          _none -> []
-        end
+        # The keys it had still verify what they signed. The timestamp is kept current
+        # either way, so a read that keeps failing is retried at @keys_retry_ms and not
+        # on every request
+        keys =
+          case kept do
+            {^domain, keys, _read_at} -> keys
+            _none -> []
+          end
+
+        :persistent_term.put({__MODULE__, :keys}, {domain, keys, now})
+        keys
     end
+  end
+
+  # A key Cloudflare never sends, but the shape JOSE.JWK.from_map/1 raises instead of
+  # erroring on is not guaranteed to never arrive, e.g. during an incident on their side
+  defp jwks(keys) do
+    {:ok, Enum.map(keys, &JOSE.JWK.from_map/1)}
+  rescue
+    error -> {:error, error}
   end
 
   # Tells one token from another without keeping it

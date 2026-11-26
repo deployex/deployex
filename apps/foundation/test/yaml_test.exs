@@ -44,6 +44,7 @@ defmodule Foundation.YamlTest do
   @yaml_auth_read_only "#{@file_paths}/deployex-auth-read-only.yaml"
   @yaml_auth_cloudflare "#{@file_paths}/deployex-auth-cloudflare.yaml"
   @yaml_auth_cloudflare_error "#{@file_paths}/deployex-auth-cloudflare-error.yaml"
+  @yaml_auth_cloudflare_blank "#{@file_paths}/deployex-auth-cloudflare-blank.yaml"
   @yaml_auth_provider_case "#{@file_paths}/deployex-auth-provider-case.yaml"
   @yaml_auth_emails_error "#{@file_paths}/deployex-auth-emails-error.yaml"
 
@@ -1421,6 +1422,17 @@ defmodule Foundation.YamlTest do
       with_mocks([
         {System, [:passthrough],
          [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_cloudflare_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     "auth provider cloudflare_access needs team_domain and audience",
+                     fn -> Yaml.load() end
+      end
+    end
+
+    test "refuses Cloudflare Access with a blank audience" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_auth_cloudflare_blank end]}
       ]) do
         assert_raise RuntimeError,
                      "auth provider cloudflare_access needs team_domain and audience",
