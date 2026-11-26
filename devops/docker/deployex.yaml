@@ -30,7 +30,7 @@ applications:
     deploy_rollback_timeout_ms: 600000
     deploy_schedule_interval_ms: 5000
     # One replica uses 4000 or 4001: a full deployment starts the new instance on the
-    # free one before it stops the previous. nginx.conf lists both
+    # free one before it stops the previous. haproxy.cfg lists both
     replica_ports:
       - key: PORT
         base: 4000

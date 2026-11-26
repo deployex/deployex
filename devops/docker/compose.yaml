@@ -1,4 +1,4 @@
-# One "pod": DeployEx and nginx share a network, as two containers of a Kubernetes pod do.
+# One "pod": DeployEx and HAProxy share a network, as two containers of a Kubernetes pod do.
 # See guides/docs/docker/README.md
 services:
   deployex:
@@ -16,13 +16,13 @@ services:
       - ./deployex.yaml:/etc/deployex/deployex.yaml:ro
       - ./bucket:/bucket
     ports:
-      - "8080:8080" # the application, through nginx
+      - "8080:8080" # the application, through HAProxy
       - "5001:5001" # the DeployEx dashboard
     stop_grace_period: 60s
-  nginx:
-    image: nginx:1.27-alpine
+  haproxy:
+    image: haproxy:3.2-alpine
     network_mode: "service:deployex"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     depends_on:
       - deployex
