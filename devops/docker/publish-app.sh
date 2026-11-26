@@ -38,8 +38,8 @@ docker run --rm \
     give_back() {
       # A file that cannot be given back, a read-only one of .git on macOS for instance,
       # does not fail a build that worked
-      chown -R \"\$HOST_UID:\$HOST_GID\" /bucket || true
-      find /app -xdev -user root -exec chown -h \"\$HOST_UID:\$HOST_GID\" {} + || true
+      chown -R \"\$HOST_UID:\$HOST_GID\" /bucket || echo \"warning: could not give back /bucket\" >&2
+      find /app -xdev -user root -exec chown -h \"\$HOST_UID:\$HOST_GID\" {} + || echo \"warning: could not give back /app\" >&2
     }
     trap give_back EXIT
     mix deps.get --only prod
