@@ -53,6 +53,7 @@ defmodule Foundation.Notifications.PagerDuty do
   | `version_ghosted`             | `error`            |
   | `pipeline_not_started`        | `error`            |
   | `deployment_rollback`         | `warning`          |
+  | `liveness_probe_failed`       | `critical`         |
 
   ## Payload sent to PagerDuty
 
@@ -192,6 +193,10 @@ defmodule Foundation.Notifications.PagerDuty do
     do:
       "deployment_rollback — #{payload.sname} on #{payload.node} from #{payload.from_version} to #{payload.to_version}: #{payload.reason}"
 
+  defp format_summary("liveness_probe_failed", payload),
+    do:
+      "liveness_probe_failed — #{payload.sname} on #{payload.node}: failed #{payload.consecutive_failures}/#{payload.failure_threshold} probes (#{payload.action})"
+
   defp format_summary(event, payload),
     do: "#{event} — #{inspect(payload)}"
 
@@ -213,6 +218,7 @@ defmodule Foundation.Notifications.PagerDuty do
   defp event_severity("version_ghosted", _payload), do: "error"
   defp event_severity("pipeline_not_started", _payload), do: "error"
   defp event_severity("deployment_rollback", _payload), do: "warning"
+  defp event_severity("liveness_probe_failed", _payload), do: "critical"
   defp event_severity(_event, _payload), do: "info"
 
   defp event_source(%{node: node}), do: to_string(node)

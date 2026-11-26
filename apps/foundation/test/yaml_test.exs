@@ -808,6 +808,7 @@ defmodule Foundation.YamlTest do
           version_ghosted
           pipeline_not_started
           deployment_rollback
+          liveness_probe_failed
         )
 
         assert Enum.sort(webhook.events) == Enum.sort(all_events)
@@ -1303,6 +1304,23 @@ defmodule Foundation.YamlTest do
             {"elixir", ~s(type: "grpc"), ~s(readiness type "grpc" not supported)},
             {"elixir", "min_ready_ms: -1", "readiness min_ready_ms -1 not supported"},
             {"elixir", ~s(min_ready_ms: "fast"), ~s(min_ready_ms "fast" not supported)},
+            {"elixir", ~s(type: "timeout"\n      function: "MyApp.Health.ready?/0"),
+             ~s(readiness function "MyApp.Health.ready?/0" not supported for type :timeout)},
+            {"elixir", ~s(function: 1), "readiness function 1 not supported"},
+            {"elixir", ~s(function: "not a function"),
+             ~s(readiness function "not a function" not supported)},
+            {"elixir", ~s(function: "myApp.Health.ready?/0"),
+             ~s(readiness function "myApp.Health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp..Health.ready?/0"),
+             ~s(readiness function "MyApp..Health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp.health.ready?/0"),
+             ~s(readiness function "MyApp.health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp.Health.ready?/1"),
+             ~s(readiness function "MyApp.Health.ready?/1" not supported, expected arity 0, got 1)},
+            {"gleam", ~s(function: "MyApp.Health.ready?/0"),
+             ~s(readiness function not supported for language "gleam", expected elixir)},
+            {"erlang", ~s(function: "MyApp.Health.ready?/0"),
+             ~s(readiness function not supported for language "erlang", expected elixir)},
             {"elixir",
              ~s(type: "http"\n      scheme: "ftp"\n      port_key: "PORT"\n      path: "/ready"),
              ~s(readiness scheme "ftp" not supported)},
@@ -1371,6 +1389,30 @@ defmodule Foundation.YamlTest do
         assert app.readiness.type == :otp
       end
     end
+
+    test "parses a custom function" do
+      path = readiness_yaml("elixir", ~s(function: "MyApp.Health.ready?/0"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.readiness.function == {MyApp.Health, :ready?, 0}
+      end
+    end
+
+    test "parses a custom function on a top-level module" do
+      path = readiness_yaml("elixir", ~s(function: "Health.ready/0"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.readiness.function == {Health, :ready, 0}
+      end
+    end
   end
 
   defp readiness_yaml(language, section) do
@@ -1392,6 +1434,124 @@ defmodule Foundation.YamlTest do
     File.write!(path, content)
     on_exit(fn -> File.rm(path) end)
     path
+  end
+
+  describe "liveness" do
+    test "defaults to nil when the section is absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.liveness == nil
+      end
+    end
+
+    test "parses a configured section" do
+      path =
+        liveness_yaml(~s(type: "otp"\n      failure_threshold: 5\n      enable_restart: true))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.liveness == %Yaml.Liveness{
+                 type: :otp,
+                 period_ms: 10_000,
+                 failure_threshold: 5,
+                 enable_restart: true
+               }
+      end
+    end
+
+    test "parses an http section" do
+      path =
+        liveness_yaml(
+          ~s(type: "http"\n      scheme: "https"\n      port_key: "PORT"\n      path: "/live"\n      period_ms: 5000)
+        )
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.liveness == %Yaml.Liveness{
+                 type: :http,
+                 period_ms: 5_000,
+                 failure_threshold: 3,
+                 enable_restart: false,
+                 scheme: "https",
+                 port_key: "PORT",
+                 path: "/live"
+               }
+      end
+    end
+
+    test "defaults type, failure_threshold and enable_restart in a partial section" do
+      for {section, expected} <- [
+            {~s(type: "otp"),
+             %Yaml.Liveness{type: :otp, failure_threshold: 3, enable_restart: false}},
+            {"failure_threshold: 1",
+             %Yaml.Liveness{type: :otp, failure_threshold: 1, enable_restart: false}},
+            {"enable_restart: true",
+             %Yaml.Liveness{type: :otp, failure_threshold: 3, enable_restart: true}}
+          ] do
+        path = liveness_yaml(section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+          assert app.liveness == expected
+        end
+      end
+    end
+
+    test "raises on values it does not support" do
+      for {section, message} <- [
+            {~s(type: "garbage"),
+             ~s(liveness type "garbage" not supported, expected otp or http)},
+            {~s(type: "http"\n      path: "/live"), "liveness http requires port_key, got nil"},
+            {~s(type: "http"\n      port_key: "PORT"),
+             "liveness http requires path starting with /, got nil"},
+            {~s(type: "http"\n      port_key: "PORT"\n      path: "live"),
+             ~s(liveness http requires path starting with /, got "live")},
+            {~s(type: "http"\n      port_key: "NOPE"\n      path: "/live"),
+             ~s(liveness port_key "NOPE" is not a key in replica_ports)},
+            {~s(type: "http"\n      scheme: "ftp"\n      port_key: "PORT"\n      path: "/live"),
+             ~s(liveness scheme "ftp" not supported, expected http or https)},
+            {"period_ms: 999",
+             "liveness period_ms 999 not supported, expected an integer of at least 1000"},
+            {~s(period_ms: "fast"),
+             ~s(liveness period_ms "fast" not supported, expected an integer of at least 1000)},
+            {"failure_threshold: 0",
+             "liveness failure_threshold 0 not supported, expected a positive integer"},
+            {"failure_threshold: -1",
+             "liveness failure_threshold -1 not supported, expected a positive integer"},
+            {~s(failure_threshold: "fast"),
+             ~s(liveness failure_threshold "fast" not supported, expected a positive integer)},
+            {~s(enable_restart: "nope"),
+             ~s(liveness enable_restart "nope" not supported, expected true or false)}
+          ] do
+        path = liveness_yaml(section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          assert_raise RuntimeError, ~r/#{Regex.escape(message)}/, fn -> Yaml.load() end
+        end
+      end
+    end
+  end
+
+  defp liveness_yaml(section) do
+    replace_in_default_yaml(
+      ~s(    language: "elixir"\n),
+      ~s(    language: "elixir"\n    liveness:\n      #{section}\n)
+    )
   end
 
   # The default file with one replacement, the first match only
