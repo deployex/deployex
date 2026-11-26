@@ -95,8 +95,17 @@ defmodule Deployer.LockTest do
     :sys.get_state(Lock)
     assert Enum.filter(Lock.list(), &(&1.name == name)) == []
 
-    assert Lock.acquire(name, @info) == :ok
+    # :global frees the lock of a process that is gone a moment after it is gone
+    assert acquired_within?(name, 1_000)
     Lock.release(name)
+  end
+
+  defp acquired_within?(name, ms) do
+    cond do
+      Lock.acquire(name, @info) == :ok -> true
+      ms <= 0 -> false
+      true -> Process.sleep(20) && acquired_within?(name, ms - 20)
+    end
   end
 
   test "a lock that was not given back in time is not waited for" do
