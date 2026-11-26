@@ -24,6 +24,8 @@ defmodule Foundation.Catalog.Adapter do
   @callback previous_path(String.t()) :: String.t() | nil
   @callback versions(String.t(), Keyword.t()) :: list()
   @callback add_version(map()) :: :ok
+  @callback add_relup(String.t(), map()) :: :ok | {:error, any()}
+  @callback relup(String.t(), String.t(), String.t()) :: map() | nil
   @callback ghosted_versions(String.t()) :: list()
   @callback add_ghosted_version(map()) :: {:ok, list()}
   @callback remove_ghosted_version(String.t(), String.t()) :: {:ok, list()}

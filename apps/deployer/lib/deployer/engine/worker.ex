@@ -18,6 +18,7 @@ defmodule Deployer.Engine.Worker do
 
   alias Deployer.Engine
   alias Deployer.HotUpgrade
+  alias Deployer.Lock
   alias Deployer.Monitor
   alias Deployer.Release
   alias Deployer.Status
@@ -39,6 +40,7 @@ defmodule Deployer.Engine.Worker do
           deploy_schedule_interval_ms: non_neg_integer(),
           readiness: Foundation.Yaml.Readiness.t(),
           liveness: Foundation.Yaml.Liveness.t() | nil,
+          secrets: Foundation.Yaml.Secrets.t() | nil,
           pending_pre_commands: map() | nil
         }
 
@@ -56,6 +58,7 @@ defmodule Deployer.Engine.Worker do
             deploy_schedule_interval_ms: 0,
             readiness: %Foundation.Yaml.Readiness{},
             liveness: nil,
+            secrets: nil,
             pending_pre_commands: nil
 
   @dialyzer {:nowarn_function, initialize_version: 1}
@@ -88,6 +91,7 @@ defmodule Deployer.Engine.Worker do
       |> Map.put_new(:pending_pre_commands, nil)
       |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
       |> Map.put_new(:liveness, nil)
+      |> Map.put_new(:secrets, nil)
 
     # Subscribe before reading, in this order. A change made in between then arrives as a
     # message instead of being lost in the gap. Reading here is also what makes a restarted
@@ -181,6 +185,9 @@ defmodule Deployer.Engine.Worker do
     state = upgrade_state(state)
     schedule_new_deployment(state.deploy_schedule_interval_ms)
     current_deployment = state.deployments[state.current]
+
+    # The deployment that had the lock is over, however it ended
+    if not deploying?(state) and Lock.held?(state.name), do: Lock.release(state.name)
 
     new_state =
       cond do
@@ -339,6 +346,41 @@ defmodule Deployer.Engine.Worker do
   end
 
   @impl true
+  # Ends the deployment that holds the lock, the way a deployment that did not get to run
+  # in time ends. One that does not hold it is the start of this host, which is left alone
+  def handle_cast(:cancel_deployment, %__MODULE__{} = state) do
+    current_deployment = state.deployments[state.current]
+
+    new_state =
+      cond do
+        not Lock.held?(state.name) ->
+          state
+
+        current_deployment.timer_ref ->
+          Logger.warning(
+            "Deployment of #{state.name} cancelled at sname: #{current_deployment.sname}"
+          )
+
+          Process.cancel_timer(current_deployment.timer_ref)
+          send(self(), {:timeout_rollback, state.current, current_deployment.sname})
+          state
+
+        # The new instance never started, the old one is still running: nothing to roll back,
+        # only the pre-commands request and the lock are given up
+        state.pending_pre_commands ->
+          Logger.warning(
+            "Deployment of #{state.name} cancelled at sname: #{state.pending_pre_commands.sname}"
+          )
+
+          abandon_pending_pre_commands(state)
+
+        true ->
+          state
+      end
+
+    {:noreply, new_state}
+  end
+
   def handle_cast(:restart_deployments, %__MODULE__{} = state) do
     {:noreply, state |> abandon_pending_pre_commands() |> do_restart_deployments()}
   end
@@ -501,6 +543,7 @@ defmodule Deployer.Engine.Worker do
   - deploy_rollback_timeout_ms
   - deploy_schedule_interval_ms
   - readiness
+  - secrets
   - replica_ports
   - replicas
 
@@ -531,19 +574,63 @@ defmodule Deployer.Engine.Worker do
     |> GenServer.cast(:restart_deployments)
   end
 
+  @doc """
+  Ends the deployment that is in progress for the application, when it holds the deployment
+  lock: the instance returns to the version it had and the version it was moving to is
+  ghosted on this host. See `Deployer.Lock`.
+
+  ## Examples
+
+      iex> Deployer.Engine.Worker.cancel_deployment("myapp")
+      :ok
+  """
+  @spec cancel_deployment(name :: String.t()) :: :ok
+  def cancel_deployment(name) do
+    name
+    |> String.to_existing_atom()
+    |> GenServer.cast(:cancel_deployment)
+  end
+
   ### ==========================================================================
   ### Private functions
   ### ==========================================================================
 
+  # A window is open, or a hot upgrade waits for its pre_commands
+  defp deploying?(state) do
+    Map.get(state, :pending_pre_commands) != nil or
+      Enum.any?(state.deployments, fn {_instance, deployment} -> deployment.timer_ref != nil end)
+  end
+
   defp schedule_new_deployment(timeout), do: Process.send_after(self(), :schedule, timeout)
 
-  # An older version built the state without pending_pre_commands, readiness or liveness, or
+  # A hot upgrade keeps the OS process of the application, so the secrets the new version
+  # reads are put in the environment of the running node before its configuration is
+  # resolved. When that fails the upgrade goes on with the secrets the node already has: a
+  # release that needs a new one then fails to resolve its configuration and is not installed
+  defp refresh_secrets(state, sname) do
+    with %{} <- Map.get(state, :secrets),
+         {:error, reason} <- Monitor.refresh_secrets(sname) do
+      Logger.warning(
+        "Could not refresh the secrets of sname: #{sname} for its hot upgrade, it keeps " <>
+          "the ones it has, reason: #{inspect(reason)}"
+      )
+    end
+
+    :ok
+  end
+
+  # Only a release that asks for it in current.json gets config_change/3 forced. A release map
+  # built by a version without the field does not ask
+  defp config_change?(release), do: Map.get(release, :hot_upgrade_config_change) == true
+
+  # An older version built the state without pending_pre_commands, readiness, liveness or secrets, or
   # deployments without a field
   defp upgrade_state(state) do
     state
     |> Map.put_new(:pending_pre_commands, nil)
     |> Map.put_new(:readiness, %Foundation.Yaml.Readiness{})
     |> Map.put_new(:liveness, nil)
+    |> Map.put_new(:secrets, nil)
     |> Map.update!(
       :deployments,
       &Map.new(&1, fn {i, deployment} -> {i, upgrade_deployment(deployment)} end)
@@ -764,7 +851,8 @@ defmodule Deployer.Engine.Worker do
           ports: ports,
           env: env,
           readiness: state.readiness,
-          liveness: state.liveness
+          liveness: state.liveness,
+          secrets: state.secrets
         })
 
       # A monitor that already runs the app does not report it running again, so a rollback
@@ -838,7 +926,8 @@ defmodule Deployer.Engine.Worker do
       ports: ports,
       env: state.env,
       readiness: state.readiness,
-      liveness: state.liveness
+      liveness: state.liveness,
+      secrets: state.secrets
     })
   end
 
@@ -942,6 +1031,9 @@ defmodule Deployer.Engine.Worker do
       end
     end
 
+    # Nothing to deploy any more, for a worker that was waiting for the lock
+    if not leaves?(target, current_version) and not deploying?(state), do: Lock.release(name)
+
     cond do
       is_nil(current_version) and is_nil(release.version) ->
         Logger.warning("No versions set yet for #{name}")
@@ -951,19 +1043,40 @@ defmodule Deployer.Engine.Worker do
         %{version: release_version} = release = target_release(target)
         version = current_version || "<no current set>"
 
-        Logger.info(
-          "Update is needed at sname: #{current_sname} from: #{version} to: #{release_version}"
-        )
+        # An instance that runs nothing has nothing to keep in service meanwhile
+        lock =
+          if current_version do
+            Lock.acquire(name, %{
+              sname: current_sname,
+              from_version: current_version,
+              to_version: release_version,
+              hold_ms: state.deploy_rollback_timeout_ms
+            })
+          else
+            :ok
+          end
 
-        new_state = deploy_application.(release)
+        if lock == :ok do
+          Logger.info(
+            "Update is needed at sname: #{current_sname} from: #{version} to: #{release_version}"
+          )
 
-        # The engine worker rolls the instance back on its own, so it reports it once the deployment
-        # starts and marks its window. A failed download leaves the state as it was
-        if fall_back? and new_state != state do
-          notify_deployment_rollback(name, current_sname, current_version, release_version)
-          put_in(new_state.deployments[current].fall_back?, true)
+          new_state = deploy_application.(release)
+
+          # A hot upgrade is over here, and so is a download that failed
+          if not deploying?(new_state), do: Lock.release(name)
+
+          # The engine worker rolls the instance back on its own, so it reports it once the deployment
+          # starts and marks its window. A failed download leaves the state as it was
+          if fall_back? and new_state != state do
+            notify_deployment_rollback(name, current_sname, current_version, release_version)
+            put_in(new_state.deployments[current].fall_back?, true)
+          else
+            new_state
+          end
         else
-          new_state
+          # Another DeployEx deploys this application, the next tick tries again
+          state
         end
 
       # Up to date, a sname that a restart kept stopped starts as at start up
@@ -1367,7 +1480,8 @@ defmodule Deployer.Engine.Worker do
         ports: available_ports,
         env: env,
         readiness: state.readiness,
-        liveness: state.liveness
+        liveness: state.liveness,
+        secrets: state.secrets
       })
     end)
 
@@ -1403,12 +1517,19 @@ defmodule Deployer.Engine.Worker do
           current_path: Catalog.current_path(sname),
           new_path: Catalog.new_path(sname),
           from_version: from_version,
-          to_version: release.version
+          to_version: release.version,
+          config_change: config_change?(release)
         }
+
+        refresh_secrets(state, sname)
 
         case HotUpgrade.execute(upgrade_data) do
           :ok ->
-            Status.set_current_version_map(sname, release, deployment: :hot_upgrade)
+            # The version it came from names the relup that was kept for this upgrade
+            Status.set_current_version_map(sname, release,
+              deployment: :hot_upgrade,
+              from_version: from_version
+            )
 
             # Cleanup Any folder left for the new sname
             Catalog.cleanup(new_sname)
@@ -1517,6 +1638,9 @@ defmodule Deployer.Engine.Worker do
         version: release.version,
         hash: release.hash,
         pre_commands: release.pre_commands,
+        hot_upgrade_config_change: Map.get(release, :hot_upgrade_config_change),
+        # Nothing was installed, so the instance still runs the version the upgrade started from
+        from_version: Status.current_version(sname),
         name: name,
         sname: sname,
         deployment: :hot_upgrade,

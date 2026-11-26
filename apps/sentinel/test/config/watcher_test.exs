@@ -449,6 +449,42 @@ defmodule Sentinel.Config.WatcherTest do
       end
     end
 
+    test "handles a yaml value that raises when it is parsed" do
+      test_pid = self()
+      ref = make_ref()
+
+      with_mocks([
+        {Upgradable, [],
+         [
+           from_app_env: fn -> @default_upgradable end,
+           from_yaml: fn _config -> @default_upgradable end
+         ]},
+        {Yaml, [],
+         [
+           load: fn %Yaml{config_checksum: "current_checksum"} ->
+             send(test_pid, {:handle_ref_event, ref})
+             raise ~s(log_format "xml" not supported)
+           end
+         ]}
+      ]) do
+        log =
+          capture_log(fn ->
+            {:ok, pid} = Watcher.start_link(name: :raising_yaml, check_interval_ms: 10)
+
+            assert_receive {:handle_ref_event, ^ref}, 1_000
+            # It is still there for the next check
+            assert_receive {:handle_ref_event, ^ref}, 1_000
+
+            state = :sys.get_state(:raising_yaml)
+            assert state.pending_config == nil
+            assert Process.alive?(pid)
+          end)
+
+        assert log =~ "Failed to load YAML configuration"
+        assert log =~ ~s(log_format \\"xml\\" not supported)
+      end
+    end
+
     test "handles yaml load error" do
       test_pid = self()
       ref = make_ref()
@@ -1264,6 +1300,63 @@ defmodule Sentinel.Config.WatcherTest do
 
         assert changes.summary.applications.details["my_new_app"].changes.deploy_rollback_timeout_ms.new ==
                  80_000
+
+        assert log =~ "Detected 1 change(s) in upgradable fields: [:applications]"
+      end
+    end
+
+    test "detects modified application secrets" do
+      test_pid = self()
+      ref = make_ref()
+
+      secrets = %Foundation.Yaml.Secrets{
+        adapter: Foundation.ConfigProvider.Secrets.OnePasswordConnect,
+        path: "vaults/production/items/my_new_app"
+      }
+
+      # An application loaded by a version without the field reads as having no secrets
+      old_applications = [Map.delete(@default_application, :secrets)]
+      new_applications = [Map.merge(@default_application, %{secrets: secrets})]
+
+      with_mocks([
+        {Upgradable, [],
+         [
+           from_app_env: fn ->
+             Map.merge(@default_upgradable, %{
+               applications: old_applications
+             })
+           end,
+           from_yaml: fn _config ->
+             Map.merge(@default_upgradable, %{
+               applications: new_applications
+             })
+           end
+         ]},
+        {Yaml, [],
+         [
+           load: fn %Yaml{config_checksum: "current_checksum"} ->
+             send(test_pid, {:handle_ref_event, ref})
+             {:ok, %Yaml{}}
+           end
+         ]}
+      ]) do
+        log =
+          capture_log(fn ->
+            {:ok, _pid} = Watcher.start_link(name: :test_changes, check_interval_ms: 10)
+
+            assert_receive {:handle_ref_event, ^ref}, 1_000
+
+            state = :sys.get_state(:test_changes)
+
+            assert state.pending_config.applications != []
+          end)
+
+        {:ok, changes} = Watcher.get_pending_changes(:test_changes)
+
+        assert changes.summary.applications.details["my_new_app"].status == :modified
+
+        assert changes.summary.applications.details["my_new_app"].changes.secrets ==
+                 %{old: nil, new: secrets, apply_strategy: :next_deploy}
 
         assert log =~ "Detected 1 change(s) in upgradable fields: [:applications]"
       end

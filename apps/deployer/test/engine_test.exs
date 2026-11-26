@@ -10,6 +10,7 @@ defmodule Deployer.EngineTest do
 
   alias Deployer.Engine
   alias Deployer.Fixture.Files, as: FixtureFiles
+  alias Deployer.Lock
   alias Foundation.Catalog
   alias Foundation.Fixture.Catalog, as: FixtureCatalog
 
@@ -1593,6 +1594,91 @@ defmodule Deployer.EngineTest do
     end
 
     @tag :capture_log
+    test "A new version waits for the deployment lock, and holds it while it deploys" do
+      name = "myelixir"
+      from_version = "1.0.0"
+      to_version = "2.0.0"
+      ref = make_ref()
+      pid = self()
+
+      # Another DeployEx is deploying the application
+      holder =
+        spawn(fn ->
+          :ok = Deployer.Lock.acquire(name, %{to_version: to_version, hold_ms: 60_000})
+          send(pid, :lock_taken)
+
+          receive do
+            :release -> Deployer.Lock.release(name)
+          end
+        end)
+
+      assert_receive :lock_taken
+
+      Deployer.StatusMock
+      |> expect(:list_installed_apps, fn _name -> [] end)
+      # The version of the instance is the new one once the deployment has started it
+      |> stub(:current_version, fn _sname ->
+        if Process.get("start_service", 0) > 1, do: to_version, else: from_version
+      end)
+      |> stub(:update, fn _sname -> :ok end)
+      |> stub(:set_current_version_map, fn _sname, _release, _attrs -> :ok end)
+
+      Deployer.MonitorMock
+      |> stub(:start_service, fn _service ->
+        called = Process.get("start_service", 0)
+        Process.put("start_service", called + 1)
+        if called > 0, do: send(pid, {:handle_ref_event, ref})
+        {:ok, self()}
+      end)
+      |> stub(:stop_service, fn _name, _sname -> :ok end)
+
+      Deployer.ReleaseMock
+      |> stub(:download_version_map, fn _app_name ->
+        called = Process.get("download_version_map", 0)
+        Process.put("download_version_map", called + 1)
+        version = if called > 0, do: to_version, else: from_version
+        %{version: version, hash: "local", pre_commands: []}
+      end)
+      |> stub(:download_release, fn _app_name, _version, _download_path -> :ok end)
+
+      Deployer.HotUpgradeMock
+      |> stub(:prepare_new_path, fn _name, _language, _to_version, _new_path -> :ok end)
+      |> stub(:check, fn check -> {:ok, %{check | deploy: :full_deployment}} end)
+
+      with_mock System, [:passthrough],
+        cmd: fn "tar", ["-x", "-f", _source_path, "-C", _dest_path] -> {"", 0} end do
+        assert {:ok, worker} =
+                 Engine.Worker.start_link(%Engine.Worker{
+                   deploy_rollback_timeout_ms: 5_000,
+                   deploy_schedule_interval_ms: 50,
+                   name: name,
+                   language: "elixir"
+                 })
+
+        # It asks every tick, and does not deploy
+        refute_receive {:handle_ref_event, ^ref}, 500
+
+        assert [%{state: :waiting, owner: ^worker, to_version: ^to_version}] =
+                 Enum.filter(Deployer.Lock.list(), &(&1.name == name and &1.owner == worker))
+
+        send(holder, :release)
+        assert_receive {:handle_ref_event, ^ref}, 1_000
+
+        # The window is open, so the lock is held by the worker
+        :sys.get_state(worker)
+
+        assert [%{state: :held, owner: ^worker}] =
+                 Enum.filter(Deployer.Lock.list(), &(&1.name == name))
+
+        # The application runs, the deployment is over and the lock is given back
+        sname = :sys.get_state(worker).deployments[1].sname
+        GenServer.cast(worker, {:application_running, sname})
+        Process.sleep(200)
+        assert Enum.filter(Deployer.Lock.list(), &(&1.name == name)) == []
+      end
+    end
+
+    @tag :capture_log
     test "Check for new version - ignore ghosted version" do
       name = "myelixir"
       language = "elixir"
@@ -1675,20 +1761,33 @@ defmodule Deployer.EngineTest do
         end
       end)
       |> expect(:update, 1, fn _sname -> :ok end)
-      |> expect(:set_current_version_map, 2, fn _sname, _release, _attrs ->
+      |> expect(:set_current_version_map, 2, fn _sname, release, attrs ->
         # 0 -> 1.0.0
         # 1 -> 2.0.0
         called = Process.get("set_current_version_map", 0)
         Process.put("set_current_version_map", called + 1)
 
         if called > 0 do
+          # What the release asked for is what the version record is given to store
+          send(pid, {:stored_config_change, release.hot_upgrade_config_change})
+          send(pid, {:stored_attrs, attrs})
           send(pid, {:handle_ref_event, ref})
         end
 
         :ok
       end)
 
+      secrets = %Foundation.Yaml.Secrets{
+        adapter: Foundation.ConfigProvider.Secrets.OnePasswordConnect,
+        path: "vaults/production/items/myelixir"
+      }
+
       Deployer.MonitorMock
+      # The application has secrets, so its node is given them again before the upgrade
+      |> expect(:refresh_secrets, 1, fn _sname ->
+        Process.put(:secrets_refreshed, true)
+        :ok
+      end)
       |> expect(:start_service, 1, fn _service ->
         {:ok, self()}
       end)
@@ -1706,7 +1805,12 @@ defmodule Deployer.EngineTest do
         Process.put("download_version_map", called + 1)
 
         if called > 0 do
-          %{version: to_version, hash: "local", pre_commands: ["eval Migrate.run"]}
+          %{
+            version: to_version,
+            hash: "local",
+            pre_commands: ["eval Migrate.run"],
+            hot_upgrade_config_change: true
+          }
         else
           %{version: from_version, hash: "local", pre_commands: []}
         end
@@ -1724,10 +1828,13 @@ defmodule Deployer.EngineTest do
                               } = check ->
         {:ok, %{check | deploy: :hot_upgrade}}
       end)
+      # The release asks for it in current.json
       |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{
                                   from_version: ^from_version,
-                                  to_version: ^to_version
+                                  to_version: ^to_version,
+                                  config_change: true
                                 } ->
+        send(pid, {:executed_after_refresh, Process.get(:secrets_refreshed)})
         :ok
       end)
 
@@ -1738,10 +1845,17 @@ defmodule Deployer.EngineTest do
                    deploy_rollback_timeout_ms: 1_000,
                    deploy_schedule_interval_ms: 100,
                    name: name,
-                   language: language
+                   language: language,
+                   secrets: secrets
                  })
 
         assert_receive {:handle_ref_event, ^ref}, 1_000
+        assert_receive {:stored_config_change, true}
+        assert_receive {:executed_after_refresh, true}
+
+        # The record of a hot upgrade names the version it came from, which is what finds
+        # the relup that was kept for it
+        assert_receive {:stored_attrs, [deployment: :hot_upgrade, from_version: ^from_version]}
       end
     end
 
@@ -1762,7 +1876,14 @@ defmodule Deployer.EngineTest do
       |> expect(:update, 2, fn _sname -> :ok end)
       |> expect(:set_current_version_map, 2, fn _sname, _release, _attrs -> :ok end)
 
+      secrets = %Foundation.Yaml.Secrets{
+        adapter: Foundation.ConfigProvider.Secrets.OnePasswordConnect,
+        path: "vaults/production/items/myelixir"
+      }
+
       Deployer.MonitorMock
+      # The secrets could not be refreshed, the upgrade goes on with the ones the node has
+      |> expect(:refresh_secrets, 1, fn _sname -> {:error, {:secrets, :node_not_updated}} end)
       |> expect(:start_service, 2, fn _service ->
         # First time: initialization
         # Second time: new deployment, after hotupgrade fails
@@ -1782,7 +1903,13 @@ defmodule Deployer.EngineTest do
 
       Deployer.ReleaseMock
       |> stub(:download_version_map, fn _app_name ->
-        %{version: to_version, hash: "local", pre_commands: ["eval Migrate.run"]}
+        # The release declines config_change
+        %{
+          version: to_version,
+          hash: "local",
+          pre_commands: ["eval Migrate.run"],
+          hot_upgrade_config_change: false
+        }
       end)
       |> stub(:download_release, fn _app_name, ^to_version, _download_path ->
         :ok
@@ -1798,7 +1925,8 @@ defmodule Deployer.EngineTest do
       end)
       |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{
                                   from_version: ^from_version,
-                                  to_version: ^to_version
+                                  to_version: ^to_version,
+                                  config_change: false
                                 } ->
         {:error, "any"}
       end)
@@ -1811,7 +1939,8 @@ defmodule Deployer.EngineTest do
                             deploy_rollback_timeout_ms: 1_000,
                             deploy_schedule_interval_ms: 200,
                             name: name,
-                            language: language
+                            language: language,
+                            secrets: secrets
                           })
 
                  assert_receive {:handle_ref_event, ^ref}, 1_000
@@ -1860,7 +1989,11 @@ defmodule Deployer.EngineTest do
       end)
       # the release claimed it could hot upgrade and then failed before install_release,
       # so the node is still running from_version and there is nothing to recover from
-      |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{to_version: ^to_version} ->
+      # The release does not say, which is not asking
+      |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{
+                                  to_version: ^to_version,
+                                  config_change: false
+                                } ->
         {:error, {:not_installed, :make_relup}}
       end)
 
@@ -2593,6 +2726,81 @@ defmodule Deployer.EngineTest do
 
         assert_receive :cancelled, 1_000
         assert %Engine.Worker{pending_pre_commands: nil, replicas: 1} = :sys.get_state(worker)
+      end
+    end
+
+    test "Cancelling while pre-commands run stops the request and gives the lock back" do
+      pid = self()
+      name = "myelixir"
+
+      Deployer.StatusMock
+      |> expect(:list_installed_apps, fn _name -> [] end)
+      |> stub(:current_version, fn _sname -> "1.0.0" end)
+      |> stub(:update, fn _sname -> :ok end)
+      |> stub(:set_current_version_map, fn _sname, _release, _attrs -> :ok end)
+      |> expect(:add_ghosted_version, 0, fn version_map -> {:ok, [version_map]} end)
+
+      Deployer.MonitorMock
+      # only the initial deployment, the hot upgrade never starts a second instance
+      |> expect(:start_service, 1, fn service ->
+        send(pid, {:started, service.sname})
+        {:ok, self()}
+      end)
+      # only the empty start-up placeholder is terminated, never the running instance
+      |> expect(:stop_service, 1, fn _name, nil -> :ok end)
+      # a migration that has not finished yet, the reply never comes in this test. The
+      # cancelled request is retried on the next tick, once with the lock given back
+      |> expect(:start_pre_commands, 2, fn _sname, ["eval Migrate.run"], :new ->
+        send(pid, :requested)
+        {:ok, make_ref()}
+      end)
+      |> expect(:cancel_pre_commands, 1, fn _sname, _ref ->
+        send(pid, :cancelled)
+        :ok
+      end)
+
+      Deployer.ReleaseMock
+      |> stub(:download_version_map, fn _app_name ->
+        %{version: "2.0.0", hash: "local", pre_commands: ["eval Migrate.run"]}
+      end)
+      |> stub(:download_release, fn _app_name, _version, _download_path -> :ok end)
+
+      Deployer.HotUpgradeMock
+      |> stub(:prepare_new_path, fn _name, _language, _to_version, _new_path -> :ok end)
+      |> stub(:check, fn check -> {:ok, %{check | deploy: :hot_upgrade}} end)
+      |> expect(:execute, 0, fn _execute -> :ok end)
+
+      with_mock System, [:passthrough],
+        cmd: fn "tar", ["-x", "-f", _source_path, "-C", _dest_path] -> {"", 0} end do
+        assert {:ok, worker} =
+                 Engine.Worker.start_link(%Engine.Worker{
+                   deploy_rollback_timeout_ms: 60_000,
+                   deploy_schedule_interval_ms: 50,
+                   name: name,
+                   language: "elixir"
+                 })
+
+        # the initial instance is up, so its own rollback timer does not fire
+        assert_receive {:started, sname}, 1_000
+        Engine.notify_application_running(sname)
+
+        assert_receive :requested, 1_000
+
+        # The engine worker holds the lock itself, as the real deployment would
+        assert [%{name: ^name, state: :held}] =
+                 Enum.filter(Lock.list(), &(&1.name == name))
+
+        log =
+          capture_log(fn ->
+            Engine.Worker.cancel_deployment(name)
+            assert_receive :cancelled, 1_000
+          end)
+
+        assert log =~ "Deployment of #{name} cancelled"
+        assert %Engine.Worker{pending_pre_commands: nil} = :sys.get_state(worker, 100)
+
+        # The lock was given back: the next schedule tick finds none held and deploys again
+        assert_receive :requested, 1_000
       end
     end
 
@@ -3831,7 +4039,10 @@ defmodule Deployer.EngineTest do
         if called > 2, do: to_version, else: from_version
       end)
       |> stub(:update, fn _sname -> :ok end)
-      |> expect(:set_current_version_map, 1, fn _sname, _release, deployment: :hot_upgrade ->
+      |> expect(:set_current_version_map, 1, fn _sname,
+                                                _release,
+                                                deployment: :hot_upgrade,
+                                                from_version: _from_version ->
         send(test_pid, {:handle_ref_event, ref})
         :ok
       end)
@@ -3853,7 +4064,13 @@ defmodule Deployer.EngineTest do
       Deployer.HotUpgradeMock
       |> stub(:prepare_new_path, fn _name, _language, _to_version, _new_path -> :ok end)
       |> expect(:check, 1, fn check -> {:ok, %{check | deploy: :hot_upgrade}} end)
-      |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{to_version: ^to_version} -> :ok end)
+      # The release does not ask for config_change
+      |> expect(:execute, 1, fn %Deployer.HotUpgrade.Execute{
+                                  to_version: ^to_version,
+                                  config_change: false
+                                } ->
+        :ok
+      end)
 
       subscribe_to_deployment_complete()
 
@@ -4534,6 +4751,11 @@ defmodule Deployer.EngineTest do
       FixtureFiles.create_bin_files(sname)
       version = "1.2.3"
 
+      secrets = %Foundation.Yaml.Secrets{
+        adapter: Foundation.ConfigProvider.Secrets.OnePasswordConnect,
+        path: "vaults/production/items/myelixir"
+      }
+
       Deployer.StatusMock
       |> expect(:list_installed_apps, fn _name -> [sname] end)
       |> expect(:current_version, 2, fn _sname -> version end)
@@ -4542,7 +4764,8 @@ defmodule Deployer.EngineTest do
       end)
 
       Deployer.MonitorMock
-      |> expect(:start_service, 1, fn %{sname: ^sname} ->
+      # The secrets setting of the application goes to the monitor that starts it
+      |> expect(:start_service, 1, fn %{sname: ^sname, secrets: ^secrets} ->
         send(pid, {:handle_ref_event, ref})
         {:ok, self()}
       end)
@@ -4557,7 +4780,8 @@ defmodule Deployer.EngineTest do
                    deploy_rollback_timeout_ms: 1_000,
                    deploy_schedule_interval_ms: 100,
                    name: name,
-                   language: language
+                   language: language,
+                   secrets: secrets
                  })
 
         assert_receive {:handle_ref_event, ^ref}, 1_000
@@ -4579,6 +4803,10 @@ defmodule Deployer.EngineTest do
 
         Engine.Worker.updated_state_values(name, %{env: ["any=abc"]})
         assert %Deployer.Engine.Worker{env: ["any=abc"]} = :sys.get_state(module_name)
+
+        # A changed secrets setting is used by the next deployment
+        Engine.Worker.updated_state_values(name, %{secrets: nil})
+        assert %Deployer.Engine.Worker{secrets: nil} = :sys.get_state(module_name)
       end
     end
 

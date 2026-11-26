@@ -80,6 +80,9 @@ config :foundation,
   ]
 ```
 
+> [!NOTE]
+> The Erlang VM sizes its table of ports from the limit of open files of its process, unless it is given `+Q`. Where that limit is very high, in a Kubernetes pod for instance, add `ERL_FLAGS` with the value `+Q 65536` to the `env` of the application, which `erl` reads when it starts. See [Running DeployEx in a container](../docker/README.md#on-kubernetes).
+
 ### Running DeployEx
 
 > [!ATTENTION]

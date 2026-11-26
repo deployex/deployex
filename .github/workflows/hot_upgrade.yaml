@@ -81,6 +81,9 @@ jobs:
           mix assets.deploy
           mix release
 
+      # Same checkout as the previous step, and nothing cleans priv/static in between:
+      # phx.digest keeps the digested assets of the current version, so the target release
+      # ships them too and a dashboard page opened before the hot upgrade still finds them.
       - name: Compile and Generate a release (with hotupgrade info) for the target version
         run: |
           echo "===================================="

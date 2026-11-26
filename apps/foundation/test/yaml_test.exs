@@ -32,6 +32,14 @@ defmodule Foundation.YamlTest do
   @yaml_endpoint_origin_empty_error "#{@file_paths}/deployex-endpoint-origin-empty-error.yaml"
   @yaml_release_check_off "#{@file_paths}/deployex-release-check-off.yaml"
   @yaml_release_check_error "#{@file_paths}/deployex-release-check-error.yaml"
+  @yaml_app_log_stdout "#{@file_paths}/deployex-app-log-stdout.yaml"
+  @yaml_app_log_stdout_error "#{@file_paths}/deployex-app-log-stdout-error.yaml"
+  @yaml_log_format "#{@file_paths}/deployex-log-format.yaml"
+  @yaml_log_format_error "#{@file_paths}/deployex-log-format-error.yaml"
+  @yaml_peers "#{@file_paths}/deployex-peers.yaml"
+  @yaml_peers_error "#{@file_paths}/deployex-peers-error.yaml"
+  @yaml_shutdown "#{@file_paths}/deployex-shutdown.yaml"
+  @yaml_shutdown_error "#{@file_paths}/deployex-shutdown-error.yaml"
   @yaml_notifications_all "#{@file_paths}/deployex-notifications-all.yaml"
   @yaml_self_upgrade "#{@file_paths}/deployex-self-upgrade.yaml"
   @yaml_auth "#{@file_paths}/deployex-auth.yaml"
@@ -314,6 +322,7 @@ defmodule Foundation.YamlTest do
                    language: "elixir",
                    deploy_rollback_timeout_ms: 600_000,
                    deploy_schedule_interval_ms: 5000,
+                   shutdown_timeout_ms: 5000,
                    replica_ports: [%Foundation.Yaml.Ports{key: "PORT", base: 4000}],
                    certificates: []
                  },
@@ -325,6 +334,7 @@ defmodule Foundation.YamlTest do
                    language: "erlang",
                    deploy_rollback_timeout_ms: 600_000,
                    deploy_schedule_interval_ms: 5000,
+                   shutdown_timeout_ms: 5000,
                    replica_ports: [%Foundation.Yaml.Ports{key: "PORT", base: 4050}],
                    certificates: []
                  }
@@ -795,6 +805,7 @@ defmodule Foundation.YamlTest do
           config_change_applied
           pre_command_failed
           version_ghosted
+          pipeline_not_started
           deployment_rollback
           liveness_probe_failed
         )
@@ -881,6 +892,137 @@ defmodule Foundation.YamlTest do
         {:ok, config} = Yaml.load()
         assert config.scheme == nil
         assert config.check_origin == nil
+      end
+    end
+  end
+
+  describe "shutdown_timeout_ms" do
+    test "parses the time an application has to stop" do
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_shutdown end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert [30_000, 0] == Enum.map(config.applications, & &1.shutdown_timeout_ms)
+      end
+    end
+
+    test "is five seconds when absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.applications != []
+        assert Enum.all?(config.applications, &(&1.shutdown_timeout_ms == 5_000))
+      end
+    end
+
+    test "rejects what is not a number of milliseconds" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_shutdown_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(shutdown_timeout_ms "30s" not supported, expected milliseconds, 0 or more),
+                     fn -> Yaml.load() end
+      end
+    end
+  end
+
+  describe "log_format" do
+    test "parses a JSON format" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_log_format end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.log_format == "datadog"
+      end
+    end
+
+    test "is text when absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.log_format == "text"
+      end
+    end
+
+    test "rejects a format it does not have" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_log_format_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(log_format "xml" not supported, expected one of: text, datadog, elastic, gcp, json),
+                     fn -> Yaml.load() end
+      end
+    end
+  end
+
+  describe "peers_dns_query" do
+    test "parses the DNS name" do
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_peers end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.peers_dns_query == "deployex.default.svc.cluster.local"
+      end
+    end
+
+    test "is nil when absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.peers_dns_query == nil
+      end
+    end
+
+    test "rejects what is not a name" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_peers_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     "peers_dns_query 5 not supported, expected a DNS name",
+                     fn -> Yaml.load() end
+      end
+    end
+  end
+
+  describe "monitored_app_log_stdout" do
+    test "parses true" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_app_log_stdout end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.monitored_app_log_stdout == true
+      end
+    end
+
+    test "is off when absent" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+        assert config.monitored_app_log_stdout == false
+      end
+    end
+
+    test "rejects a value that is not a boolean" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_app_log_stdout_error end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(monitored_app_log_stdout "yes" not supported, expected true or false),
+                     fn -> Yaml.load() end
       end
     end
   end
@@ -1033,6 +1175,100 @@ defmodule Foundation.YamlTest do
     end
   end
 
+  describe "1Password secrets" do
+    test "the secrets of DeployEx can come from a Connect server or from the op CLI" do
+      for {name, adapter} <- [
+            {"1password-connect", Foundation.ConfigProvider.Secrets.OnePasswordConnect},
+            {"1password-cli", Foundation.ConfigProvider.Secrets.OnePasswordCli}
+          ] do
+        path =
+          replace_in_default_yaml(
+            ~s(secrets_adapter: "aws"),
+            ~s(secrets_adapter: "#{name}")
+          )
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          {:ok, config} = Yaml.load()
+
+          assert config.secrets_adapter == adapter
+        end
+      end
+    end
+
+    test "an application has no secrets unless the section is set" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.secrets == nil
+      end
+    end
+
+    test "parses the secrets of an application" do
+      for {name, adapter} <- [
+            {"1password-connect", Foundation.ConfigProvider.Secrets.OnePasswordConnect},
+            {"1password-cli", Foundation.ConfigProvider.Secrets.OnePasswordCli}
+          ] do
+        path =
+          application_secrets_yaml(
+            ~s(adapter: "#{name}"\n      path: "vaults/production/items/myphoenixapp")
+          )
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+          assert app.secrets == %Yaml.Secrets{
+                   adapter: adapter,
+                   path: "vaults/production/items/myphoenixapp"
+                 }
+        end
+      end
+    end
+
+    test "rejects application secrets that could never be read" do
+      for {section, message} <- [
+            {~s(adapter: "aws"\n      path: "vaults/production/items/myphoenixapp"),
+             ~s(application secrets adapter "aws" not supported, expected 1password-connect or 1password-cli)},
+            {~s(path: "vaults/production/items/myphoenixapp"),
+             "application secrets adapter nil not supported, expected 1password-connect or 1password-cli"},
+            {~s(adapter: "1password-cli"\n      path: "production/myphoenixapp"),
+             ~s(1Password path "production/myphoenixapp" not supported, expected vaults/<vault>/items/<item>)},
+            {~s(adapter: "1password-cli"),
+             "1Password path nil not supported, expected vaults/<vault>/items/<item>"}
+          ] do
+        path = application_secrets_yaml(section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          assert_raise RuntimeError, message, fn -> Yaml.load() end
+        end
+      end
+    end
+
+    test "rejects application secrets that are not a section" do
+      path =
+        replace_in_default_yaml(
+          ~s(    language: "elixir"\n),
+          ~s(    language: "elixir"\n    secrets: "1password-cli"\n)
+        )
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        assert_raise RuntimeError,
+                     ~s(application secrets "1password-cli" not supported, expected adapter and path),
+                     fn -> Yaml.load() end
+      end
+    end
+  end
+
   describe "readiness" do
     test "defaults to otp when the section is absent" do
       with_mocks([
@@ -1067,6 +1303,23 @@ defmodule Foundation.YamlTest do
             {"elixir", ~s(type: "grpc"), ~s(readiness type "grpc" not supported)},
             {"elixir", "min_ready_ms: -1", "readiness min_ready_ms -1 not supported"},
             {"elixir", ~s(min_ready_ms: "fast"), ~s(min_ready_ms "fast" not supported)},
+            {"elixir", ~s(type: "timeout"\n      function: "MyApp.Health.ready?/0"),
+             ~s(readiness function "MyApp.Health.ready?/0" not supported for type :timeout)},
+            {"elixir", ~s(function: 1), "readiness function 1 not supported"},
+            {"elixir", ~s(function: "not a function"),
+             ~s(readiness function "not a function" not supported)},
+            {"elixir", ~s(function: "myApp.Health.ready?/0"),
+             ~s(readiness function "myApp.Health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp..Health.ready?/0"),
+             ~s(readiness function "MyApp..Health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp.health.ready?/0"),
+             ~s(readiness function "MyApp.health.ready?/0" not supported)},
+            {"elixir", ~s(function: "MyApp.Health.ready?/1"),
+             ~s(readiness function "MyApp.Health.ready?/1" not supported, expected arity 0, got 1)},
+            {"gleam", ~s(function: "MyApp.Health.ready?/0"),
+             ~s(readiness function not supported for language "gleam", expected elixir)},
+            {"erlang", ~s(function: "MyApp.Health.ready?/0"),
+             ~s(readiness function not supported for language "erlang", expected elixir)},
             {"elixir",
              ~s(type: "http"\n      scheme: "ftp"\n      port_key: "PORT"\n      path: "/ready"),
              ~s(readiness scheme "ftp" not supported)},
@@ -1133,6 +1386,30 @@ defmodule Foundation.YamlTest do
 
         assert app.language == "gleam"
         assert app.readiness.type == :otp
+      end
+    end
+
+    test "parses a custom function" do
+      path = readiness_yaml("elixir", ~s(function: "MyApp.Health.ready?/0"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.readiness.function == {MyApp.Health, :ready?, 0}
+      end
+    end
+
+    test "parses a custom function on a top-level module" do
+      path = readiness_yaml("elixir", ~s(function: "Health.ready/0"))
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.readiness.function == {Health, :ready, 0}
       end
     end
   end
@@ -1233,24 +1510,33 @@ defmodule Foundation.YamlTest do
   end
 
   defp liveness_yaml(section) do
+    replace_in_default_yaml(
+      ~s(    language: "elixir"\n),
+      ~s(    language: "elixir"\n    liveness:\n      #{section}\n)
+    )
+  end
+
+  # The default file with one replacement, the first match only
+  defp replace_in_default_yaml(pattern, replacement) do
     path =
       Path.join(
         System.tmp_dir!(),
-        "deployex-liveness-#{System.unique_integer([:positive])}.yaml"
+        "deployex-secrets-#{System.unique_integer([:positive])}.yaml"
       )
 
-    content =
-      @yaml_aws_default
-      |> File.read!()
-      |> String.replace(
-        ~s(    language: "elixir"\n),
-        ~s(    language: "elixir"\n    liveness:\n      #{section}\n),
-        global: false
-      )
+    content = File.read!(@yaml_aws_default)
+    assert content =~ pattern
 
-    File.write!(path, content)
+    File.write!(path, String.replace(content, pattern, replacement, global: false))
     on_exit(fn -> File.rm(path) end)
     path
+  end
+
+  defp application_secrets_yaml(section) do
+    replace_in_default_yaml(
+      ~s(    language: "elixir"\n),
+      ~s(    language: "elixir"\n    secrets:\n      #{section}\n)
+    )
   end
 
   defp agent_api_yaml(section) do

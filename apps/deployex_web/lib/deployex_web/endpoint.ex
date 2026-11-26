@@ -17,10 +17,11 @@ defmodule DeployexWeb.Endpoint do
 
   # Serve at "/" the static files from "priv/static" directory.
   #
-  # Assets are intentionally not digested (see config/prod.exs): a hot
-  # upgrade overwrites priv/static in place on the running node, so
-  # content-hashed filenames would 404 for any tab that loaded the page
-  # before the upgrade. Stable filenames keep already-open sessions working.
+  # Assets are digested in production (see config/prod.exs). A page that was
+  # opened before a hot upgrade still requests the file names it loaded, so the
+  # release has to ship the digested files of the version it upgrades from.
+  # phx.digest keeps the ones it finds in priv/static, which is why a hot
+  # upgrade release builds both versions in the same directory.
   plug Plug.Static,
     at: "/",
     from: :deployex_web,

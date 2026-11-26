@@ -15,6 +15,7 @@ defmodule DeployexWeb.HotUpgrade.Steps do
     "Checking release can be installed",
     "Resolving the runtime configuration",
     "Adding the runtime configuration to the relup",
+    "Adding the version update to the relup",
     "Installing release",
     "Making the release permanent"
   ]

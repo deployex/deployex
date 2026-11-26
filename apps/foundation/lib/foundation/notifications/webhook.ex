@@ -26,6 +26,7 @@ defmodule Foundation.Notifications.Webhook do
             - "config_change_applied"
             - "pre_command_failed"
             - "version_ghosted"
+            - "pipeline_not_started"
             - "deployment_rollback"
             - "liveness_probe_failed"
 
@@ -68,6 +69,7 @@ defmodule Foundation.Notifications.Webhook do
   | `config_change_applied`         | `node`, `changes_count`, `fields`                                                                      |
   | `pre_command_failed`            | `node`, `sname`, `name`, `command`, `reason`                                                           |
   | `version_ghosted`               | `node`, `sname`, `name`, `version`, `reason`                                                           |
+  | `pipeline_not_started`          | `node`, `sname`, `name`, `version`, `pipelines`                                                        |
   | `deployment_rollback`           | `node`, `sname`, `name`, `from_version`, `to_version`, `reason`                                        |
   | `liveness_probe_failed`         | `node`, `sname`, `name`, `consecutive_failures`, `failure_threshold`, `action` (`:restart`/`:no_restart`) |
   """

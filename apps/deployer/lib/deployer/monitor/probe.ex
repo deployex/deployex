@@ -2,8 +2,9 @@ defmodule Deployer.Monitor.Probe do
   @moduledoc """
   Checks whether a started application satisfies its readiness configuration.
 
-  The `:otp` check reads the boot status of the node, which needs nothing from the application.
-  A node that is not up yet, or does not answer in time, is not ready.
+  With no `function` configured, the `:otp` check reads the boot status of the node, which needs
+  nothing from the application. A node that is not up yet, or does not answer in time, is not
+  ready.
 
   A release reports `{:started, :started}` only after its boot script has started every
   application, so that is what it must answer.
@@ -15,6 +16,9 @@ defmodule Deployer.Monitor.Probe do
   `alive?/3` runs the same `:otp` check for a liveness probe, after the application is already
   ready. Liveness is a separate, optional configuration, so it has its own entry point rather than
   sharing `ready?/3`'s clauses.
+  With `function` configured, the check calls that `Module.function/0` on the node instead and
+  is ready only when it returns `true`. An exception, a missing function, or a timeout each
+  count as not ready, since the node already caught or did not answer them.
 
   The `:http` check requests `<scheme>://127.0.0.1:<port><path>` on the instance and expects a
   2xx response, with the port looked up from the instance's ports by `port_key`. An instance
@@ -45,8 +49,11 @@ defmodule Deployer.Monitor.Probe do
         ) :: boolean()
   def ready?(%Readiness{type: :timeout}, _node, _language, _ports), do: true
 
-  def ready?(%Readiness{type: :otp}, node, language, _ports),
+  def ready?(%Readiness{type: :otp, function: nil}, node, language, _ports),
     do: booted?(language, Rpc.call(node, :init, :get_status, [], @rpc_timeout))
+
+  def ready?(%Readiness{type: :otp, function: {module, function, 0}}, node, _language, _ports),
+    do: Rpc.call(node, module, function, [], @rpc_timeout) == true
 
   def ready?(%Readiness{type: :http} = readiness, _node, _language, ports),
     do: http_ready?(readiness, ports)

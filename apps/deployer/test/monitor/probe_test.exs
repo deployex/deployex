@@ -135,4 +135,38 @@ defmodule Deployer.Monitor.ProbeTest do
 
     assert Probe.alive?(%Liveness{type: :otp}, @node, "gleam")
   end
+
+  describe "otp with a custom function" do
+    @readiness %Readiness{type: :otp, function: {MyApp.Health, :ready?, 0}}
+
+    test "is ready when the function returns true" do
+      expect(Foundation.RpcMock, :call, fn @node, MyApp.Health, :ready?, [], 1_000 -> true end)
+
+      assert Probe.ready?(@readiness, @node, "elixir", [])
+    end
+
+    for result <- [
+          false,
+          :ok,
+          nil,
+          {:badrpc, :nodedown},
+          {:badrpc, :timeout},
+          {:badrpc, {:EXIT, :undef}},
+          {:badrpc, {:EXIT, {%RuntimeError{message: "boom"}, []}}}
+        ] do
+      test "is not ready when the function returns #{inspect(result)}" do
+        expect(Foundation.RpcMock, :call, fn @node, MyApp.Health, :ready?, [], 1_000 ->
+          unquote(Macro.escape(result))
+        end)
+
+        refute Probe.ready?(@readiness, @node, "elixir", [])
+      end
+    end
+
+    test "ignores language, unlike the boot status check" do
+      expect(Foundation.RpcMock, :call, fn @node, MyApp.Health, :ready?, [], 1_000 -> true end)
+
+      assert Probe.ready?(@readiness, @node, "gleam", [])
+    end
+  end
 end

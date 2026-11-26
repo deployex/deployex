@@ -47,6 +47,59 @@ defmodule Deployer.Status.ApplicationTest do
     }
   end
 
+  test "set_current_version_map/3 stores what the release asked for config_change", %{
+    release: release,
+    attrs: attrs,
+    name_1: name
+  } do
+    for {asked, version} <- [{true, "2.0.1"}, {false, "2.0.2"}, {nil, "2.0.3"}] do
+      sname = Catalog.create_sname(name)
+
+      StatusApp.set_current_version_map(
+        sname,
+        %{release | version: version, hot_upgrade_config_change: asked},
+        attrs
+      )
+
+      assert %Catalog.Version{version: ^version, hot_upgrade_config_change: ^asked} =
+               StatusApp.current_version_map(sname)
+    end
+
+    # A release map built by a version without the field stores it as unset
+    sname = Catalog.create_sname(name)
+
+    StatusApp.set_current_version_map(
+      sname,
+      release |> Map.from_struct() |> Map.delete(:hot_upgrade_config_change),
+      attrs
+    )
+
+    assert %Catalog.Version{hot_upgrade_config_change: nil} = StatusApp.current_version_map(sname)
+  end
+
+  test "set_current_version_map/3 stores the version a hot upgrade came from", %{
+    release: release,
+    name_1: name
+  } do
+    sname = Catalog.create_sname(name)
+
+    StatusApp.set_current_version_map(sname, %{release | version: "3.0.1"},
+      deployment: :hot_upgrade,
+      from_version: "3.0.0"
+    )
+
+    assert %Catalog.Version{version: "3.0.1", from_version: "3.0.0", deployment: :hot_upgrade} =
+             StatusApp.current_version_map(sname)
+
+    # A full deployment comes from nowhere
+    StatusApp.set_current_version_map(sname, %{release | version: "3.0.2"},
+      deployment: :full_deployment
+    )
+
+    assert %Catalog.Version{version: "3.0.2", from_version: nil} =
+             StatusApp.current_version_map(sname)
+  end
+
   test "current_version_map/1 no version configured", %{
     sname_1: sname_1,
     sname_2: sname_2,

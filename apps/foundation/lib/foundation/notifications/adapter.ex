@@ -53,6 +53,7 @@ defmodule Foundation.Notifications.Adapter do
   | `"config_change_applied"`      | `node`, `changes_count`, `fields`                                                             |
   | `"pre_command_failed"`         | `node`, `sname`, `name`, `command`, `reason`                                                  |
   | `"version_ghosted"`            | `node`, `sname`, `name`, `version`, `reason`                                                  |
+  | `"pipeline_not_started"`       | `node`, `sname`, `name`, `version`, `pipelines`                                               |
   | `"deployment_rollback"`        | `node`, `sname`, `name`, `from_version`, `to_version`, `reason`                               |
   """
 

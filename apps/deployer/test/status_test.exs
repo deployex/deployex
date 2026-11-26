@@ -71,4 +71,12 @@ defmodule Deployer.StatusTest do
 
     assert Enum.empty?(Status.ghosted_version_list(:name))
   end
+
+  test "running?/1 is true while running, or while its pre_commands run and it is connected" do
+    assert Status.running?(%Status{status: :running})
+    assert Status.running?(%Status{status: :pre_commands, otp: :connected})
+    refute Status.running?(%Status{status: :pre_commands, otp: :not_connected})
+    refute Status.running?(%Status{status: :starting})
+    refute Status.running?(%Status{status: :idle})
+  end
 end

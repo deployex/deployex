@@ -17,6 +17,7 @@ defmodule Foundation.Yaml do
   @default_language "elixir"
   @default_deploy_rollback_timeout_ms :timer.minutes(10)
   @default_deploy_schedule_interval_ms :timer.seconds(5)
+  @default_shutdown_timeout_ms :timer.seconds(5)
   @default_install_path "/opt/deployex"
   @default_var_path "/var/lib/deployex"
   @default_log_path "/var/log/deployex"
@@ -61,7 +62,8 @@ defmodule Foundation.Yaml do
     Provides structure to define when a started application counts as ready
 
     With `:timeout` the OS process only has to stay up for `min_ready_ms`. With `:otp` the
-    node must also answer over distribution with its boot status. With `:http` a request to
+    node must also answer over distribution with its boot status, unless `function` names an
+    application-defined `Module.function/0` to call instead. With `:http` a request to
     `scheme://127.0.0.1:<port><path>` must answer with a 2xx status, where the port is looked up
     from the instance's ports by `port_key`, and `path` is validated to start with `/`.
     """
@@ -70,6 +72,7 @@ defmodule Foundation.Yaml do
 
     defstruct type: :otp,
               min_ready_ms: :timer.seconds(30),
+              function: nil,
               scheme: "http",
               port_key: nil,
               path: nil
@@ -77,6 +80,7 @@ defmodule Foundation.Yaml do
     @type t :: %__MODULE__{
             type: :timeout | :otp | :http,
             min_ready_ms: non_neg_integer(),
+            function: {module(), atom(), 0} | nil,
             scheme: String.t(),
             port_key: String.t() | nil,
             path: String.t() | nil
@@ -273,6 +277,22 @@ defmodule Foundation.Yaml do
           }
   end
 
+  defmodule Secrets do
+    @moduledoc """
+    Where the secrets of a monitored application come from.
+
+    DeployEx reads the item at `path` with `adapter` every time it starts the application and
+    passes each of its fields to it as an environment variable.
+    """
+
+    defstruct [:adapter, :path]
+
+    @type t :: %__MODULE__{
+            adapter: module(),
+            path: String.t()
+          }
+  end
+
   defmodule Application do
     @moduledoc """
     Provides structure to define Application feature
@@ -284,10 +304,12 @@ defmodule Foundation.Yaml do
       :replicas,
       :deploy_rollback_timeout_ms,
       :deploy_schedule_interval_ms,
+      :shutdown_timeout_ms,
       :replica_ports,
       :env,
       :monitoring,
       :certificates,
+      :secrets,
       readiness: %Foundation.Yaml.Readiness{},
       liveness: nil
     ]
@@ -298,10 +320,12 @@ defmodule Foundation.Yaml do
             replicas: non_neg_integer(),
             deploy_rollback_timeout_ms: non_neg_integer() | nil,
             deploy_schedule_interval_ms: non_neg_integer() | nil,
+            shutdown_timeout_ms: non_neg_integer() | nil,
             replica_ports: [Foundation.Yaml.Ports.t()],
             env: [String.t()],
             monitoring: [{atom(), Foundation.Yaml.Monitoring.t()}],
             certificates: [Foundation.Yaml.Certificate.t()],
+            secrets: Foundation.Yaml.Secrets.t() | nil,
             readiness: Foundation.Yaml.Readiness.t(),
             liveness: Foundation.Yaml.Liveness.t() | nil
           }
@@ -359,9 +383,12 @@ defmodule Foundation.Yaml do
             otp_tls_certificates: nil,
             os_target: nil,
             enable_release_check: nil,
+            log_format: "text",
+            peers_dns_query: nil,
             install_path: nil,
             log_path: nil,
             monitored_app_log_path: nil,
+            monitored_app_log_stdout: false,
             var_path: nil,
             metrics_retention_time_ms: nil,
             logs_retention_time_ms: nil,
@@ -391,10 +418,13 @@ defmodule Foundation.Yaml do
           otp_tls_certificates: String.t() | nil,
           os_target: String.t() | nil,
           enable_release_check: boolean() | nil,
+          log_format: String.t(),
+          peers_dns_query: String.t() | nil,
           install_path: String.t() | nil,
           var_path: String.t() | nil,
           log_path: String.t() | nil,
           monitored_app_log_path: String.t() | nil,
+          monitored_app_log_stdout: boolean(),
           metrics_retention_time_ms: non_neg_integer() | nil,
           logs_retention_time_ms: non_neg_integer() | nil,
           releases_retention: non_neg_integer() | nil,
@@ -522,10 +552,13 @@ defmodule Foundation.Yaml do
       otp_tls_certificates: data["otp_tls_certificates"],
       os_target: data["os_target"],
       enable_release_check: parse_enable_release_check(data["enable_release_check"]),
+      log_format: parse_log_format(data["log_format"]),
+      peers_dns_query: parse_peers_dns_query(data["peers_dns_query"]),
       install_path: data["install_path"] || @default_install_path,
       var_path: data["var_path"] || @default_var_path,
       log_path: data["log_path"] || @default_log_path,
       monitored_app_log_path: data["monitored_app_log_path"] || @default_monitored_app_log_path,
+      monitored_app_log_stdout: parse_monitored_app_log_stdout(data["monitored_app_log_stdout"]),
       metrics_retention_time_ms:
         data["metrics_retention_time_ms"] || @default_metrics_retention_time_ms,
       logs_retention_time_ms: data["logs_retention_time_ms"] || @default_logs_retention_time_ms,
@@ -641,6 +674,11 @@ defmodule Foundation.Yaml do
   defp secrets_adapter("aws"), do: Foundation.ConfigProvider.Secrets.Aws
   defp secrets_adapter("gcp"), do: Foundation.ConfigProvider.Secrets.Gcp
   defp secrets_adapter("env"), do: Foundation.ConfigProvider.Secrets.Env
+
+  defp secrets_adapter("1password-connect"),
+    do: Foundation.ConfigProvider.Secrets.OnePasswordConnect
+
+  defp secrets_adapter("1password-cli"), do: Foundation.ConfigProvider.Secrets.OnePasswordCli
   defp secrets_adapter(adapter), do: raise("Secret #{adapter} not supported")
 
   defp release_adapter("s3"), do: Deployer.Release.S3
@@ -686,6 +724,32 @@ defmodule Foundation.Yaml do
   defp parse_enable_restart(nil), do: @default_monitoring_enable_restart
   defp parse_enable_restart(enable_restart), do: enable_restart
 
+  # A missing value is off: the applications write to their files only.
+  defp parse_monitored_app_log_stdout(nil), do: false
+  defp parse_monitored_app_log_stdout(value) when is_boolean(value), do: value
+
+  defp parse_monitored_app_log_stdout(value),
+    do: raise("monitored_app_log_stdout #{inspect(value)} not supported, expected true or false")
+
+  # A missing value is text, the format DeployEx has without the option.
+  defp parse_log_format(nil), do: "text"
+
+  defp parse_log_format(format) do
+    if format in Foundation.LogFormat.formats() do
+      format
+    else
+      raise "log_format #{inspect(format)} not supported, expected one of: " <>
+              Enum.join(Foundation.LogFormat.formats(), ", ")
+    end
+  end
+
+  # A missing value is nil: this DeployEx does not look for others.
+  defp parse_peers_dns_query(nil), do: nil
+  defp parse_peers_dns_query(query) when is_binary(query) and query != "", do: query
+
+  defp parse_peers_dns_query(query),
+    do: raise("peers_dns_query #{inspect(query)} not supported, expected a DNS name")
+
   # A missing value stays nil so the config provider keeps the release config.
   defp parse_enable_release_check(nil), do: nil
   defp parse_enable_release_check(value) when is_boolean(value), do: value
@@ -707,6 +771,14 @@ defmodule Foundation.Yaml do
     Enum.map(apps, &parse_application/1)
   end
 
+  # How long an application has to stop by itself before it is killed
+  defp parse_shutdown_timeout_ms(nil), do: @default_shutdown_timeout_ms
+  defp parse_shutdown_timeout_ms(value) when is_integer(value) and value >= 0, do: value
+
+  defp parse_shutdown_timeout_ms(value) do
+    raise "shutdown_timeout_ms #{inspect(value)} not supported, expected milliseconds, 0 or more"
+  end
+
   defp parse_application(data) do
     %Foundation.Yaml.Application{
       name: data["name"],
@@ -716,13 +788,53 @@ defmodule Foundation.Yaml do
         data["deploy_rollback_timeout_ms"] || @default_deploy_rollback_timeout_ms,
       deploy_schedule_interval_ms:
         data["deploy_schedule_interval_ms"] || @default_deploy_schedule_interval_ms,
+      shutdown_timeout_ms: parse_shutdown_timeout_ms(data["shutdown_timeout_ms"]),
       replica_ports: parse_ports(data["replica_ports"]),
       env: parse_env(data["env"]),
       monitoring: parse_monitoring_list(data["monitoring"], &parse_application_monitoring_type/1),
       certificates: parse_certificates(data["certificates"]),
-      readiness: data["readiness"] |> parse_readiness() |> check_readiness_port(data),
+      secrets: parse_application_secrets(data["secrets"]),
+      readiness:
+        data["readiness"]
+        |> parse_readiness()
+        |> check_readiness_port(data)
+        |> check_readiness_function(data["language"] || @default_language),
       liveness: parse_liveness(data["liveness"])
     }
+  end
+
+  defp parse_application_secrets(nil), do: nil
+
+  defp parse_application_secrets(%{} = data) do
+    %Foundation.Yaml.Secrets{
+      adapter: application_secrets_adapter(data["adapter"]),
+      path: application_secrets_path(data["path"])
+    }
+  end
+
+  defp parse_application_secrets(value),
+    do: raise("application secrets #{inspect(value)} not supported, expected adapter and path")
+
+  # The adapters that read one item, whose fields become the environment of the application
+  defp application_secrets_adapter("1password-connect"),
+    do: Foundation.ConfigProvider.Secrets.OnePasswordConnect
+
+  defp application_secrets_adapter("1password-cli"),
+    do: Foundation.ConfigProvider.Secrets.OnePasswordCli
+
+  defp application_secrets_adapter(adapter),
+    do:
+      raise(
+        "application secrets adapter #{inspect(adapter)} not supported, " <>
+          "expected 1password-connect or 1password-cli"
+      )
+
+  # Checked when the YAML loads, so a path that can never be read is not found at the first start
+  defp application_secrets_path(path) do
+    case Foundation.OnePassword.parse_path(path) do
+      {:ok, _vault, _item} -> path
+      {:error, _reason} -> raise(Foundation.OnePassword.path_error(path))
+    end
   end
 
   # An http readiness probe against a port_key missing from replica_ports never passes, and the
@@ -737,6 +849,18 @@ defmodule Foundation.Yaml do
 
   defp check_readiness_port(readiness, _data), do: readiness
 
+  # The Module.function/0 string parses as an Elixir module path, which an Erlang or Gleam
+  # node has no code for, so this is checked once at load instead of ghosting the version
+  # after deploy_rollback_timeout_ms on every readiness probe
+  defp check_readiness_function(%Readiness{function: {_, _, _}}, language)
+       when language != "elixir",
+       do:
+         raise(
+           "readiness function not supported for language #{inspect(language)}, expected elixir"
+         )
+
+  defp check_readiness_function(readiness, _language), do: readiness
+
   defp parse_readiness(nil), do: %Readiness{}
 
   defp parse_readiness(%{} = data) do
@@ -745,6 +869,7 @@ defmodule Foundation.Yaml do
     %Readiness{
       type: type,
       min_ready_ms: parse_min_ready_ms(data["min_ready_ms"]),
+      function: parse_readiness_function(type, data["function"]),
       scheme: parse_readiness_scheme(data["scheme"]),
       port_key: parse_readiness_port_key(type, data["port_key"]),
       path: parse_readiness_path(type, data["path"])
@@ -781,6 +906,40 @@ defmodule Foundation.Yaml do
     do: raise("readiness http requires path starting with /, got #{inspect(path)}")
 
   defp parse_readiness_path(_type, path), do: path
+
+  defp parse_readiness_function(_type, nil), do: nil
+
+  defp parse_readiness_function(:otp, function) when is_binary(function) do
+    case Regex.run(
+           ~r/^((?:[A-Z][A-Za-z0-9_]*\.)*[A-Z][A-Za-z0-9_]*)\.([a-z_][A-Za-z0-9_]*[?!]?)\/(\d+)$/,
+           function
+         ) do
+      [_, module, name, "0"] ->
+        {Module.concat(String.split(module, ".")), String.to_atom(name), 0}
+
+      [_, _module, _name, arity] ->
+        raise(
+          "readiness function #{inspect(function)} not supported, expected arity 0, got #{arity}"
+        )
+
+      nil ->
+        raise(
+          "readiness function #{inspect(function)} not supported, expected a string in Module.function/0 format"
+        )
+    end
+  end
+
+  defp parse_readiness_function(:otp, function),
+    do:
+      raise(
+        "readiness function #{inspect(function)} not supported, expected a string in Module.function/0 format"
+      )
+
+  defp parse_readiness_function(type, function),
+    do:
+      raise(
+        "readiness function #{inspect(function)} not supported for type #{inspect(type)}, expected otp"
+      )
 
   defp parse_min_ready_ms(nil), do: %Readiness{}.min_ready_ms
   defp parse_min_ready_ms(value) when is_integer(value) and value >= 0, do: value
@@ -972,6 +1131,7 @@ defmodule Foundation.Yaml do
     config_change_applied
     pre_command_failed
     version_ghosted
+    pipeline_not_started
     deployment_rollback
     liveness_probe_failed
   )

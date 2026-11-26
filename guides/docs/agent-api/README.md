@@ -63,9 +63,12 @@ curl -H "Authorization: Bearer $TOKEN" http://10.0.1.12:5002/v1/apps/myphoenixap
 | Path | Returns |
 |---|---|
 | `GET /v1/node` | DeployEx: the node, version, `started_at` (the start of its VM), OTP and Elixir versions. The host: the OS, `uptime_seconds`, CPU and memory |
+| `GET /v1/node/versions` | The hot upgrades DeployEx applied to itself, each with the `from_version` it started from. A full installation is not recorded |
+| `GET /v1/node/relups/:from_version/:to_version` | The relup DeployEx kept for a hot upgrade of itself, in the shape of the one of an app below. `404` when none was kept |
 | `GET /v1/apps` | Every monitored app, as below |
 | `GET /v1/apps/:name` | One monitored app: its mode, its ghosted versions and its instances |
-| `GET /v1/apps/:name/versions` | The version history of the app |
+| `GET /v1/apps/:name/versions` | The version history of the app. Each version has `hot_upgrade_config_change`, what its release asked for in `current.json`: `true`, `false`, or `null` when it did not say, and `from_version`, the version a hot upgrade started from, `null` for a full deployment |
+| `GET /v1/apps/:name/relups/:from_version/:to_version` | The relup DeployEx kept for a hot upgrade between two versions: the `steps` the node ran in order, each with its `meaning`, a `summary` of what it does, the script in `relup`, and in `version_update` what the instruction that moves the version on traces and logs did on the node (`traces`, `traces_found`, `logs`), `null` when the relup has none, in `protocols` the consolidated protocols it loaded (`reloaded`, `failed`, `consolidated`), and in `pipelines` the Broadway pipelines it stopped and started again (`name`, `stopped`, `started`), and in `jobs` the Oban queues it paused (`name`, `queues`, `running`, `resumed`). `404` when none was kept |
 | `GET /v1/apps/:name/ghosted` | The ghosted versions of the app |
 | `GET /v1/apps/:name/logs` | The stdout or stderr lines of one instance of the app (see [Logs](#logs)) |
 

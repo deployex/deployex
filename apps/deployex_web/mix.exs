@@ -91,7 +91,8 @@ defmodule DeployexWeb.MixProject do
       "assets.build": ["tailwind deployex_web", "esbuild deployex_web"],
       "assets.deploy": [
         "tailwind deployex_web --minify",
-        "esbuild deployex_web --minify"
+        "esbuild deployex_web --minify",
+        "phx.digest"
       ],
       precommit: ["compile --warning-as-errors", "deps.unlock --unused", "format", "test"]
     ]

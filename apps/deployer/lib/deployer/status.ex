@@ -194,6 +194,15 @@ defmodule Deployer.Status do
           {:ok, map()} | {:error, :rescued}
   def set_mode(name, mode, version), do: default().set_mode(name, mode, version)
 
+  @doc """
+  Whether an instance runs. A hot upgrade's pre_commands run while it runs, and the status
+  keeps it connected.
+  """
+  @spec running?(t()) :: boolean()
+  def running?(%__MODULE__{status: :running}), do: true
+  def running?(%__MODULE__{status: :pre_commands, otp: :connected}), do: true
+  def running?(%__MODULE__{}), do: false
+
   ### ==========================================================================
   ### Private functions
   ### ==========================================================================

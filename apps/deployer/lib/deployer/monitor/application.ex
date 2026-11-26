@@ -10,6 +10,7 @@ defmodule Deployer.Monitor.Application do
   alias Deployer.Status
   alias Foundation.Catalog
   alias Foundation.Common
+  alias Foundation.Rpc
   alias Foundation.Yaml.Readiness
   alias Host.Commander
 
@@ -18,8 +19,16 @@ defmodule Deployer.Monitor.Application do
   @monitor_table "monitor-table"
   @new_deploy_topic "deployex::new_deploy"
   @max_backoff_ms :timer.minutes(5)
+
+  # An application has this long to stop by itself when the YAML does not say, and whether
+  # it is gone is looked at this often
+  @default_shutdown_timeout_ms :timer.seconds(5)
+  @stop_poll_ms 200
   # The restarts each instance keeps, for the dashboard
   @restart_history 10
+
+  # What a restart says of an application that exited with no error
+  @stopped_by_itself "stopped by itself"
   @readiness_check_interval :timer.seconds(1)
 
   ### ==========================================================================
@@ -48,6 +57,8 @@ defmodule Deployer.Monitor.Application do
        # old code built, without a readiness or liveness key
        readiness: Map.get(service, :readiness, %Readiness{}),
        liveness: Map.get(service, :liveness, nil),
+       # Map.get for the same reason, a start argument without a secrets key
+       secrets: Map.get(service, :secrets),
        retry_delay_pre_commands: service.retry_delay_pre_commands,
        name: service.name,
        sname: service.sname,
@@ -76,18 +87,21 @@ defmodule Deployer.Monitor.Application do
       ) do
     Logger.info("Requested sname: #{sname} to stop application pid: #{inspect(pid)}")
 
-    # Stop current application
-    Commander.stop(state.current_pid)
+    # The caller waits for it: what it does next, removing the files of the instance for
+    # one, is for an application that is gone
+    stop_application(state)
 
-    # NOTE: The next command is needed for Systems that have a different PID for the "/bin/app start" script
-    #       and the bin/beam.smp process
-    cleanup_beam_process(state.sname)
-
-    {:reply, :ok, state}
+    # Without a current pid, the exit of the application that was just stopped is not taken
+    # for one it decided by itself, which starts it again
+    {:reply, :ok, %{state | current_pid: nil}}
   end
 
   def handle_call({:restart, _restart}, _from, state) when is_nil(state.current_pid) do
     {:reply, {:error, :application_is_not_running}, state}
+  end
+
+  def handle_call(:refresh_secrets, _from, state) do
+    {:reply, refresh_secrets_on_node(state), state}
   end
 
   # A worker of the previous version, during a relup, still calls and installs whatever the reply
@@ -111,8 +125,11 @@ defmodule Deployer.Monitor.Application do
     {:reply, :ok, %{state | pre_commands_run: Map.put(run, :restart, restart)}}
   end
 
-  def handle_call({:restart, restart}, _from, state),
-    do: {:reply, :ok, do_restart(state, restart)}
+  # Answered first: stopping the application can take as long as it is given to stop
+  def handle_call({:restart, restart}, from, state) do
+    GenServer.reply(from, :ok)
+    {:noreply, do_restart(state, restart)}
+  end
 
   # Hot upgrade pre_commands run as erlexec processes that report their exit with a DOWN message.
   # A hot upgrade needs a running app, so the worker asks again while it is down or starting
@@ -262,6 +279,19 @@ defmodule Deployer.Monitor.Application do
   # A pre-command that was cancelled, or another erlexec process that ended
   def handle_info({:DOWN, _os_pid, :process, _pid, _reason}, state), do: {:noreply, state}
 
+  # The application ended by itself and with no error: it called System.stop/0, or the host
+  # sent it a SIGTERM, which a node answers by shutting down and exiting with 0. Nobody
+  # asked DeployEx for it, which clears the current pid before it stops the application
+  # itself, so it is started again as after a crash
+  def handle_info({:EXIT, pid, :normal}, %{current_pid: current_pid} = state)
+      when is_pid(pid) and current_pid == pid do
+    Logger.error(
+      "Application sname: #{state.sname} with pid: #{inspect(pid)} stopped by itself, application being restarted"
+    )
+
+    {:noreply, restart_after_exit(state, @stopped_by_itself)}
+  end
+
   def handle_info({:EXIT, _pid, :normal}, state) do
     # Ignore any erl_exec application that terminates normally, as this
     # occurs because the process is trapping all exits, including those
@@ -275,39 +305,7 @@ defmodule Deployer.Monitor.Application do
       "Unexpected exit message received for sname: #{state.sname} from pid: #{inspect(pid)}, application being restarted"
     )
 
-    cleanup_beam_process(state.sname)
-
-    # Update the number of crash restarts
-    crash_restart_count = state.crash_restart_count + 1
-
-    # Crashes since the application was last seen running. The backoff and the engine worker's
-    # crash-loop check for a hot upgrade read it
-    consecutive_crash_count = state.consecutive_crash_count + 1
-
-    Foundation.Notifications.notify("crash_restart", %{
-      node: Node.self(),
-      sname: state.sname,
-      name: state.name,
-      language: state.language,
-      crash_restart_count: crash_restart_count
-    })
-
-    # Retry with backoff pattern, capped to avoid unbounded growth
-    backoff = min(2 * consecutive_crash_count * 1000, @max_backoff_ms)
-    trigger_run_service(state.sname, backoff)
-
-    # Map.put, since a state that missed code_change on a relup has no last_crash_at key
-    state =
-      %{
-        state
-        | current_pid: nil,
-          crash_restart_count: crash_restart_count,
-          consecutive_crash_count: consecutive_crash_count
-      }
-      |> Map.put(:last_crash_at, DateTime.utc_now(:second))
-      |> add_restart({:crash, nil})
-
-    {:noreply, update_non_blocking_state(state)}
+    {:noreply, restart_after_exit(state, nil)}
   end
 
   def handle_info({:EXIT, pid, reason}, state) do
@@ -323,6 +321,14 @@ defmodule Deployer.Monitor.Application do
   def terminate(_reason, %Monitor{pre_commands_run: %{os_pid: os_pid}}) when is_integer(os_pid),
     do: Commander.stop(os_pid)
 
+  # DeployEx is stopping, or this server is: the application is given its time to stop too
+  def terminate(_reason, %Monitor{current_pid: current_pid} = state)
+      when not is_nil(current_pid) do
+    Logger.info("Stopping sname: #{state.sname}, its monitor is stopping")
+    stop_application(state)
+    :ok
+  end
+
   def terminate(_reason, _state), do: :ok
 
   # A state from an older version gets the fields it lacks on a relup
@@ -331,6 +337,7 @@ defmodule Deployer.Monitor.Application do
     {:ok,
      state
      |> Map.put_new(:pre_commands_run, nil)
+     |> Map.put_new(:secrets, nil)
      |> Map.put_new(:reported_pre_commands, [])
      |> Map.put_new(:last_crash_at, nil)
      |> Map.put_new(:watchdog_restart_count, 0)
@@ -385,6 +392,30 @@ defmodule Deployer.Monitor.Application do
     |> GenServer.cast({:cancel_pre_commands, ref})
   end
 
+  # Reading the secret store can take much longer than the 5 seconds of a default call: three
+  # requests to a Connect server, or the op command, and then the calls to the node. A caller
+  # that gave up early would run the upgrade while the node is still being updated
+  @refresh_secrets_call_timeout 120_000
+
+  @impl true
+  def refresh_secrets(sname), do: refresh_secrets(sname, @refresh_secrets_call_timeout)
+
+  @doc """
+  `refresh_secrets/1` with the time the monitor is given to answer, which a test shortens.
+  """
+  @spec refresh_secrets(String.t(), timeout()) :: :ok | {:error, any()}
+  def refresh_secrets(sname, timeout) do
+    sname
+    |> String.to_existing_atom()
+    |> GenServer.call(:refresh_secrets, timeout)
+  rescue
+    # No monitor was ever started under that name
+    ArgumentError -> {:error, {:secrets, :monitor_not_answering}}
+  catch
+    # The reason of an exit holds the call, never a secret, and says nothing more useful
+    :exit, _reason -> {:error, {:secrets, :monitor_not_answering}}
+  end
+
   @impl true
   defdelegate start_service(service), to: Monitor.Supervisor
 
@@ -409,6 +440,27 @@ defmodule Deployer.Monitor.Application do
     sname
     |> String.to_existing_atom()
     |> Common.call_gen_server({:restart, restart})
+  end
+
+  @doc """
+  How long the application of `sname` has to stop by itself, in milliseconds: its
+  `shutdown_timeout_ms` in the YAML. It is read when the application is stopped, so a
+  change in the YAML is used by the next stop.
+
+  ## Examples
+
+      iex> Deployer.Monitor.Application.shutdown_timeout_ms("not-an-app-abc123")
+      5000
+  """
+  @spec shutdown_timeout_ms(String.t()) :: non_neg_integer()
+  def shutdown_timeout_ms(sname) do
+    with %{name: name} <- Catalog.node_info(sname),
+         %{} = application <- Enum.find(Catalog.applications(), &(&1.name == name)),
+         timeout when is_integer(timeout) <- Map.get(application, :shutdown_timeout_ms) do
+      timeout
+    else
+      _not_set -> @default_shutdown_timeout_ms
+    end
   end
 
   def global_name(sname),
@@ -448,15 +500,20 @@ defmodule Deployer.Monitor.Application do
     end
 
     with true <- File.exists?(app_exec),
+         {:ok, secret_env} <- secret_env(state),
          :ok <- notify_new_deploy.(),
          :ok <- Logger.info(" # Identified executable: #{app_exec}"),
-         :ok <- execute_pre_commands(state, version_map.pre_commands, :current) do
+         :ok <- execute_pre_commands(state, version_map.pre_commands, :current, secret_env) do
       Logger.info(" # Starting application")
 
       {:ok, pid, os_pid} =
         Commander.run_link(
           run_app_bin(state, app_exec, "start"),
           [
+            {:env, os_env(secret_env)},
+            # erlexec kills what it asked to stop after this long. The monitor does it
+            # first, when the application did not stop in its shutdown_timeout_ms
+            {:kill_timeout, div(shutdown_timeout_ms(sname), 1_000) + 5},
             {:stdout, Catalog.stdout_path(sname) |> to_charlist, [:append, {:mode, 0o600}]},
             {:stderr, Catalog.stderr_path(sname) |> to_charlist, [:append, {:mode, 0o600}]}
           ]
@@ -477,6 +534,18 @@ defmodule Deployer.Monitor.Application do
       false ->
         trigger_run_service(sname, retry_delay_pre_commands)
         Logger.error("Version: #{version} set but no #{app_exec}")
+        state
+
+      # Starting without its secrets would only crash the application, so it waits and tries
+      # again. The reason names the item, never a value
+      {:error, {:secrets, reason}} ->
+        trigger_run_service(sname, retry_delay_pre_commands)
+
+        Logger.error(
+          "Could not read the secrets of sname: #{sname}, not starting version: #{version}, " <>
+            "reason: #{inspect(reason)}"
+        )
+
         state
 
       {:error, :pre_commands, command} ->
@@ -512,13 +581,14 @@ defmodule Deployer.Monitor.Application do
     # runs with a non-default cookie. It goes before app_env, so a RELEASE_COOKIE in the
     # app's env still wins.
     """
+    #{limit_open_files()}
     unset $(env | grep -E '^(RELEASE|DEPLOYEX)_' | awk -F'=' '{print $1}')
     unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
     export RELEASE_COOKIE=#{Common.shell_quote(cookie)}
     #{app_env}
     #{ports_env}
     export PATH=#{path}
-    export RELEASE_NODE=#{sname}
+    #{Common.release_node_env(sname)}
     #{executable_path} #{command}
     """
   end
@@ -545,13 +615,14 @@ defmodule Deployer.Monitor.Application do
       end
 
     """
+    #{limit_open_files()}
     unset $(env | grep -E '^(RELEASE|DEPLOYEX)_' | awk -F'=' '{print $1}')
     unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
     #{app_env}
     #{ports_env}
     export PATH=#{path}
     export RELX_REPLACE_OS_VARS=true
-    export RELEASE_NODE=#{sname}
+    #{Common.release_node_env(sname)}
     export RELEASE_COOKIE=#{Common.shell_quote(cookie)}
     export RELEASE_SSL_OPTIONS=\"#{ssl_options}\"
     #{executable_path} foreground
@@ -581,6 +652,7 @@ defmodule Deployer.Monitor.Application do
       end
 
     """
+    #{limit_open_files()}
     unset $(env | grep -E '^(RELEASE|DEPLOYEX)_' | awk -F'=' '{print $1}')
     unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
     #{app_env}
@@ -593,7 +665,7 @@ defmodule Deployer.Monitor.Application do
       -eval "$PACKAGE@@main:run($PACKAGE)" \
       -noshell \
       #{ssl_options} \
-      -sname #{sname} \
+      #{Common.erl_name_argument(sname)} \
       -setcookie #{Common.shell_quote(cookie)}
     """
   end
@@ -606,7 +678,171 @@ defmodule Deployer.Monitor.Application do
     "echo \"#{msg}\""
   end
 
+  # The Erlang VM sizes its table of ports from the limit of open files, unless it is
+  # started with +Q. Where that limit is about a billion, in a Kubernetes pod on containerd
+  # or under a systemd unit with LimitNOFILE=infinity on a recent kernel, the VM of an
+  # application that has no +Q asks for gigabytes when it boots, and is killed where
+  # memory is limited. A limit above the cap is lowered to it for the application and what
+  # it starts. One that is at or below it is kept, so a host as it was is not changed.
+  @max_open_files 1_048_576
+
+  defp limit_open_files do
+    ~s(if [ "$\(ulimit -n\)" = "unlimited" ] || [ "$\(ulimit -n\)" -gt #{@max_open_files} ]; ) <>
+      "then ulimit -n #{@max_open_files}; fi"
+  end
+
   defp ports_to_env(ports), do: Enum.map(ports, fn port -> "#{port.key}=#{port.base}" end)
+
+  # The credentials DeployEx itself reads 1Password with. A monitored application starts as a
+  # child of DeployEx and would inherit them
+  @onepassword_env ~w(OP_CONNECT_HOST OP_CONNECT_TOKEN OP_SERVICE_ACCOUNT_TOKEN)
+
+  # The environment handed to the OS process, on top of what run_app_bin/3 exports. The
+  # secrets go this way and not through the command, which is visible in the process list.
+  # A secret is set after the unset of the same name, so an application that has its own
+  # 1Password credentials among its secrets keeps them
+  defp os_env(secret_env) do
+    Enum.map(@onepassword_env, &{&1, false}) ++ secret_env
+  end
+
+  # The secrets of the application, read again at every start, so a value changed in the
+  # secret store reaches the application at its next restart. They are kept out of the state,
+  # which is mirrored in a table that other processes read. The process dictionary is read
+  # too, the process page of the dashboard prints it, so what is kept there is a function
+  # that returns them, which prints as a function
+  @secret_env_key {__MODULE__, :secret_env}
+
+  defp secret_env(state) do
+    case Map.get(state, :secrets) do
+      nil ->
+        {:ok, []}
+
+      %{adapter: adapter, path: path} ->
+        case adapter.application_env(path) do
+          {:ok, env} ->
+            Process.put(@secret_env_key, fn -> env end)
+            {:ok, env}
+
+          {:error, reason} ->
+            cached_secret_env(state, reason)
+        end
+    end
+  end
+
+  # A restart after a crash must not depend on the secret store being reachable right then
+  defp cached_secret_env(%{sname: sname}, reason) do
+    case Process.get(@secret_env_key) do
+      nil ->
+        {:error, {:secrets, reason}}
+
+      kept when is_function(kept, 0) ->
+        Logger.warning(
+          "Could not read the secrets of sname: #{sname}, using the ones from its last " <>
+            "start, reason: #{inspect(reason)}"
+        )
+
+        {:ok, kept.()}
+    end
+  end
+
+  @refresh_secrets_timeout 15_000
+
+  # An application without secrets has nothing to refresh
+  defp refresh_secrets_on_node(state) do
+    if Map.get(state, :secrets) do
+      # What the node was last given, read before secret_env/1 replaces it
+      previous = kept_secret_env()
+
+      case secret_env(state) do
+        {:ok, env} ->
+          {result, on_node} = put_secret_env_on_node(state, env, previous || [])
+          # What the node holds now is what the next refresh compares with
+          keep_secret_env(if(result == :ok, do: on_node, else: previous && on_node))
+          result
+
+        {:error, _reason} = error ->
+          keep_secret_env(previous)
+          error
+      end
+    else
+      :ok
+    end
+  end
+
+  # The environment of the running node is set from inside it, with functions of Erlang, so
+  # it works for an Erlang or a Gleam node too, which has no Elixir. A secret that left the
+  # secret store is removed, so the new version does not read a value that no longer exists.
+  #
+  # It answers with what the node holds afterwards. When the secrets were set and the ones
+  # that left could not be removed, those are still on the node and stay in that list, so
+  # the next refresh removes them
+  defp put_secret_env_on_node(%{sname: sname} = state, env, previous) do
+    %{node: node} = Catalog.node_info(sname)
+    reserved = reserved_names(state)
+    refresh = Enum.reject(env, fn {name, _value} -> name in reserved end)
+    left = Enum.reject(previous, fn {name, _value} -> List.keymember?(env, name, 0) end)
+    removed = for {name, _value} <- left, name not in reserved, do: name
+
+    with :ok <- put_env_on_node(node, refresh),
+         :ok <- unset_env_on_node(node, removed) do
+      {:ok, env}
+    else
+      {:error, :not_set} -> {{:error, {:secrets, :node_not_updated}}, previous}
+      {:error, :not_removed} -> {{:error, {:secrets, :node_not_updated}}, env ++ left}
+    end
+  end
+
+  # The result of a failed call can hold its arguments, which are the secrets, so it is not
+  # passed on
+  defp put_env_on_node(_node, []), do: :ok
+
+  defp put_env_on_node(node, env) do
+    {names, values} = env |> Enum.map(&charlists/1) |> Enum.unzip()
+
+    case Rpc.call(
+           node,
+           :lists,
+           :zipwith,
+           [&:os.putenv/2, names, values],
+           @refresh_secrets_timeout
+         ) do
+      set when is_list(set) -> :ok
+      _failed -> {:error, :not_set}
+    end
+  end
+
+  defp unset_env_on_node(_node, []), do: :ok
+
+  defp unset_env_on_node(node, names) do
+    names = Enum.map(names, &String.to_charlist/1)
+
+    case Rpc.call(node, :lists, :foreach, [&:os.unsetenv/1, names], @refresh_secrets_timeout) do
+      :ok -> :ok
+      _failed -> {:error, :not_removed}
+    end
+  end
+
+  defp charlists({name, value}), do: {String.to_charlist(name), String.to_charlist(value)}
+
+  # What the run script of the application exports after the secrets are in its environment:
+  # the env and the ports of the YAML, and PATH. At a start those win over a secret with the
+  # same name, so a refresh neither sets nor removes them
+  defp reserved_names(state) do
+    yaml_env = for entry <- Map.get(state, :env) || [], do: entry |> String.split("=") |> hd()
+    ports = for port <- Map.get(state, :ports) || [], do: to_string(port.key)
+
+    ["PATH" | yaml_env ++ ports]
+  end
+
+  defp kept_secret_env do
+    case Process.get(@secret_env_key) do
+      kept when is_function(kept, 0) -> kept.()
+      _nothing_kept -> nil
+    end
+  end
+
+  defp keep_secret_env(nil), do: Process.delete(@secret_env_key)
+  defp keep_secret_env(env), do: Process.put(@secret_env_key, fn -> env end)
 
   defp build_export_command([]), do: ""
 
@@ -624,12 +860,17 @@ defmodule Deployer.Monitor.Application do
     end
   end
 
-  defp execute_pre_commands(_state, pre_commands, _bin_service) when pre_commands == [], do: :ok
+  defp execute_pre_commands(state, pre_commands, bin_service, secret_env \\ [])
+
+  defp execute_pre_commands(_state, pre_commands, _bin_service, _secret_env)
+       when pre_commands == [],
+       do: :ok
 
   defp execute_pre_commands(
          %{sname: sname, status: status} = state,
          pre_commands,
-         bin_service
+         bin_service,
+         secret_env
        ) do
     migration_exec = Catalog.bin_path(sname, bin_service)
 
@@ -642,6 +883,7 @@ defmodule Deployer.Monitor.Application do
 
       Commander.run(run_app_bin(state, migration_exec, pre_command), [
         :sync,
+        {:env, os_env(secret_env)},
         {:stdout, Catalog.stdout_path(sname) |> to_charlist, [:append, {:mode, 0o600}]},
         {:stderr, Catalog.stderr_path(sname) |> to_charlist, [:append, {:mode, 0o600}]}
       ])
@@ -682,16 +924,19 @@ defmodule Deployer.Monitor.Application do
   defp run_next_pre_command(%Monitor{sname: sname} = state, %{remaining: [command | rest]} = run) do
     Logger.info(" # Executing: #{command}")
 
-    state
-    |> run_app_bin(Catalog.bin_path(sname, run.bin_service), command)
-    |> Commander.run([
-      :monitor,
-      # Its own process group, so a stop also ends the BEAM that `bin/app eval` starts
-      {:group, 0},
-      :kill_group,
-      {:stdout, Catalog.stdout_path(sname) |> to_charlist, [:append, {:mode, 0o600}]},
-      {:stderr, Catalog.stderr_path(sname) |> to_charlist, [:append, {:mode, 0o600}]}
-    ])
+    with {:ok, secret_env} <- secret_env(state) do
+      state
+      |> run_app_bin(Catalog.bin_path(sname, run.bin_service), command)
+      |> Commander.run([
+        :monitor,
+        # Its own process group, so a stop also ends the BEAM that `bin/app eval` starts
+        {:group, 0},
+        :kill_group,
+        {:env, os_env(secret_env)},
+        {:stdout, Catalog.stdout_path(sname) |> to_charlist, [:append, {:mode, 0o600}]},
+        {:stderr, Catalog.stderr_path(sname) |> to_charlist, [:append, {:mode, 0o600}]}
+      ])
+    end
     |> case do
       {:ok, exec_pid, os_pid} ->
         run = %{run | remaining: rest, command: command, exec_pid: exec_pid, os_pid: os_pid}
@@ -748,6 +993,44 @@ defmodule Deployer.Monitor.Application do
     })
   end
 
+  # The application is down and nobody asked for it: it is started again, after a backoff
+  # that grows with the crashes in a row
+  defp restart_after_exit(state, detail) do
+    cleanup_beam_process(state.sname)
+
+    # Update the number of crash restarts
+    crash_restart_count = state.crash_restart_count + 1
+
+    # Crashes since the application was last seen running. The backoff and the engine worker's
+    # crash-loop check for a hot upgrade read it
+    consecutive_crash_count = state.consecutive_crash_count + 1
+
+    Foundation.Notifications.notify("crash_restart", %{
+      node: Node.self(),
+      sname: state.sname,
+      name: state.name,
+      language: state.language,
+      crash_restart_count: crash_restart_count
+    })
+
+    # Retry with backoff pattern, capped to avoid unbounded growth
+    backoff = min(2 * consecutive_crash_count * 1000, @max_backoff_ms)
+    trigger_run_service(state.sname, backoff)
+
+    # Map.put, since a state that missed code_change on a relup has no last_crash_at key
+    state =
+      %{
+        state
+        | current_pid: nil,
+          crash_restart_count: crash_restart_count,
+          consecutive_crash_count: consecutive_crash_count
+      }
+      |> Map.put(:last_crash_at, DateTime.utc_now(:second))
+      |> add_restart({:crash, detail})
+
+    update_non_blocking_state(state)
+  end
+
   defp do_restart(state, {cause, _detail} = restart) do
     Logger.warning("Restart requested for sname: #{state.sname}")
 
@@ -756,10 +1039,7 @@ defmodule Deployer.Monitor.Application do
       sname: "#{state.sname}"
     })
 
-    # Stop current application
-    Commander.stop(state.current_pid)
-
-    cleanup_beam_process(state.sname)
+    stop_application(state)
 
     # Update the number of force restarts, and of the ones the watchdog asked for
     force_restart_count = state.force_restart_count + 1
@@ -784,13 +1064,39 @@ defmodule Deployer.Monitor.Application do
     Map.update(state, :restarts, [restart], &Enum.take([restart | &1], @restart_history))
   end
 
-  defp cleanup_beam_process(sname) do
+  # Asks the application to stop, which is a SIGTERM, and waits for it to be gone for as
+  # long as its shutdown_timeout_ms. What is left after that is killed
+  defp stop_application(%{current_pid: current_pid, sname: sname}) do
+    Commander.stop(current_pid)
+    cleanup_beam_process(sname, shutdown_timeout_ms(sname))
+  end
+
+  # NOTE: The kill is needed for systems that have a different PID for the "/bin/app start"
+  #       script and the bin/beam.smp process
+  defp cleanup_beam_process(sname, wait_ms \\ 0) do
     %{sname: sname, name: name} = Catalog.node_info(sname)
 
+    beam =
+      "ps -ax | grep \"#{name}/#{sname}/current/erts-*.*/bin/beam.smp\" | grep -v grep"
+
+    # One command, so the monitor asks once: it waits while the process is there
+    wait =
+      if wait_ms > 0 do
+        "i=0; while [ $i -lt #{div(wait_ms, @stop_poll_ms)} ] && #{beam} > /dev/null; " <>
+          "do sleep #{@stop_poll_ms / 1_000}; i=$((i+1)); done; "
+      else
+        ""
+      end
+
     case Commander.run(
-           "kill -9 $(ps -ax | grep \"#{name}/#{sname}/current/erts-*.*/bin/beam.smp\" | grep -v grep | awk '{print $1}') ",
+           "#{wait}kill -9 $(#{beam} | awk '{print $1}') ",
            [:sync, :stdout, :stderr]
          ) do
+      {:ok, _} when wait_ms > 0 ->
+        Logger.warning(
+          "The application sname: #{sname} did not stop in #{wait_ms} ms and was killed"
+        )
+
       {:ok, _} ->
         Logger.warning("Remaining beam app removed for sname: #{sname}")
 

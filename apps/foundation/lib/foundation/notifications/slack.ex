@@ -28,6 +28,7 @@ defmodule Foundation.Notifications.Slack do
             - "config_change_applied"
             - "pre_command_failed"
             - "version_ghosted"
+            - "pipeline_not_started"
             - "deployment_rollback"
             - "liveness_probe_failed"
           options:
@@ -69,6 +70,7 @@ defmodule Foundation.Notifications.Slack do
   | `config_change_applied`         | ✅    | Pending config changes successfully applied           |
   | `pre_command_failed`            | ⛔    | A pre-command failed, each command reported once      |
   | `version_ghosted`               | 👻    | A version was ghosted, it is not deployed again here  |
+  | `pipeline_not_started`          | ⛔    | A pipeline is down after a hot upgrade that succeeded |
   | `deployment_rollback`           | ↩️    | An instance starts to go back from a ghosted version  |
   | `liveness_probe_failed`         | 🤒    | A liveness probe failed failure_threshold times in a row |
   """
@@ -236,6 +238,13 @@ defmodule Foundation.Notifications.Slack do
     """
     👻 *version_ghosted* — `#{payload.name}` *#{payload.version}* on `#{payload.node}`
     Reason: #{payload.reason}\
+    """
+  end
+
+  defp format_message("pipeline_not_started", payload) do
+    """
+    ⛔ *pipeline_not_started* — `#{payload.sname}` on `#{payload.node}`
+    Down after the hot upgrade to *#{payload.version}*: #{Enum.join(payload.pipelines, ", ")}\
     """
   end
 

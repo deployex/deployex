@@ -21,6 +21,9 @@ defmodule Foundation.ConfigProvider.Env.ConfigTest do
   @yaml_endpoint_http "#{@file_paths}/deployex-endpoint-http.yaml"
   @yaml_self_upgrade "#{@file_paths}/deployex-self-upgrade.yaml"
   @yaml_release_check_off "#{@file_paths}/deployex-release-check-off.yaml"
+  @yaml_app_log_stdout "#{@file_paths}/deployex-app-log-stdout.yaml"
+  @yaml_log_format "#{@file_paths}/deployex-log-format.yaml"
+  @yaml_peers "#{@file_paths}/deployex-peers.yaml"
   @yaml_auth "#{@file_paths}/deployex-auth.yaml"
 
   # What config.exs + prod.exs give the provider in a release.
@@ -834,6 +837,77 @@ defmodule Foundation.ConfigProvider.Env.ConfigTest do
                    ]}
                 ]}
              ] = Config.load([], [])
+    end
+  end
+
+  describe "peers_dns_query configuration" do
+    @tag :capture_log
+    test "load/3 sets it when the YAML has it" do
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_peers end]}
+      ]) do
+        config = Config.load([], [])
+        assert config[:foundation][:peers_dns_query] == "deployex.default.svc.cluster.local"
+      end
+    end
+
+    @tag :capture_log
+    test "load/3 leaves it out when the YAML does not have it" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        config = Config.load([], [])
+        refute Keyword.has_key?(config[:foundation], :peers_dns_query)
+      end
+    end
+  end
+
+  describe "log_format configuration" do
+    @tag :capture_log
+    test "load/3 sets it when the YAML asks for JSON" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_log_format end]}
+      ]) do
+        config = Config.load([], [])
+        assert config[:foundation][:log_format] == "datadog"
+      end
+    end
+
+    @tag :capture_log
+    test "load/3 leaves it out when the YAML does not have it" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        config = Config.load([], [])
+        refute Keyword.has_key?(config[:foundation], :log_format)
+      end
+    end
+  end
+
+  describe "monitored_app_log_stdout configuration" do
+    @tag :capture_log
+    test "load/3 sets it when the YAML turns it on" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_app_log_stdout end]}
+      ]) do
+        config = Config.load([], [])
+        assert config[:foundation][:monitored_app_log_stdout] == true
+      end
+    end
+
+    @tag :capture_log
+    test "load/3 leaves it out when the YAML does not have it" do
+      with_mocks([
+        {System, [:passthrough],
+         [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> @yaml_aws_default end]}
+      ]) do
+        config = Config.load([], [])
+        refute Keyword.has_key?(config[:foundation], :monitored_app_log_stdout)
+      end
     end
   end
 

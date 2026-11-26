@@ -7,7 +7,12 @@ defmodule Deployer.HotUpgrade.Application do
      when updating from an older version. Deployer was designed to consume appup files generated
      by these libraries:
        a. [Jellyfish](https://github.com/deployex/jellyfish) (For Elixir apps)
-       a. [Rebar3 appup plugin](https://github.com/lrascao/rebar3_appup_plugin) (For Erlang apps)
+       a. [rebar3_jellyfish_plugin](https://github.com/deployex/rebar3_jellyfish_plugin) (For Erlang apps)
+
+     Both write the same `jellyfish.json` sidecar file next to every `.appup` they generate, so
+     this module checks for hot-upgrade support the same way regardless of language: see
+     `check_jellyfish_files/3`. A bare `.appup` with no `jellyfish.json` next to it is not trusted
+     on its own, a dependency can ship one for unrelated reasons.
 
   2. During deployment, the release app-new-version.tar.gz is copied to a directory named
      after the version under the current/releases folder, for example:
@@ -62,6 +67,13 @@ defmodule Deployer.HotUpgrade.Application do
        written to disk. It is evaluated by the code the running node has loaded, so it must not
        depend on modules or language features that only arrive with the new release.
 
+     * `config_change/3` can be called even when no configuration changed. `release_handler`
+       only calls it for an application whose environment differs after the relup has run, so
+       for a release that asks for it the hook also sets `:deployex_config_change` to the
+       version being installed (see `add_config_change_marker/2`). It is the one place a
+       monitored application can react to having been hot upgraded, for instance to reload
+       what it cached at boot.
+
      * A changed Config Provider is NOT picked up. The provider modules execute over RPC on the
        running node, which is still on the old version - `install_release/2` has not run yet.
        The old implementation is what resolves the configuration, so a fix to a provider only
@@ -71,8 +83,8 @@ defmodule Deployer.HotUpgrade.Application do
 
   * https://learnyousomeerlang.com/relups
   * https://www.erlang.org/doc/system/appup_cookbook.html
-  * https://github.com/lrascao/rebar3_appup_plugin
-  * https://lrascao.github.io/automatic-release-upgrades-in-erlang/
+  * https://github.com/deployex/rebar3_jellyfish_plugin
+  * https://github.com/deployex/jellyfish
   * https://rebar3.org/docs/deployment/releases/
   * https://rebar3.org/docs/configuration/plugins/
   * https://github.com/erlware/relx/blob/main/priv/templates/install_upgrade_escript
@@ -84,18 +96,36 @@ defmodule Deployer.HotUpgrade.Application do
   require Logger
 
   @rpc_timeout 60_000
+  # install_release/2 also runs the instructions of Jobs and Pipelines, which wait up to 65
+  # seconds: 20 for the jobs, and 5, 30 and 10 to find, stop and start the pipelines
+  @install_timeout @rpc_timeout + 65_000
   @execute_timeout 300_000
   @check_timeout 300_000
   @behaviour Deployer.HotUpgrade.Adapter
   @events_topic "deployex::hotupgrade::events"
   @runtime_config_key {:deployex, :runtime_config}
+
+  # The code the relup hook evaluates, which reads the key above
+  @runtime_config_hook_path Path.expand("../../../priv/relup/runtime_config.erl", __DIR__)
+  @external_resource @runtime_config_hook_path
+  {:ok, tokens, _end} =
+    @runtime_config_hook_path |> File.read!() |> String.to_charlist() |> :erl_scan.string()
+
+  {:ok, forms} = :erl_parse.parse_exprs(tokens)
+  @runtime_config_hook_forms forms
+  @config_change_key :deployex_config_change
   # The run of each application, now or the last one, for a page that opens in the middle of it
   @progress_table :deployer_hot_upgrade_progress
 
   alias Deployer.HotUpgrade.Check
   alias Deployer.HotUpgrade.Execute
   alias Deployer.HotUpgrade.Jellyfish
+  alias Deployer.HotUpgrade.Jobs
+  alias Deployer.HotUpgrade.Pipelines
   alias Deployer.HotUpgrade.Progress
+  alias Deployer.HotUpgrade.Protocols
+  alias Deployer.HotUpgrade.Relup
+  alias Deployer.HotUpgrade.VersionUpdate
   alias Foundation.Rpc
 
   @typedoc """
@@ -256,8 +286,19 @@ defmodule Deployer.HotUpgrade.Application do
          :ok <- check_install_release(data),
          :ok <- notify_progress(data, "Resolving the runtime configuration"),
          {:ok, runtime_config} <- resolve_runtime_config(data),
-         :ok <- notify_progress(data, "Adding the runtime configuration to the relup") do
-      install_runtime_config_hook(data, runtime_config)
+         runtime_config = add_config_change_marker(data, runtime_config),
+         :ok <- notify_progress(data, "Adding the runtime configuration to the relup"),
+         :ok <- install_runtime_config_hook(data, runtime_config),
+         :ok <- notify_progress(data, "Adding the protocol reload to the relup"),
+         :ok <- Protocols.add_to_relup(data),
+         :ok <- notify_progress(data, "Adding the version update to the relup"),
+         :ok <- VersionUpdate.add_to_relup(data),
+         :ok <- notify_progress(data, "Adding the pipeline and job handling to the relup"),
+         :ok <- Pipelines.add_to_relup(data),
+         # Added last, so the jobs are paused before and resumed after everything else
+         :ok <- Jobs.add_to_relup(data) do
+      # What is on disk now is what install_release/2 runs, so this is the one to keep
+      Relup.save(data)
     end
   end
 
@@ -266,6 +307,10 @@ defmodule Deployer.HotUpgrade.Application do
   defp install(%Execute{from_version: from_version, to_version: to_version} = data, node) do
     with :ok <- notify_progress(data, "Installing release"),
          :ok <- install_release(data),
+         :ok <- Protocols.record(data),
+         :ok <- VersionUpdate.record(data),
+         :ok <- Pipelines.record(data),
+         :ok <- Jobs.record(data),
          :ok <- notify_make_permanent(data.make_permanent_async, data),
          :ok <- permfy(data),
          :ok <- prune_old_releases(data),
@@ -301,18 +346,30 @@ defmodule Deployer.HotUpgrade.Application do
   def do_check(
         %Check{
           name: name,
-          language: "elixir",
+          language: language,
           current_path: current_path,
           new_path: new_path,
           download_path: download_path,
           from_version: from_version,
           to_version: to_version
         } = check
-      ) do
-    # NOTE: Single file for single elixir app or multiple files for umbrella
-    jellyfish_files = Path.wildcard("#{new_path}/lib/*-*/ebin/jellyfish.json")
+      )
+      when language in ["elixir", "erlang"] do
+    # NOTE: Single file for a single app, multiple files for an umbrella and/or
+    # dependencies that were hot-upgraded alongside it. The glob is the same
+    # for both languages: Jellyfish and rebar3_jellyfish_plugin write the same
+    # jellyfish.json shape at the same lib/<app>-<vsn>/ebin/ location.
+    jellyfish_files =
+      "#{new_path}/lib/*-*/ebin/jellyfish.json"
+      |> Path.wildcard()
+      |> jellyfish_files_of_upgrade(check)
 
-    case check_jellyfish_files(jellyfish_files, from_version, to_version) do
+    with {:ok, jellyfish_info} <-
+           check_jellyfish_files(jellyfish_files, from_version, to_version),
+         :ok <- check_runtime(check) do
+      {:ok, jellyfish_info}
+    end
+    |> case do
       {:ok, jellyfish_info} ->
         Logger.warning("HOT UPGRADE version DETECTED - #{inspect(jellyfish_info)}")
 
@@ -330,42 +387,6 @@ defmodule Deployer.HotUpgrade.Application do
       {:error, reason} ->
         Logger.warning(
           "HOT UPGRADE version NOT DETECTED, full deployment required, reason: #{inspect(reason)}"
-        )
-
-        {:ok, %{check | deploy: :full_deployment}}
-    end
-  end
-
-  def do_check(
-        %Check{
-          name: name,
-          language: "erlang",
-          current_path: current_path,
-          new_path: new_path,
-          download_path: download_path,
-          from_version: from_version,
-          to_version: to_version
-        } = check
-      ) do
-    with [file_path] <-
-           Path.wildcard("#{new_path}/lib/#{name}-*/ebin/*.appup"),
-         :ok <- check_app_up(file_path, from_version, to_version) do
-      Logger.warning("HOT UPGRADE version DETECTED, from: #{from_version} to: #{to_version}")
-
-      # Copy binary to the release folder under the version directory
-      dest_dir = "#{current_path}/releases/#{to_version}"
-
-      File.rm_rf(dest_dir)
-
-      File.mkdir_p!(dest_dir)
-
-      File.cp!(download_path, "#{dest_dir}/#{name}.tar.gz")
-
-      {:ok, %{check | deploy: :hot_upgrade}}
-    else
-      result ->
-        Logger.warning(
-          "HOT UPGRADE version NOT DETECTED, full deployment required, result: #{inspect(result)}"
         )
 
         {:ok, %{check | deploy: :full_deployment}}
@@ -414,16 +435,9 @@ defmodule Deployer.HotUpgrade.Application do
 
   @impl Deployer.HotUpgrade.Adapter
   def prepare_new_path(name, "erlang", to_version, new_path) do
-    priv_app_up_file =
-      "#{new_path}/lib/#{name}-#{to_version}/priv/appup/#{name}.appup"
-
-    ebin_app_up_file =
-      "#{new_path}/lib/#{name}-#{to_version}/ebin/#{name}.appup"
-
-    if File.exists?(priv_app_up_file) do
-      File.cp(priv_app_up_file, ebin_app_up_file)
-    end
-
+    # The release already has its .appup and jellyfish.json in lib/<app>-<vsn>/ebin/, where
+    # rebar3_jellyfish_plugin writes them at build time through a relx overlay. What is
+    # left to do is to name the .rel file after the version, as release_handler expects.
     releases = "#{new_path}/releases"
 
     if File.exists?("#{releases}/#{name}.rel") do
@@ -518,22 +532,13 @@ defmodule Deployer.HotUpgrade.Application do
            name: name,
            language: language,
            current_path: current_path,
-           new_path: new_path,
            from_version: from_version,
            to_version: to_version
          },
          root
        ) do
-    cp_appup_priv_to_ebin = fn ->
-      priv_app_up_file = "#{new_path}/lib/#{name}-#{to_version}/priv/appup/#{name}.appup"
-
-      ebin_app_up_file = "#{current_path}/lib/#{name}-#{to_version}/ebin/#{name}.appup"
-
-      if File.exists?(priv_app_up_file) do
-        File.cp!(priv_app_up_file, ebin_app_up_file)
-      end
-    end
-
+    # The .appup is already in lib/<app>-<vsn>/ebin/, where rebar3_jellyfish_plugin writes
+    # it at build time. Only the .rel rename that rebar3/relx releases need is done here.
     add_version_to_rel_file = fn ->
       releases = "#{current_path}/releases"
 
@@ -543,7 +548,6 @@ defmodule Deployer.HotUpgrade.Application do
     end
 
     if language == "erlang" do
-      cp_appup_priv_to_ebin.()
       add_version_to_rel_file.()
     end
 
@@ -615,7 +619,7 @@ defmodule Deployer.HotUpgrade.Application do
            :release_handler,
            :install_release,
            [to_version, [{:update_paths, true}]],
-           @rpc_timeout
+           @install_timeout
          ) do
       {:ok, _, _} ->
         Logger.info("Installed Release: #{inspect(to_version)}")
@@ -962,6 +966,55 @@ defmodule Deployer.HotUpgrade.Application do
   def resolve_runtime_config(_data), do: {:ok, []}
 
   @doc """
+  Add the config change marker to the environment of the applications the project owns.
+
+  `release_handler:install_release/2` calls `config_change/3` on the application callback
+  module of every application whose environment differs once the relup has run. A release
+  that changes code but no configuration leaves the environment as it was, so the application
+  is never told that it was upgraded.
+
+  The marker is one key, `:deployex_config_change`, holding the version being installed. It is
+  added to the configuration the relup hook applies (see `install_runtime_config_hook/2`), so
+  the environment always differs and `config_change/3` always runs, on the new code and with
+  the new configuration in place. The application receives the key in `new` on the first hot
+  upgrade after a boot and in `changed` on the following ones.
+
+  The applications that get it are the ones a `jellyfish.json` of type `project` describes for
+  this version, which is every application of an umbrella. A release with none of those files
+  gets the marker on the application named after it. Either way the application has to be
+  loaded on the node: the atoms are taken from `application:loaded_applications/0` there, so
+  none is created from a name read in a file.
+
+  Nothing is added unless `config_change` is set on the upgrade data, which the engine does
+  for a release whose `current.json` has `hot_upgrade_config_change` set to `true`.
+
+  The marker does not outlive the next hot upgrade: `change_appl_data/3` rebuilds the
+  environment without it. So a release that does not ask, installed over one that did, still
+  gets `config_change/3` called once, with the key in `removed`.
+
+  The applications that got the marker are logged, and so is a request that marked none.
+  """
+  @spec add_config_change_marker(Execute.t(), runtime_config()) :: runtime_config()
+  def add_config_change_marker(%Execute{name: name} = data, runtime_config)
+      when is_binary(name) do
+    # Upgrade data built by a version without the field reads as disabled
+    if Map.get(data, :config_change, false) do
+      version = to_string(data.to_version)
+
+      data
+      |> project_applications()
+      |> Enum.reduce(runtime_config, fn app, config ->
+        marker = [{@config_change_key, version}]
+        Keyword.update(config, app, marker, &Keyword.merge(&1, marker))
+      end)
+    else
+      runtime_config
+    end
+  end
+
+  def add_config_change_marker(_data, runtime_config), do: runtime_config
+
+  @doc """
   Add a hook to the generated relup that applies the resolved configuration from inside
   `release_handler:install_release/2`.
 
@@ -1081,6 +1134,67 @@ defmodule Deployer.HotUpgrade.Application do
     "#{from_version} -> #{to_version}"
   end
 
+  # The names come from the release and the atoms from the node, so no atom is created from
+  # a file, and an application the node has not loaded, which has no environment to compare
+  # and no callback to call, gets nothing
+  defp project_applications(%Execute{node: node} = data) do
+    names = project_application_names(data)
+
+    case Rpc.call(node, :application, :loaded_applications, [], @rpc_timeout) do
+      loaded when is_list(loaded) ->
+        applications =
+          for {application, _description, _vsn} <- loaded,
+              Atom.to_string(application) in names,
+              do: application
+
+        log_config_change_applications(node, names, applications)
+
+        applications
+
+      reason ->
+        Logger.warning(
+          "Could not read the loaded applications of #{node}, config_change/3 is not forced " <>
+            "for this upgrade, reason: #{inspect(reason)}"
+        )
+
+        []
+    end
+  end
+
+  # The version record only says what the release asked for, so a request that marked nothing
+  # is reported here: the release name is not an application of the node, or no jellyfish.json
+  # of this version names one
+  defp log_config_change_applications(node, names, []) do
+    Logger.warning(
+      "config_change/3 was requested but none of #{inspect(names)} is loaded on #{node}, " <>
+        "it is not forced for this upgrade"
+    )
+  end
+
+  defp log_config_change_applications(node, _names, applications) do
+    Logger.info("config_change/3 is forced on #{node} for: #{inspect(applications)}")
+  end
+
+  # unpack_release/1 has already put the new libraries, and their jellyfish.json, under the
+  # current path. Older versions are still there, so only the files for this version count
+  defp project_application_names(%Execute{
+         current_path: current_path,
+         name: name,
+         to_version: version
+       }) do
+    version = to_string(version)
+
+    "#{current_path}/lib/*-*/ebin/jellyfish.json"
+    |> Path.wildcard()
+    |> Enum.map(&Jellyfish.decode_jellyfish_file/1)
+    |> Enum.filter(&(&1.type == "project" and &1.to == version and is_binary(&1.name)))
+    |> Enum.map(& &1.name)
+    |> case do
+      [] -> [name]
+      names -> names
+    end
+  end
+
   @spec stash_runtime_config(node(), runtime_config()) :: :ok | {:error, any()}
   defp stash_runtime_config(node, runtime_config) do
     case Rpc.call(
@@ -1117,33 +1231,12 @@ defmodule Deployer.HotUpgrade.Application do
   defp prepend_instruction({from_vsn, descr, script}, instruction),
     do: {from_vsn, descr, [instruction | script]}
 
-  # Abstract forms for:
-  #   application:set_env(persistent_term:get(Key), [{persistent, true}]),
-  #   persistent_term:erase(Key)
+  # The forms of priv/relup/runtime_config.erl, read when DeployEx is compiled.
   #
   # Forms are plain terms, so unlike the configuration they survive the relup file, and
   # erl_eval is in stdlib so nothing has to be compiled or loaded into the target node.
-  #
-  # The hook erases its own stash as its last act. The resolved configuration holds whatever
-  # the Config Providers produced, secrets included, so it must not outlive the upgrade that
-  # needed it.
   @spec runtime_config_hook_forms() :: [tuple()]
-  defp runtime_config_hook_forms do
-    l = 0
-
-    key_form =
-      {:tuple, l,
-       [{:atom, l, elem(@runtime_config_key, 0)}, {:atom, l, elem(@runtime_config_key, 1)}]}
-
-    [
-      {:call, l, {:remote, l, {:atom, l, :application}, {:atom, l, :set_env}},
-       [
-         {:call, l, {:remote, l, {:atom, l, :persistent_term}, {:atom, l, :get}}, [key_form]},
-         {:cons, l, {:tuple, l, [{:atom, l, :persistent}, {:atom, l, true}]}, {nil, l}}
-       ]},
-      {:call, l, {:remote, l, {:atom, l, :persistent_term}, {:atom, l, :erase}}, [key_form]}
-    ]
-  end
+  defp runtime_config_hook_forms, do: @runtime_config_hook_forms
 
   # Run runtime.exs and the Config Providers for the version being installed.
   #
@@ -1190,6 +1283,156 @@ defmodule Deployer.HotUpgrade.Application do
   rescue
     _ -> inspect(term)
   end
+
+  # A release can carry the jellyfish.json of an upgrade that is not this one, when it was
+  # built in a directory that built others before:
+  #
+  #   * under the library of a previous version, which a rebar3 release packs with its own.
+  #     One of the project would not match the versions of this upgrade, and turn it into
+  #     a full deployment
+  #   * for a dependency that moved in an earlier release and not since, which would be
+  #     reported as moving in every release
+  #
+  # Only the libraries the new release lists count, and among those, a dependency the
+  # running release does not already have at that version. A release whose .rel cannot be
+  # read is checked as it always was, with every file
+  defp jellyfish_files_of_upgrade(files, %Check{} = check) do
+    new_libs = release_libs(check.new_path, check.name, check.to_version)
+    running_libs = release_libs(check.current_path, check.name, check.from_version)
+
+    {kept, ignored} =
+      Enum.split_with(files, fn file ->
+        in_release?(file, new_libs) and not already_running?(file, running_libs)
+      end)
+
+    if ignored != [] do
+      Logger.info(
+        "Ignoring the jellyfish.json of another upgrade: " <>
+          Enum.map_join(ignored, ", ", &Path.relative_to(&1, check.new_path))
+      )
+    end
+
+    kept
+  end
+
+  defp in_release?(_file, nil), do: true
+
+  # .../lib/<app>-<vsn>/ebin/jellyfish.json
+  defp in_release?(file, libs),
+    do: MapSet.member?(libs, file |> Path.dirname() |> Path.dirname() |> Path.basename())
+
+  defp already_running?(_file, nil), do: false
+
+  defp already_running?(file, libs) do
+    case Jellyfish.decode_jellyfish_file(file) do
+      %{type: "dependency", name: name, to: to} when is_binary(name) and is_binary(to) ->
+        MapSet.member?(libs, "#{name}-#{to}")
+
+      _project ->
+        false
+    end
+  rescue
+    # A file that cannot be read is left to check_jellyfish_files/3
+    _error -> false
+  end
+
+  # A release that says it can be hot-upgraded, and brings another runtime: a different
+  # ERTS, or a new version of an application nobody wrote an appup for, as Elixir itself when
+  # the release was built with a newer one. No relup can be built for it, and finding that
+  # out while installing would ghost the version and leave every instance where it is. It
+  # is a full deployment, and is told so here.
+  #
+  # An application the release adds needs no appup. A release whose .rel cannot be read is
+  # not judged, and takes the path it always took
+  @spec check_runtime(Check.t()) :: :ok | {:error, {:runtime_changed | :no_appup, any()}}
+  defp check_runtime(%Check{} = check) do
+    with %{} = new <- release_contents(check.new_path, check.name, check.to_version),
+         %{} = running <- release_contents(check.current_path, check.name, check.from_version) do
+      cond do
+        new.erts != running.erts ->
+          {:error, {:runtime_changed, "erts #{running.erts} -> #{new.erts}"}}
+
+        (missing = applications_without_appup(check.new_path, running.apps, new.apps)) != [] ->
+          {:error, {:no_appup, missing}}
+
+        true ->
+          :ok
+      end
+    else
+      _unreadable -> :ok
+    end
+  end
+
+  defp applications_without_appup(new_path, running_apps, new_apps) do
+    for {app, to} <- Enum.sort(new_apps),
+        from = running_apps[app],
+        from not in [nil, to],
+        not appup_from?("#{new_path}/lib/#{app}-#{to}/ebin/#{app}.appup", from),
+        do: "#{app} #{from} -> #{to}"
+  end
+
+  # An appup names the versions it upgrades from as they are, or as a regular expression,
+  # which is what the applications of OTP do
+  defp appup_from?(appup, from) do
+    case :file.consult(appup) do
+      {:ok, [{_to, upgrade_from, _downgrade_to}]} when is_list(upgrade_from) ->
+        Enum.any?(upgrade_from, fn
+          {version, _script} when is_binary(version) ->
+            Regex.match?(Regex.compile!(version), from)
+
+          {version, _script} ->
+            to_string(version) == from
+
+          _other ->
+            false
+        end)
+
+      _no_appup ->
+        false
+    end
+  rescue
+    _error -> false
+  end
+
+  # The "<app>-<vsn>" libraries of a release, see release_contents/3
+  @spec release_libs(String.t() | nil, String.t() | nil, any()) :: MapSet.t() | nil
+  defp release_libs(path, name, version) do
+    case release_contents(path, name, version) do
+      %{apps: apps} -> MapSet.new(apps, fn {app, app_version} -> "#{app}-#{app_version}" end)
+      nil -> nil
+    end
+  end
+
+  # The ERTS and the applications of a release, from its .rel. It is in the directory of the
+  # version in a release as it is built, and next to it, with the version in its name,
+  # once DeployEx has installed it. nil when there is none that is the one of this version
+  @spec release_contents(String.t() | nil, String.t() | nil, any()) ::
+          %{erts: String.t(), apps: %{String.t() => String.t()}} | nil
+  defp release_contents(path, name, version) when is_binary(path) and is_binary(name) do
+    version = to_string(version)
+
+    Enum.find_value(
+      [
+        "#{path}/releases/#{version}/#{name}.rel",
+        "#{path}/releases/#{name}-#{version}.rel",
+        "#{path}/releases/#{name}.rel"
+      ],
+      fn rel_file ->
+        with {:ok, [{:release, {_name, rel_version}, {:erts, erts}, apps}]} <-
+               :file.consult(rel_file),
+             true <- to_string(rel_version) == version do
+          %{
+            erts: to_string(erts),
+            apps: Map.new(apps, fn app -> {to_string(elem(app, 0)), to_string(elem(app, 1))} end)
+          }
+        else
+          _unreadable -> nil
+        end
+      end
+    )
+  end
+
+  defp release_contents(_path, _name, _version), do: nil
 
   defp check_jellyfish_files(files, from_version, to_version) do
     response =
