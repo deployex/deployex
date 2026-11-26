@@ -69,11 +69,16 @@ defmodule Sentinel.Config.Upgradable do
   defp auth_from_app_env do
     config = Application.get_env(:deployex_web, DeployexWeb.OAuth, [])
 
-    if Enum.any?([:client_id, :redirect_uri, :allowlist], &Keyword.has_key?(config, &1)) do
+    if Enum.any?(
+         [:client_id, :redirect_uri, :team_domain, :audience, :allowlist],
+         &Keyword.has_key?(config, &1)
+       ) do
       %Yaml.Auth{
         provider: Keyword.get(config, :provider, DeployexWeb.OAuth.Provider.GitHub),
         client_id: Keyword.get(config, :client_id),
         redirect_uri: Keyword.get(config, :redirect_uri),
+        team_domain: Keyword.get(config, :team_domain),
+        audience: Keyword.get(config, :audience),
         allowlist: Keyword.get(config, :allowlist, %Yaml.Auth{}.allowlist)
       }
     end

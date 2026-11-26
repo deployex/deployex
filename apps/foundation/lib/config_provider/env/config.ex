@@ -179,6 +179,8 @@ defmodule Foundation.ConfigProvider.Env.Config do
                    provider: yaml_config.auth.provider,
                    client_id: yaml_config.auth.client_id,
                    redirect_uri: yaml_config.auth.redirect_uri,
+                   team_domain: yaml_config.auth.team_domain,
+                   audience: yaml_config.auth.audience,
                    allowlist: yaml_config.auth.allowlist
                  ]}
               ]

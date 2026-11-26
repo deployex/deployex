@@ -5,7 +5,7 @@ defmodule DeployexWeb.UserAuth do
   import Plug.Conn
   import Phoenix.Controller
 
-  alias DeployexWeb.OAuth.{Allowlist, Config}
+  alias DeployexWeb.OAuth.{Allowlist, CloudflareAccess, Config}
   alias Foundation.Accounts
   alias Sentinel.Config.Watcher
 
@@ -118,10 +118,18 @@ defmodule DeployexWeb.UserAuth do
   def fetch_current_user(conn, _opts) do
     {user_token, conn} = ensure_user_token(conn)
 
+    # Behind Cloudflare Access the request says who the user is, and it is put in the
+    # session for the LiveViews. A password login made without it comes first
+    {conn, access_user} =
+      if user_token, do: {conn, nil}, else: CloudflareAccess.authenticate(conn)
+
     user =
       cond do
         user_token ->
           Accounts.get_user_by_session_token(user_token)
+
+        access_user ->
+          access_user
 
         oauth_token = get_session(conn, :oauth_token) ->
           oauth_user(oauth_token)
@@ -270,6 +278,7 @@ defmodule DeployexWeb.UserAuth do
     Phoenix.Component.assign_new(socket, :current_user, fn ->
       cond do
         user_token = session["user_token"] -> Accounts.get_user_by_session_token(user_token)
+        access_user = CloudflareAccess.user_from_session(session) -> access_user
         oauth_token = session["oauth_token"] -> oauth_user(oauth_token)
         true -> nil
       end
