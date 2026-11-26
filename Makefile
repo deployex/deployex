@@ -126,7 +126,7 @@ dev-tls: ## Create TLS distribution certificates and /tmp/inet_tls.conf for make
 	@test -f $(TLS_CONF) && echo "TLS distribution ready: $(TLS_CONF). make start now uses it."
 
 
-docker-up: ## Build and start DeployEx and nginx in containers: dashboard on :5001, the app on :8080
+docker-up: ## Build and start DeployEx and HAProxy in containers: dashboard on :5001, the app on :8080
 	@mkdir -p devops/docker/bucket
 	$(DOCKER_COMPOSE) up -d --build
 	@echo "DeployEx: http://localhost:5001 (admin / deployex). Publish an app with: make docker-app"
@@ -150,7 +150,7 @@ docker-clean: docker-down ## Remove the containers, the bucket and the build vol
 	rm -rf devops/docker/bucket
 	-docker volume rm "$(APP_NAME)_build" "$(APP_NAME)_deps"
 
-k8s-up: ## Create a local kind cluster and run DeployEx and nginx in one pod: dashboard on :5011, the app on :8090
+k8s-up: ## Create a local kind cluster and run DeployEx and HAProxy in one pod: dashboard on :5011, the app on :8090
 	devops/docker/kubernetes/up.sh
 
 k8s-logs: ## Follow the output of the DeployEx container of the pod, which has the logs of the app too
