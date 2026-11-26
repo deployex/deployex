@@ -341,6 +341,7 @@ defmodule Deployer.Monitor.Application do
      |> Map.put_new(:reported_pre_commands, [])
      |> Map.put_new(:last_crash_at, nil)
      |> Map.put_new(:watchdog_restart_count, 0)
+     |> Map.put_new(:liveness_restart_count, 0)
      |> Map.put_new(:restarts, [])
      |> Map.put_new_lazy(:started_at, fn -> Common.monotonic_to_utc(state.start_time) end)
      |> Map.put_new_lazy(:readiness, fn -> %Readiness{min_ready_ms: state.timeout_app_ready} end)
@@ -1041,11 +1042,15 @@ defmodule Deployer.Monitor.Application do
 
     stop_application(state)
 
-    # Update the number of force restarts, and of the ones the watchdog asked for
+    # Update the number of force restarts, and of the ones the watchdog or the liveness probe
+    # asked for, so what is left of the total is what an operator asked for
     force_restart_count = state.force_restart_count + 1
 
     watchdog_restart_count =
       Map.get(state, :watchdog_restart_count, 0) + if(cause == :watchdog, do: 1, else: 0)
+
+    liveness_restart_count =
+      Map.get(state, :liveness_restart_count, 0) + if(cause == :liveness, do: 1, else: 0)
 
     # Trigger restart with backoff time of 1 second
     trigger_run_service(state.sname, 1_000)
@@ -1054,6 +1059,7 @@ defmodule Deployer.Monitor.Application do
     # taken for a crash, which would start it a second time
     %{state | current_pid: nil, force_restart_count: force_restart_count, status: :starting}
     |> Map.put(:watchdog_restart_count, watchdog_restart_count)
+    |> Map.put(:liveness_restart_count, liveness_restart_count)
     |> add_restart(restart)
     |> update_non_blocking_state()
   end
