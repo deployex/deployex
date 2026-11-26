@@ -5,6 +5,7 @@ defmodule DeployexWeb.Instances do
   """
 
   alias Foundation.Catalog
+  alias Foundation.Common
   alias Foundation.Rpc
 
   @rpc_timeout 1_000
@@ -98,11 +99,8 @@ defmodule DeployexWeb.Instances do
   end
 
   @doc """
-  Returns this host's name.
+  Returns this host's name: what goes after the `@` in the name of the nodes it runs.
   """
   @spec host_name() :: String.t()
-  def host_name do
-    {:ok, name} = :inet.gethostname()
-    to_string(name)
-  end
+  def host_name, do: Common.node_host()
 end

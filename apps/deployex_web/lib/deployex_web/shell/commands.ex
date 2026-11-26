@@ -95,7 +95,7 @@ defmodule DeployexWeb.Shell.Commands do
      unset BINDIR ELIXIR_ERL_OPTIONS ROOTDIR
      export PATH=#{path}
      erl #{remsh_name()}-remsh #{sname}@#{hostname} -setcookie #{cookie} #{ssl_options}
-     """, "erl -remsh #{sname}@#{hostname}"}
+     """, "erl #{remsh_name()}-remsh #{sname}@#{hostname}"}
   end
 
   defp remote_commands(sname, "erlang", _hostname, bin_path, path, cookie, ssl_options) do

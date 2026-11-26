@@ -194,53 +194,64 @@ defmodule Foundation.Common do
   What goes after the `@` in the name of the nodes of this host: the host name with short
   names, and with long names what this node was given, an address for instance.
 
+  `long_names?` defaults to `long_names?/0` and is there so a test can drive both branches.
+
   ## Examples
 
     iex> {:ok, host_name} = :inet.gethostname()
     ...> Foundation.Common.node_host() == to_string(host_name)
     true
+    iex> Foundation.Common.node_host(true)
+    "nohost"
   """
-  @spec node_host() :: String.t()
-  def node_host do
-    if long_names?() do
-      Node.self() |> Atom.to_string() |> String.split("@") |> List.last()
-    else
-      {:ok, host_name} = :inet.gethostname()
-      to_string(host_name)
-    end
+  @spec node_host(long_names? :: boolean()) :: String.t()
+  def node_host(long_names? \\ long_names?())
+
+  def node_host(true), do: Node.self() |> Atom.to_string() |> String.split("@") |> List.last()
+
+  def node_host(false) do
+    {:ok, host_name} = :inet.gethostname()
+    to_string(host_name)
   end
 
   @doc """
   The lines of a shell script that name the node of an application for an Elixir or an
   Erlang release: `RELEASE_NODE`, and `RELEASE_DISTRIBUTION` with long names.
 
+  `long_names?` defaults to `long_names?/0` and is there so a test can drive both branches.
+
   ## Examples
 
     iex> Foundation.Common.release_node_env("myapp-abc123")
     "export RELEASE_NODE=myapp-abc123"
+    iex> Foundation.Common.release_node_env("myapp-abc123", true)
+    "export RELEASE_DISTRIBUTION=name\\nexport RELEASE_NODE=myapp-abc123@nohost"
   """
-  @spec release_node_env(String.t()) :: String.t()
-  def release_node_env(sname) do
-    if long_names?() do
-      "export RELEASE_DISTRIBUTION=name\nexport RELEASE_NODE=#{sname}@#{node_host()}"
-    else
-      "export RELEASE_NODE=#{sname}"
-    end
-  end
+  @spec release_node_env(String.t(), long_names? :: boolean()) :: String.t()
+  def release_node_env(sname, long_names? \\ long_names?())
+
+  def release_node_env(sname, true),
+    do: "export RELEASE_DISTRIBUTION=name\nexport RELEASE_NODE=#{sname}@#{node_host(true)}"
+
+  def release_node_env(sname, false), do: "export RELEASE_NODE=#{sname}"
 
   @doc """
   The argument of `erl` that names a node: `-sname`, or `-name` with the host when this
   node has long names.
 
+  `long_names?` defaults to `long_names?/0` and is there so a test can drive both branches.
+
   ## Examples
 
     iex> Foundation.Common.erl_name_argument("myapp-abc123")
     "-sname myapp-abc123"
+    iex> Foundation.Common.erl_name_argument("myapp-abc123", true)
+    "-name myapp-abc123@nohost"
   """
-  @spec erl_name_argument(String.t()) :: String.t()
-  def erl_name_argument(sname) do
-    if long_names?(), do: "-name #{sname}@#{node_host()}", else: "-sname #{sname}"
-  end
+  @spec erl_name_argument(String.t(), long_names? :: boolean()) :: String.t()
+  def erl_name_argument(sname, long_names? \\ long_names?())
+  def erl_name_argument(sname, true), do: "-name #{sname}@#{node_host(true)}"
+  def erl_name_argument(sname, false), do: "-sname #{sname}"
 
   @doc """
   This function calls gen_server with try catch
