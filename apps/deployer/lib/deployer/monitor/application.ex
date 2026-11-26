@@ -586,7 +586,7 @@ defmodule Deployer.Monitor.Application do
     #{app_env}
     #{ports_env}
     export PATH=#{path}
-    export RELEASE_NODE=#{sname}
+    #{Common.release_node_env(sname)}
     #{executable_path} #{command}
     """
   end
@@ -620,7 +620,7 @@ defmodule Deployer.Monitor.Application do
     #{ports_env}
     export PATH=#{path}
     export RELX_REPLACE_OS_VARS=true
-    export RELEASE_NODE=#{sname}
+    #{Common.release_node_env(sname)}
     export RELEASE_COOKIE=#{Common.shell_quote(cookie)}
     export RELEASE_SSL_OPTIONS=\"#{ssl_options}\"
     #{executable_path} foreground
@@ -663,7 +663,7 @@ defmodule Deployer.Monitor.Application do
       -eval "$PACKAGE@@main:run($PACKAGE)" \
       -noshell \
       #{ssl_options} \
-      -sname #{sname} \
+      #{Common.erl_name_argument(sname)} \
       -setcookie #{Common.shell_quote(cookie)}
     """
   end

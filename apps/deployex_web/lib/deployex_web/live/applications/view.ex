@@ -96,7 +96,7 @@ defmodule DeployexWeb.ApplicationsLive.View do
     instances =
       Enum.map(status.children, &instance(&1, status.language, Map.get(usage, &1.node, %{}), now))
 
-    running = Enum.count(status.children, &running?/1)
+    running = Enum.count(status.children, &Deployer.Status.running?/1)
     total = max(status.replicas, length(status.children))
 
     tls = tls(status, @tls_warn_days)
@@ -153,7 +153,7 @@ defmodule DeployexWeb.ApplicationsLive.View do
       node: child.node && to_string(child.node),
       version: child.version,
       status: instance_status(child.status),
-      running: running?(child),
+      running: Deployer.Status.running?(child),
       otp: child.otp,
       restarts: restarts([child], now),
       ports: Enum.map(List.wrap(child.ports), &Map.take(&1, [:key, :base])),
@@ -337,15 +337,6 @@ defmodule DeployexWeb.ApplicationsLive.View do
     }
   end
 
-  @doc """
-  Whether an instance runs. A hot upgrade's pre_commands run while it runs, and the status keeps it
-  connected.
-  """
-  @spec running?(map()) :: boolean()
-  def running?(%{status: :running}), do: true
-  def running?(%{status: :pre_commands, otp: :connected}), do: true
-  def running?(_child), do: false
-
   # The problems that show under the row, so they need no open app: a TLS certificate within 7 days, an
   # instance at its restart threshold, and a running instance that DeployEx cannot reach over OTP
   defp urgent(tls, instances, unreachable) do
@@ -522,7 +513,7 @@ defmodule DeployexWeb.ApplicationsLive.View do
   defp instance_status(_status), do: %{text: "stopped", tone: :error}
 
   defp sub(status) do
-    child = Enum.find(status.children, &running?/1) || List.first(status.children)
+    child = Enum.find(status.children, &Deployer.Status.running?/1) || List.first(status.children)
 
     parts =
       case child do
@@ -549,7 +540,7 @@ defmodule DeployexWeb.ApplicationsLive.View do
   defp pinned(_config), do: nil
 
   defp running_version(status) do
-    case Enum.find(status.children, &running?/1) do
+    case Enum.find(status.children, &Deployer.Status.running?/1) do
       %{version: version} when is_binary(version) -> version
       _ -> "The current version"
     end

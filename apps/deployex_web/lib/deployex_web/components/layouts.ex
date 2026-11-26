@@ -23,6 +23,7 @@ defmodule DeployexWeb.Layouts do
 
   @nav_items [
     %{path: "/applications", label: "Applications", icon: "home"},
+    %{path: "/fleet", label: "Fleet", icon: "signal"},
     # One item for the Logs page, which switches between Live and History itself
     %{path: "/logs/live", label: "Logs", icon: "lines", section: "/logs/"},
     %{path: "/embedded-observer", label: "Observer Web", icon: "observer-web"},
