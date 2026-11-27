@@ -67,6 +67,7 @@ Either way you also get one place for the logs, a shell, the processes and the v
 Datadog, Honeycomb, Grafana and the like keep doing what they are for: history, alerts, traces across services.
 DeployEx gives you the fast view that sits next to the deployment, with nothing to instrument and nothing to set up: the memory, processes, ports and atoms of each node, its applications and its processes, the live logs, a shell.
 It is what you open to see what a node is doing right now, and it works with those tools: a hot upgrade moves the version on traces and logs, so they keep telling one release from the next.
+DeployEx's own request latency and VM metrics are also at `GET /metrics`, in Prometheus exposition format, for your existing scraper to pick up instead of only living in the dashboard.
 
 What it asks for:
 
@@ -136,6 +137,7 @@ What DeployEx adds to it is in [Hot-Upgrades](guides/docs/hot-upgrades/README.md
   - IEx shell for monitored Elixir apps and DeployEx.
   - Erlang shell for monitored Gleam/Erlang apps.
 - Provides monitoring and restart mechanisms for host memory thresholds and beam statistics, including port, atom, and process metrics, for monitored applications and for DeployEx itself.
+- Exposes its own request latency and VM metrics at `GET /metrics`, in Prometheus exposition format.
 - Supports access to live log files (stdout and stderr) for both monitored apps and DeployEx.
 - Supports observability for all connected applications via [Observer Web][owb].
 - Supports safe tracing for all connected applications.

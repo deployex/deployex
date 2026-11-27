@@ -24,10 +24,20 @@ defmodule DeployexWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :metrics do
+    plug :accepts, ["text"]
+  end
+
   # health check
   scope "/", DeployexWeb do
     pipe_through :api
     get "/health", HealthController, :health
+  end
+
+  # Scraped by Prometheus or a compatible collector, see DeployexWeb.Telemetry.prometheus_metrics/0
+  scope "/", DeployexWeb do
+    pipe_through :metrics
+    get "/metrics", MetricsController, :show
   end
 
   ## Authentication routes
