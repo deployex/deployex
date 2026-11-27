@@ -297,7 +297,7 @@ DeployEx retrieves its secrets from a Secret Manager (AWS, GCP, or local) throug
 
 ```yaml
 # Secrets Management
-secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp, env, 1password-connect or 1password-cli
+secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp, env, directory, 1password-connect or 1password-cli
 secrets_path: "deployex-myphoenixapp-prod-secrets"       # Secret path to retrieve from
 ```
 

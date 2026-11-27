@@ -750,6 +750,7 @@ defmodule Foundation.Yaml do
   defp secrets_adapter("aws"), do: Foundation.ConfigProvider.Secrets.Aws
   defp secrets_adapter("gcp"), do: Foundation.ConfigProvider.Secrets.Gcp
   defp secrets_adapter("env"), do: Foundation.ConfigProvider.Secrets.Env
+  defp secrets_adapter("directory"), do: Foundation.ConfigProvider.Secrets.Directory
 
   defp secrets_adapter("1password-connect"),
     do: Foundation.ConfigProvider.Secrets.OnePasswordConnect
@@ -889,31 +890,42 @@ defmodule Foundation.Yaml do
   defp parse_application_secrets(nil), do: nil
 
   defp parse_application_secrets(%{} = data) do
+    adapter = data["adapter"]
+
     %Foundation.Yaml.Secrets{
-      adapter: application_secrets_adapter(data["adapter"]),
-      path: application_secrets_path(data["path"])
+      adapter: application_secrets_adapter(adapter),
+      path: application_secrets_path(adapter, data["path"])
     }
   end
 
   defp parse_application_secrets(value),
     do: raise("application secrets #{inspect(value)} not supported, expected adapter and path")
 
-  # The adapters that read one item, whose fields become the environment of the application
+  # The adapters that read the secrets of one application: a 1Password item, whose fields
+  # become its environment, or a directory of files, one secret per file
   defp application_secrets_adapter("1password-connect"),
     do: Foundation.ConfigProvider.Secrets.OnePasswordConnect
 
   defp application_secrets_adapter("1password-cli"),
     do: Foundation.ConfigProvider.Secrets.OnePasswordCli
 
+  defp application_secrets_adapter("directory"),
+    do: Foundation.ConfigProvider.Secrets.Directory
+
   defp application_secrets_adapter(adapter),
     do:
       raise(
         "application secrets adapter #{inspect(adapter)} not supported, " <>
-          "expected 1password-connect or 1password-cli"
+          "expected 1password-connect, 1password-cli or directory"
       )
 
   # Checked when the YAML loads, so a path that can never be read is not found at the first start
-  defp application_secrets_path(path) do
+  defp application_secrets_path("directory", path) when is_binary(path) and path != "", do: path
+
+  defp application_secrets_path("directory", path),
+    do: raise("application secrets path #{inspect(path)} not supported, expected a directory")
+
+  defp application_secrets_path(_adapter, path) do
     case Foundation.OnePassword.parse_path(path) do
       {:ok, _vault, _item} -> path
       {:error, _reason} -> raise(Foundation.OnePassword.path_error(path))
