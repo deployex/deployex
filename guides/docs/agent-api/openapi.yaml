@@ -1,0 +1,782 @@
+openapi: 3.1.0
+info:
+  title: DeployEx Agent API
+  version: "1.0"
+  description: |
+    The HTTP resources of the DeployEx Agent API: read a host's monitored apps, their version
+    history and relups, and operate them (restart, clear ghosted versions, set mode) without the
+    dashboard.
+
+    This describes the HTTP resources only. The event stream (a Phoenix Channels socket at
+    `/v1/socket`) is not representable in OpenAPI and stays documented in
+    [README.md](README.md#event-stream).
+
+    Every path needs a bearer token in the `Authorization` header. A token has one or both
+    scopes, `read` and `operate`; `operate` does not include `read`. See
+    [README.md](README.md#turn-it-on) for how tokens are made and configured. The API is off by
+    default (`agent_api.enabled: false`).
+  license:
+    name: MIT
+    url: https://github.com/deployex/deployex/blob/main/LICENSE.md
+externalDocs:
+  description: The full Agent API guide, including how to turn it on and the event stream
+  url: https://github.com/deployex/deployex/blob/main/guides/docs/agent-api/README.md
+
+servers:
+  - url: "http://{host}:{port}"
+    description: Plain HTTP. Reachable only from the hosts allowed to call it, see the guide.
+    variables:
+      host:
+        default: localhost
+      port:
+        default: "5002"
+  - url: "https://{host}:{port}"
+    description: HTTPS, once `certfile` and `keyfile` are set in the `agent_api` YAML section.
+    variables:
+      host:
+        default: localhost
+      port:
+        default: "5002"
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: node
+    description: DeployEx itself, as a node distinct from the apps it monitors
+  - name: apps
+    description: The apps DeployEx monitors on this host
+  - name: logs
+    description: Stdout/stderr lines DeployEx has kept for a monitored app's instances
+  - name: operate
+    description: Actions that change state, equivalent to a dashboard button
+
+paths:
+  /v1/node:
+    get:
+      tags: [node]
+      summary: DeployEx itself and the host it runs on
+      description: Requires a token with the `read` scope.
+      operationId: getNode
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Node"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/node/versions:
+    get:
+      tags: [node]
+      summary: The hot upgrades DeployEx applied to itself
+      description: |
+        Requires a token with the `read` scope. A full installation of DeployEx is not
+        recorded, only the hot upgrades it applied to itself.
+      operationId: getNodeVersions
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [versions]
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VersionEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/node/relups/{from_version}/{to_version}:
+    get:
+      tags: [node]
+      summary: The relup DeployEx kept for a hot upgrade of itself
+      description: Requires a token with the `read` scope.
+      operationId: getNodeRelup
+      parameters:
+        - $ref: "#/components/parameters/FromVersion"
+        - $ref: "#/components/parameters/ToVersion"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Relup"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No relup was kept for that pair of versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps:
+    get:
+      tags: [apps]
+      summary: Every app this host monitors
+      description: Requires a token with the `read` scope.
+      operationId: listApps
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apps]
+                properties:
+                  apps:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AppSnapshot"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps/{name}:
+    get:
+      tags: [apps]
+      summary: One monitored app
+      description: Requires a token with the `read` scope.
+      operationId: getApp
+      parameters:
+        - $ref: "#/components/parameters/AppName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppSnapshot"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/AppNotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps/{name}/versions:
+    get:
+      tags: [apps]
+      summary: The version history of one app
+      description: Requires a token with the `read` scope.
+      operationId: getAppVersions
+      parameters:
+        - $ref: "#/components/parameters/AppName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [versions]
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VersionEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/AppNotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps/{name}/relups/{from_version}/{to_version}:
+    get:
+      tags: [apps]
+      summary: The relup DeployEx kept for a hot upgrade of one app
+      description: Requires a token with the `read` scope.
+      operationId: getAppRelup
+      parameters:
+        - $ref: "#/components/parameters/AppName"
+        - $ref: "#/components/parameters/FromVersion"
+        - $ref: "#/components/parameters/ToVersion"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Relup"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: The app is not found, or no relup was kept for that pair of versions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps/{name}/ghosted:
+    get:
+      tags: [apps]
+      summary: The ghosted versions of one app
+      description: Requires a token with the `read` scope.
+      operationId: getAppGhosted
+      parameters:
+        - $ref: "#/components/parameters/AppName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GhostedVersions"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/AppNotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps/{name}/logs:
+    get:
+      tags: [logs]
+      summary: The stdout or stderr lines of one instance of an app
+      description: |
+        Requires a token with the `read` scope. DeployEx keeps lines in memory for
+        `logs_retention_time_ms` (one hour by default); a restart of DeployEx clears them.
+        To poll, send the last `timestamp` received as `since` on the next call, and drop
+        lines with that exact timestamp already seen.
+      operationId: getAppLogs
+      parameters:
+        - $ref: "#/components/parameters/AppName"
+        - name: sname
+          in: query
+          required: true
+          description: An instance's sname, from `GET /v1/apps/{name}` or a version's history/ghosted entry
+          schema:
+            type: string
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [stdout, stderr]
+        - name: since
+          in: query
+          required: false
+          description: Return lines at or after this time. Without it, returns the lines DeployEx keeps
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of lines to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 1000
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogHistory"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: The app is not monitored, the sname is not one of its instances, or no logs are kept for it
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Missing sname, an invalid type, a since that is not ISO 8601 with an offset, or an invalid limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps/{name}/restart:
+    post:
+      tags: [operate]
+      summary: Full Restart - stop every instance and deploy each again
+      description: |
+        Requires a token with the `operate` scope. The app is down until its first instance is
+        back. Runs after the reply, so `202` means accepted, not finished.
+      operationId: restartApp
+      parameters:
+        - $ref: "#/components/parameters/AppName"
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, restart]
+                properties:
+                  name:
+                    type: string
+                  restart:
+                    type: string
+                    enum: [accepted]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/AppNotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps/{name}/ghosted/{version}:
+    delete:
+      tags: [operate]
+      summary: Remove one ghosted version
+      description: Requires a token with the `operate` scope.
+      operationId: removeGhostedVersion
+      parameters:
+        - $ref: "#/components/parameters/AppName"
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK, with the ghosted versions that remain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GhostedVersions"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: The app is not found, or the version is not ghosted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps/{name}/ghosted/clear:
+    post:
+      tags: [operate]
+      summary: Clear every ghosted version of an app
+      description: |
+        Requires a token with the `operate` scope. A plain `DELETE /ghosted` is not used:
+        Plug drops an empty path segment, which would otherwise collide with this route.
+      operationId: clearGhostedVersions
+      parameters:
+        - $ref: "#/components/parameters/AppName"
+      responses:
+        "200":
+          description: OK, with an empty ghosted list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GhostedVersions"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/AppNotFound"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/apps/{name}/mode:
+    put:
+      tags: [operate]
+      summary: Set an app's deployment mode
+      description: |
+        Requires a token with the `operate` scope. `GET /v1/apps/{name}` shows the new mode
+        within about one second, at the next status refresh. A `503` here can still set the
+        mode later, so read `GET /v1/apps/{name}` before retrying.
+      operationId: setAppMode
+      parameters:
+        - $ref: "#/components/parameters/AppName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetModeRequest"
+            examples:
+              automatic:
+                value: { mode: automatic }
+              manual:
+                value: { mode: manual, version: "1.4.1" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, mode, manual_version]
+                properties:
+                  name:
+                    type: string
+                  mode:
+                    type: string
+                    enum: [automatic, manual]
+                  manual_version:
+                    type: [string, "null"]
+        "400":
+          description: The body is not valid JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/AppNotFound"
+        "406":
+          description: The Accept header does not accept JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: The body is larger than 4 KB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: An unknown mode, or a manual version not in the app's history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Send as `Authorization: Bearer <token>`. DeployEx keeps only the SHA-256 hash of each
+        token, matched against the `DEPLOYEX_API_TOKENS` secret. Each entry carries a name and
+        one or both scopes, `read` and `operate`.
+
+  parameters:
+    AppName:
+      name: name
+      in: path
+      required: true
+      description: The app's name, as it appears in `GET /v1/apps`
+      schema:
+        type: string
+    FromVersion:
+      name: from_version
+      in: path
+      required: true
+      schema:
+        type: string
+    ToVersion:
+      name: to_version
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: No token, or a token not in `DEPLOYEX_API_TOKENS`
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: The token does not have the scope the path needs
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unavailable:
+      description: DeployEx did not answer, for example while it starts
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    AppNotFound:
+      description: The host does not monitor an app with this name
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [errors]
+      properties:
+        errors:
+          type: object
+          required: [detail]
+          properties:
+            detail:
+              type: string
+
+    HostInfo:
+      type: object
+      nullable: true
+      properties:
+        os:
+          type: string
+        description:
+          type: string
+        uptime_seconds:
+          type: integer
+        cpus:
+          type: integer
+        cpu_percent:
+          type: number
+          nullable: true
+        memory_total:
+          type: integer
+        memory_free:
+          type: integer
+
+    Node:
+      type: object
+      required: [node, version, started_at, otp_version, elixir_version, host]
+      properties:
+        node:
+          type: string
+        version:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        otp_version:
+          type: string
+        elixir_version:
+          type: string
+        host:
+          $ref: "#/components/schemas/HostInfo"
+
+    Port:
+      type: object
+      properties:
+        key:
+          type: string
+        port:
+          type: integer
+
+    Instance:
+      type: object
+      properties:
+        sname:
+          type: string
+        node:
+          type: string
+        version:
+          type: string
+        status:
+          type: string
+        otp:
+          type: string
+        last_deployment:
+          type: string
+          nullable: true
+        crash_restart_count:
+          type: integer
+        force_restart_count:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        ports:
+          type: array
+          items:
+            $ref: "#/components/schemas/Port"
+
+    AppSnapshot:
+      type: object
+      required: [name, language, replicas, mode, manual_version, ghosted_versions, instances]
+      properties:
+        name:
+          type: string
+        language:
+          type: string
+        replicas:
+          type: integer
+        mode:
+          type: string
+          enum: [automatic, manual]
+          nullable: true
+        manual_version:
+          type: string
+          nullable: true
+        ghosted_versions:
+          type: array
+          items:
+            type: string
+        instances:
+          type: array
+          items:
+            $ref: "#/components/schemas/Instance"
+
+    GhostedVersions:
+      type: object
+      required: [ghosted_versions]
+      properties:
+        ghosted_versions:
+          type: array
+          items:
+            type: string
+
+    VersionEntry:
+      type: object
+      properties:
+        version:
+          type: string
+        hash:
+          type: string
+          nullable: true
+        sname:
+          type: string
+          nullable: true
+        deployment:
+          type: string
+        hot_upgrade_config_change:
+          type: boolean
+          nullable: true
+        from_version:
+          type: string
+          nullable: true
+        inserted_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    RelupApplication:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+
+    RelupStep:
+      type: object
+      properties:
+        meaning:
+          type: string
+
+    Relup:
+      type: object
+      required: [from_version, to_version, inserted_at, summary, steps, relup]
+      properties:
+        from_version:
+          type: string
+        to_version:
+          type: string
+        inserted_at:
+          type: string
+          format: date-time
+        summary:
+          type: object
+          properties:
+            applications:
+              type: array
+              items:
+                $ref: "#/components/schemas/RelupApplication"
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelupStep"
+        version_update:
+          type: object
+          nullable: true
+        protocols:
+          type: object
+          nullable: true
+        pipelines:
+          type: array
+          nullable: true
+        jobs:
+          type: array
+          nullable: true
+        relup:
+          type: string
+
+    LogLine:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        line:
+          type: string
+
+    LogHistory:
+      type: object
+      required: [logs, truncated]
+      properties:
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/LogLine"
+        truncated:
+          type: boolean
+
+    SetModeRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [automatic, manual]
+        version:
+          type: string
+          description: Required when mode is manual. Must be a version in the app's history
+      oneOf:
+        - properties: { mode: { const: automatic } }
+        - required: [version]
+          properties: { mode: { const: manual } }
