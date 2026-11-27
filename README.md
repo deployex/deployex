@@ -2,7 +2,9 @@
 
 > Who supervises the supervisor (of your application)?
 
-![Development](https://img.shields.io/badge/STATUS-Development%20v1.0.x-blue) [![Build Status](https://github.com/deployex/deployex/workflows/Deployex%20CI/badge.svg)](https://github.com/deployex/deployex/actions/workflows/pr-ci.yml)
+![Development](https://img.shields.io/badge/STATUS-Development%20v1.0.x-blue) [![Build Status](https://github.com/deployex/deployex/workflows/Deployex%20CI/badge.svg)](https://github.com/deployex/deployex/actions/workflows/pr-ci.yaml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md) [![Coverage](https://img.shields.io/badge/coverage%20gate-94%25-success)](.github/workflows/pr-ci.yaml) [![OTP](https://img.shields.io/badge/OTP-28%20%7C%2029-informational)](.tool-versions)
+
+Every pull request runs the full test suite with a 94% coverage gate, Credo in strict mode, Dialyzer, Sobelow, and a `mix hex.audit` / `mix deps.audit` dependency check, see [`pr-ci.yaml`](.github/workflows/pr-ci.yaml).
 
 DeployEx is a lightweight tool that deploys and runs Beam applications (Elixir, Gleam and Erlang) from their release package. It executes a full deployment or a hot-upgrade, depending on the package's content, and leverages OTP distribution for monitoring and data extraction. It runs where your application runs: as a service on a host, bare metal or a virtual machine, or inside a container, on Docker or Kubernetes.
 
