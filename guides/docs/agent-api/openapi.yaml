@@ -353,12 +353,18 @@ paths:
                   restart:
                     type: string
                     enum: [accepted]
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/AppNotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "503":
           $ref: "#/components/responses/Unavailable"
 
@@ -382,6 +388,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GhostedVersions"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -392,6 +400,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "503":
           $ref: "#/components/responses/Unavailable"
 
@@ -412,12 +424,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GhostedVersions"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/AppNotFound"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "503":
           $ref: "#/components/responses/Unavailable"
 
@@ -460,11 +478,7 @@ paths:
                   manual_version:
                     type: [string, "null"]
         "400":
-          description: The body is not valid JSON
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -472,17 +486,9 @@ paths:
         "404":
           $ref: "#/components/responses/AppNotFound"
         "406":
-          description: The Accept header does not accept JSON
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+          $ref: "#/components/responses/NotAcceptable"
         "413":
-          description: The body is larger than 4 KB
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+          $ref: "#/components/responses/PayloadTooLarge"
         "422":
           description: An unknown mode, or a manual version not in the app's history
           content:
@@ -544,6 +550,24 @@ components:
             $ref: "#/components/schemas/Error"
     AppNotFound:
       description: The host does not monitor an app with this name
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: The body is not valid JSON
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotAcceptable:
+      description: The Accept header does not accept JSON
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PayloadTooLarge:
+      description: The body is larger than 4 KB
       content:
         application/json:
           schema:
