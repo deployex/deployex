@@ -2,7 +2,7 @@
 
 > DeployEx deploys and runs BEAM applications (Elixir, Erlang, Gleam) from their release package. It performs a full deployment or a hot upgrade depending on the release's content, and uses OTP distribution to monitor and operate the applications it runs. It runs as a service on a host or inside a container, including Kubernetes.
 
-DeployEx is not a build tool and does not replace a CI/CD pipeline. A separate pipeline builds the release package; DeployEx picks it up from release storage (S3, GCS, or a local path) and runs it. It is distributed as a GitHub release (host binaries) or a Docker image, not as a Hex package.
+DeployEx is not a build tool and does not replace a CI/CD pipeline. A separate pipeline builds the release package; DeployEx picks it up from release storage (S3, GCS, or a local path) and runs it. It is distributed as a GitHub release (host binaries), not as a Hex package; a Dockerfile is provided to build your own container image, not a published one.
 
 Current status: pre-1.0, see the version badge in [README.md](https://github.com/deployex/deployex/blob/main/README.md). The [CHANGELOG](https://github.com/deployex/deployex/blob/main/CHANGELOG.md) lists every merged pull request per release.
 
