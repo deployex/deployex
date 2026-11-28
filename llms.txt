@@ -12,6 +12,7 @@ Current status: pre-1.0, see the version badge in [README.md](https://github.com
 - [AGENTS.md](https://github.com/deployex/deployex/blob/main/AGENTS.md): umbrella app structure, dev commands, and what an AI coding agent may run without asking first - read this before making code changes to DeployEx itself
 - [YAML configuration](https://github.com/deployex/deployex/blob/main/guides/docs/yaml/README.md): every `deployex.yaml` key, including the release and secrets adapters and their options
 - [Agent API](https://github.com/deployex/deployex/blob/main/guides/docs/agent-api/README.md): a scoped JSON API and an event stream (Phoenix Channels) to read host/app state, logs, and operate (restart, clear ghosted versions, set mode) without the dashboard - the one DeployEx surface meant to be driven by a script or another agent, not a human
+- [`rollout-guard`](https://github.com/deployex/rollout-guard): a GitHub Action, built on the Agent API, that polls every host of a deploy and fails the pipeline on a ghosted version instead of a single check against a single host
 
 ## Running it
 
