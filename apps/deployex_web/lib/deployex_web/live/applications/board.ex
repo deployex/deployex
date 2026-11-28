@@ -280,7 +280,7 @@ defmodule DeployexWeb.ApplicationsLive.Board do
               <div class="truncate text-lg font-bold tracking-[-0.01em]" title={@app.name}>
                 {@app.name}
               </div>
-              <div class="dx-muted dx-mono mt-0.5 truncate text-[0.8125rem]" title={@app.sub}>
+              <div class="dx-muted dx-mono wrap-anywhere mt-0.5 text-[0.8125rem]">
                 {@app.sub}
               </div>
             </div>

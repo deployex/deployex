@@ -157,11 +157,11 @@ defmodule DeployexWeb.VersionsLive do
               </div>
               <%= for row <- rows(@history, @filter, @currents, @now) do %>
                 <div class="dx-vrow">
-                  <div class="min-w-0 flex items-center gap-2">
-                    <b class="dx-mono truncate text-sm" title={row.version}>{row.version}</b>
+                  <div class="min-w-0 flex flex-wrap items-center gap-2">
+                    <b class="dx-mono wrap-anywhere text-sm">{row.version}</b>
                     <span :if={row.current} class="dx-chip dx-s-ok px-2 py-px text-xs">current</span>
                   </div>
-                  <div class="dx-mono min-w-0 truncate text-[0.8125rem]" title={row.sname}>
+                  <div class="dx-mono min-w-0 wrap-anywhere text-[0.8125rem]">
                     {row.sname}
                   </div>
                   <div class="flex flex-wrap items-center gap-x-2 gap-y-1">

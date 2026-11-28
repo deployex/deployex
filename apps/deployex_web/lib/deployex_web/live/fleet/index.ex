@@ -12,7 +12,7 @@ defmodule DeployexWeb.FleetLive do
   alias DeployexWeb.UI.Icons
 
   @refresh_ms 2_000
-  @columns "grid grid-cols-[minmax(140px,1fr)_minmax(90px,0.6fr)_minmax(220px,2fr)_minmax(240px,2fr)] " <>
+  @columns "grid grid-cols-[minmax(140px,1fr)_minmax(140px,0.6fr)_minmax(220px,2fr)_minmax(240px,2fr)] " <>
              "items-start gap-x-4"
 
   @impl true
@@ -69,10 +69,7 @@ defmodule DeployexWeb.FleetLive do
                     This DeployEx
                   </span>
                 </div>
-                <div
-                  class="dx-mono min-w-0 truncate text-[0.8125rem]"
-                  title={node.deployex_version || "--"}
-                >
+                <div class="dx-mono min-w-0 wrap-anywhere text-[0.8125rem]">
                   {node.deployex_version || "--"}
                 </div>
                 <div class="min-w-0 flex flex-col gap-1.5">

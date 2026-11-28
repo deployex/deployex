@@ -2252,7 +2252,7 @@
 
 .dx-vrow {
     display: grid;
-    grid-template-columns: 110px minmax(180px, 1fr) 190px 120px 210px;
+    grid-template-columns: minmax(110px, 0.6fr) minmax(180px, 1fr) 190px 120px 210px;
     gap: 18px;
     align-items: center;
     padding: 0 20px;
