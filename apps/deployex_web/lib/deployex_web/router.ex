@@ -4,6 +4,8 @@ defmodule DeployexWeb.Router do
   import DeployexWeb.Authorization, only: [require_admin: 2]
   import DeployexWeb.UserAuth
   import Observer.Web.Router
+  # TRIAL ONLY - see DeployexWeb.Trial.MonitoredObanRepo
+  import Oban.Web.Router
 
   pipeline :browser do
     plug :accepts, ["html"]
@@ -111,11 +113,26 @@ defmodule DeployexWeb.Router do
       ] do
       live "/terminal", TerminalLive, :index
       live "/embedded-observer", ObserverLive, :index
+      live "/oban", ObanLive, :index
       live "/hotupgrade", HotUpgradeLive, :index
       live "/hotupgrade/apply", HotUpgradeLive, :apply
     end
 
     observer_dashboard("/observer")
+
+    # TRIAL ONLY - one raw dashboard mount per "monitored app", picked from the embedded
+    # /oban page's app picker - see DeployexWeb.Trial.MonitoredObanRepo
+    oban_dashboard("/oban-dash/myumbrella",
+      oban_name: DeployexWeb.Trial.MonitoredOban,
+      resolver: DeployexWeb.Trial.MyumbrellaResolver,
+      as: :oban_dashboard_myumbrella
+    )
+
+    oban_dashboard("/oban-dash/myphoenixapp",
+      oban_name: DeployexWeb.Trial.MyphoenixappOban,
+      resolver: DeployexWeb.Trial.MyphoenixappResolver,
+      as: :oban_dashboard_myphoenixapp
+    )
   end
 
   # Other scopes may use custom stacks.
