@@ -226,16 +226,31 @@ topic before the `GET`, and drop the lines that come in both.
 
 ## Check a rollout from a pipeline
 
-After the pipeline writes a new `current.json`, it can ask each host whether the version runs or is ghosted:
+After the pipeline writes a new `current.json`, it can ask each host whether the version runs or is ghosted. Each host answers
+for itself only: with several DeployEx connected, a pod ghosts a bad version on its own, and checking one host says nothing
+about the others. `$HOSTS` below is every host of the fleet, not one of them:
 
 ```bash
-app=$(curl -sf -H "Authorization: Bearer $TOKEN" "http://$HOST:5002/v1/apps/myphoenixapp")
-echo "$app" | jq -e --arg v "$VERSION" \
-  '(.instances | length) == .replicas and all(.instances[]; .version == $v and .status == "running")' && echo "running"
-echo "$app" | jq -e --arg v "$VERSION" '.ghosted_versions | index($v) != null' && echo "ghosted"
+for host in $HOSTS; do
+  app=$(curl -sf -H "Authorization: Bearer $TOKEN" "http://$host:5002/v1/apps/myphoenixapp")
+
+  if echo "$app" | jq -e --arg v "$VERSION" '.ghosted_versions | index($v) != null' > /dev/null; then
+    echo "ghosted on $host"
+    exit 1
+  fi
+
+  echo "$app" | jq -e --arg v "$VERSION" \
+    '(.instances | length) == .replicas and all(.instances[]; .version == $v and .status == "running")' > /dev/null ||
+    { echo "not yet running on $host"; exit 1; }
+done
+echo "running on every host"
 ```
 
 When the version is ghosted, the pipeline writes the previous version back to `current.json`.
+
+[`rollout-guard`](https://github.com/deployex/rollout-guard) is this as a GitHub Action: it polls every host, fails fast on a ghosted
+version, an unauthorized token, or an app not monitored on a host, and otherwise keeps waiting up to a timeout, rather than on a
+single check against a single host.
 
 ## Local run
 
