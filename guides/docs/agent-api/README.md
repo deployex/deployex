@@ -246,7 +246,11 @@ done
 echo "running on every host"
 ```
 
-When the version is ghosted, the pipeline writes the previous version back to `current.json`.
+None of this is urgent for the application itself: DeployEx never stops the previous version until the new one passes its
+readiness check (see [Application Readiness](../yaml/README.md#application-readiness) and `deploy_rollback_timeout_ms`), so a
+version that gets ghosted was never serving anything to begin with. When the version is ghosted, the pipeline writes the
+previous version back to `current.json` - not to protect the application, which was never at risk, but so a new or restarted
+host does not spend its own `deploy_rollback_timeout_ms` discovering the same bad version all over again.
 
 [`rollout-guard`](https://github.com/deployex/rollout-guard) is this as a GitHub Action: it polls every host, fails fast on a ghosted
 version, an unauthorized token, or an app not monitored on a host, and otherwise keeps waiting up to a timeout, rather than on a
