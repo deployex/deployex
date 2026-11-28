@@ -19,6 +19,17 @@ defmodule Foundation.CatalogTest do
     %{name: name}
   end
 
+  test "setup_all_apps/0 creates the log directory of each application", %{name: name} do
+    log_path = Application.get_env(:foundation, :monitored_app_log_path)
+    File.rm_rf("#{log_path}/#{name}")
+    File.rm_rf("#{log_path}/deployex")
+
+    assert :ok = Catalog.setup_all_apps()
+
+    assert File.dir?("#{log_path}/#{name}")
+    refute File.dir?("#{log_path}/deployex")
+  end
+
   test "versions/2", %{name: name} do
     assert Catalog.versions(name, []) == []
   end
