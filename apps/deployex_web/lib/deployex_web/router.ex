@@ -91,7 +91,6 @@ defmodule DeployexWeb.Router do
       live "/applications/:name/versions", VersionsLive, :index
       live "/applications/:name/ghosted", GhostedLive, :index
       live "/applications/:name/:sname/versions", VersionsLive, :index
-      live "/documentation", DocsLive, :index
     end
 
     get "/logs/export", LogsExportController, :export

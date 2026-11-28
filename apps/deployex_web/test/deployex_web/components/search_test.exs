@@ -63,8 +63,9 @@ defmodule DeployexWeb.Components.SearchTest do
   test "the top bar search shows hints on focus, then results and no match", %{conn: conn} do
     Deployer.StatusMock
     |> stub(:monitoring, fn -> {:ok, FixtureStatus.list()} end)
+    |> stub(:subscribe, fn -> :ok end)
 
-    {:ok, view, _html} = live(conn, ~p"/documentation")
+    {:ok, view, _html} = live(conn, ~p"/applications")
 
     html = view |> element("#search-input") |> render_focus()
     assert html =~ "Try"

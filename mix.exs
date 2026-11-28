@@ -170,37 +170,15 @@ defmodule Deployex.MixProject do
     ]
   end
 
-  defp cleanup_doc_config_js(_) do
-    files = Path.wildcard("./doc/*html")
-
-    Enum.each(files, fn file ->
-      System.cmd("sed", ["-i", ".backup", "/docs_config.js/d", file])
-      File.rm("#{file}.backup")
-    end)
-  end
-
   defp copy_ex_doc_images(_) do
     static_destination_path = "./doc/guides/static"
     File.mkdir_p!(static_destination_path)
     File.cp_r("./guides/static", static_destination_path)
   end
 
-  defp publish_docs(_) do
-    docs_folder = "apps/deployex_web/priv/static/docs"
-    File.cp_r("./doc", docs_folder)
-    System.cmd("tar", ["czf", "#{docs_folder}/docs.tar.gz", "-C", "./doc", "."])
-  end
-
-  defp digest_docs(_) do
-    docs_folder = "apps/deployex_web/priv/static/docs"
-    System.cmd("tar", ["xf", "#{docs_folder}/docs.tar.gz", "-C", docs_folder])
-    File.rm("#{docs_folder}/docs.tar.gz")
-  end
-
   defp aliases do
     [
-      docs: ["docs", &cleanup_doc_config_js/1, &copy_ex_doc_images/1, &publish_docs/1],
-      release: [&digest_docs/1, "release"]
+      docs: ["docs", &copy_ex_doc_images/1]
     ]
   end
 end

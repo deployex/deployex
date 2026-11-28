@@ -1,12 +1,13 @@
 defmodule DeployexWeb.RecentEventsTest do
   use DeployexWeb.ConnCase, async: false
 
+  import Mox
   import Phoenix.LiveViewTest
 
   alias DeployexWeb.RecentEvents
   alias Foundation.Notifications.Recent
 
-  setup :log_in_default_user
+  setup [:set_mox_global, :verify_on_exit!, :log_in_default_user]
 
   defp recent(event, payload),
     do: %Recent{id: 1, at: ~U[2026-10-28 14:20:00Z], event: event, payload: payload}
@@ -225,7 +226,11 @@ defmodule DeployexWeb.RecentEventsTest do
 
   @tag :capture_log
   test "the bell on every page follows this host's new events", %{conn: conn} do
-    {:ok, view, html} = live(conn, ~p"/documentation")
+    Deployer.StatusMock
+    |> stub(:subscribe, fn -> :ok end)
+    |> stub(:monitoring, fn -> {:ok, []} end)
+
+    {:ok, view, html} = live(conn, ~p"/applications")
     assert html =~ ~s(data-bell="bell")
 
     send(

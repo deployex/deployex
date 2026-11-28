@@ -38,6 +38,10 @@ defmodule DeployexWeb.DockTest do
     |> stub(:list, fn -> [] end)
     |> stub(:subscribe_new_deploy, fn -> :ok end)
 
+    Deployer.StatusMock
+    |> stub(:subscribe, fn -> :ok end)
+    |> stub(:monitoring, fn -> {:ok, []} end)
+
     # A DeployEx shell needs its release binary, which a fresh machine does not have
     bin_path = Catalog.bin_path("deployex", :current)
     File.mkdir_p!(Path.dirname(bin_path))
@@ -47,7 +51,7 @@ defmodule DeployexWeb.DockTest do
   end
 
   defp dock(conn) do
-    {:ok, view, _html} = live(conn, ~p"/documentation")
+    {:ok, view, _html} = live(conn, ~p"/applications")
     {view, find_live_child(view, "dock-live")}
   end
 

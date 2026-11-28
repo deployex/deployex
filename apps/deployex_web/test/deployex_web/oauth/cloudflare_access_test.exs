@@ -305,7 +305,7 @@ defmodule DeployexWeb.OAuth.CloudflareAccessTest do
     test "opens for a token, with no login", %{conn: conn, key: key} do
       conn = put_req_header(conn, @header, token(key))
 
-      assert {:ok, _view, html} = live(conn, ~p"/documentation")
+      assert {:ok, _view, html} = live(conn, ~p"/applications")
       assert html =~ "admin@co.com"
       refute html =~ "Read-only access"
     end
@@ -315,7 +315,7 @@ defmodule DeployexWeb.OAuth.CloudflareAccessTest do
       put_config(%{emails: [], domains: [], read_only_emails: ["admin@co.com"]})
       conn = put_req_header(conn, @header, token(key))
 
-      assert {:ok, view, html} = live(conn, ~p"/documentation")
+      assert {:ok, view, html} = live(conn, ~p"/applications")
       assert html =~ "Read-only access"
       assert {:error, {:redirect, %{to: "/applications"}}} = live(conn, ~p"/terminal")
 
@@ -327,13 +327,13 @@ defmodule DeployexWeb.OAuth.CloudflareAccessTest do
 
     @tag :capture_log
     test "asks for the password without a token", %{conn: conn} do
-      assert {:error, {:redirect, %{to: "/users/log_in"}}} = live(conn, ~p"/documentation")
+      assert {:error, {:redirect, %{to: "/users/log_in"}}} = live(conn, ~p"/applications")
     end
 
     @tag :capture_log
     test "redirects to the login page when the auth config changes", %{conn: conn, key: key} do
       {:ok, liveview, _html} =
-        conn |> put_req_header(@header, token(key)) |> live(~p"/documentation")
+        conn |> put_req_header(@header, token(key)) |> live(~p"/applications")
 
       put_config(%{emails: [], domains: [], read_only_emails: ["admin@co.com"]})
       send(liveview.pid, {:watcher_auth_apply, Node.self()})

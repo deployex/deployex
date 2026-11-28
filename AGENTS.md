@@ -258,7 +258,7 @@ Exact versions are in `mix.lock`; do not trust version numbers written in docs.
 ## Release
 
 Releases are built via `mix release`.
-The `release` alias runs a `digest_docs` pre-step, and the release steps are `:assemble`, `Jellyfish.generate/1`, `:tar`.
+The release steps are `:assemble`, `Jellyfish.generate/1`, `:tar`.
 The release name is `deployex`.
 CI builds artifacts for both OTP-28 and OTP-29 using the `.tool-versions` files under `devops/releases/otp-28/` and `devops/releases/otp-29/`.
 
@@ -299,7 +299,6 @@ To prepare a release, open a single "prepare release" PR that applies all of the
 3. `devops/installer/deployex-aws.yaml` and `devops/installer/deployex-gcp.yaml`: set `version:` to the released version
 4. `guides/docs/yaml/README.md`: set the `version:` field in the YAML example to the released version
 5. `CHANGELOG.md`: add the release date to the version heading in the format `## X.Y.Z 🚀 (YYYY-MM-DD)`
-6. Run `mix docs` to regenerate the published documentation (commits the updated `apps/deployex_web/priv/static/docs/docs.tar.gz`)
 
 After the PR is merged, pushing the version tag from main triggers `.github/workflows/releases.yaml` to build and publish the release artifacts.
 
@@ -381,4 +380,4 @@ The reasoning behind each check is in [beam-hotupgrades](https://github.com/depl
 - `guides/docs/hot-upgrades/` - hot upgrade documentation
 - `guides/docs/yaml/` - YAML configuration reference
 - `CHANGELOG.md` - version history, updated manually per merged PR (see "Changelog Maintenance")
-- Docs are generated with `mix docs` and published into `apps/deployex_web/priv/static/docs/`
+- Docs are generated with `mix docs` and published to [hexdocs.pm](https://hexdocs.pm/deployex)
