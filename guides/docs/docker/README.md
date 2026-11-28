@@ -1,11 +1,13 @@
 ## Running DeployEx in a container
 
-DeployEx is made for a host it shares with the applications it runs.
-This guide puts both in one container, so that a team that deploys with containers can try hot upgrades without changing how it deploys: the container is still what the platform schedules, restarts and replaces, and DeployEx changes the code of the application inside it.
+DeployEx shares a host with the applications it runs, or a container.
+This guide is about the container, so that a team that deploys with containers gets hot upgrades without changing how it deploys: the container is still what the platform schedules, restarts and replaces, and DeployEx changes the code of the application inside it.
 
-It is a trial setup, with one container of DeployEx and one of [HAProxy](https://www.haproxy.org) that share a network, the way two containers of a Kubernetes pod do.
-It runs with Docker alone, and as one pod on a local Kubernetes cluster, which is the last section.
+The setup has one container of DeployEx and one of [HAProxy](https://www.haproxy.org) that share a network, the way two containers of a Kubernetes pod do.
+It runs with Docker alone, as one pod on a local Kubernetes cluster, and as several pods, which are the last two sections.
 What it was run with, what was seen and what is still open are in each.
+
+![DeployEx on a host and in a container](../../static/deployex.svg)
 
 ### How it is put together
 
@@ -177,7 +179,7 @@ The cluster has a kubeconfig of its own, `devops/docker/kubernetes/kubeconfig`, 
 
 What is in [`devops/docker/kubernetes`](https://github.com/deployex/deployex/tree/main/devops/docker/kubernetes):
 
- * **One Deployment with one replica and the `Recreate` strategy**, so there are never two pods, each with its own DeployEx, on the same bucket.
+ * **One Deployment with one replica and the `Recreate` strategy**, to keep the first run simple. [More than one pod](#more-than-one-pod) has what several of them need.
  * **`deployex.yaml` and `haproxy.cfg` in a ConfigMap, the three secrets of DeployEx in a Secret.**
  * **The readiness probe is on HAProxy**, a request to the application through it.
    HAProxy answers 503 while no instance passes its check, so the pod is ready when the application is, and not before one is published.
@@ -206,5 +208,69 @@ DeployEx is, the applications it starts usually are not, and their VM asked for 
 The application can say it itself, which is the fix wherever it runs: `+Q 65536` in its `rel/vm.args.eex`, as in [Elixir Application - No Ecto](../local-elixir/README.md).
 With a limit of 1048576 open files the sample application reported a limit of 1048576 ports without it, and 65536 with it, once the pod had restarted: a hot upgrade does not apply a flag of the VM.
 
-Still open, and what more than one pod will show: each pod has its own DeployEx and reads `current.json` by itself, so every pod acts on a new version within the same few seconds.
-Nothing orders them, the way the instances of one DeployEx are upgraded one after the other.
+### More than one pod
+
+Each pod has its own DeployEx, which reads `current.json` by itself.
+This is what makes several of them work together, all of it in the [YAML](../yaml/README.md) and the manifest:
+
+ * **They find each other.**
+   `peers_dns_query` names a headless Service that resolves to every pod, and each DeployEx connects to the others.
+   The applications they run are then connected to each other too, with nothing in them for it.
+   The pods of a Deployment have no host name that resolves from another pod, so `DEPLOYEX_NODE_HOST` names each node by the address of its pod:
+
+   ```yaml
+   # deployex.yaml
+   peers_dns_query: "deployex-peers.default.svc.cluster.local"
+   ```
+
+   ```yaml
+   # The headless Service, and the env of the DeployEx container
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: deployex-peers
+   spec:
+     clusterIP: None
+     publishNotReadyAddresses: true
+     selector:
+       app: deployex
+     ports:
+       - name: epmd
+         port: 4369
+   ---
+   env:
+     - name: DEPLOYEX_NODE_HOST
+       valueFrom:
+         fieldRef:
+           fieldPath: status.podIP
+   ```
+
+ * **They deploy one after the other.**
+   The DeployEx that are connected deploy an application on one pod at a time, and the other pods keep serving the version they have meanwhile.
+   A pod that runs nothing yet does not wait: every new pod starts what `current.json` points at.
+ * **The Fleet page shows all of them**, from the dashboard of any pod: what each one runs, what it ghosted, which one is deploying and which ones wait.
+   A deployment that holds the others back can be cancelled from there.
+ * **One YAML for every pod.**
+   The ConfigMap is mounted as a directory, so a change of it reaches the file of each pod without a restart.
+   With `config_auto_apply: true` each DeployEx applies it when it reads it, and no one has to open the dashboard of each pod.
+ * **A pod that is removed stops its application first.**
+   DeployEx gives the application `shutdown_timeout_ms` to stop by itself.
+   Give the pod at least as long, with `terminationGracePeriodSeconds`.
+   An application that makes its readiness path fail when it is asked to stop gets no new request from HAProxy while it finishes the ones it has.
+
+What was seen with two pods on the local cluster, a Phoenix application with a database and a migration as its pre-command, and twenty requests a second through the Service:
+
+| Step | Result |
+|---|---|
+| Hot upgrade, with a migration | 983 requests, none failed. Both pods upgraded, and none restarted |
+| Full deployment | 2,164 requests, none failed. One pod, then the other |
+| A pod deleted | 778 requests, none failed. The application of that pod logged that it had stopped by itself |
+| A value changed in the ConfigMap, with `config_auto_apply` | Applied by both DeployEx about 90 seconds later, with no restart |
+
+Still open:
+
+ * **Each pod has its own dashboard and its own state.**
+   A Service sends a browser to any of them, and a session that was opened with the admin password is known by one pod only.
+   The versions a pod ghosted are kept by that pod.
+ * **It was run on a local cluster.**
+   A cluster with several nodes, an autoscaler and a real release storage will show more.

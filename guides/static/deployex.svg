@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 670" width="1200" height="670" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="t">DeployEx on a host and in a container</title>
+  <desc id="d">Your CI/CD publishes a release and current.json to a release storage. DeployEx reads them and runs the application, either as a service on a host behind a reverse proxy, or in a container with HAProxy beside it. In both it starts, monitors and deploys the application, with a full deployment or a hot upgrade.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+    <marker id="o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#ea580c"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="670" rx="16" fill="#ffffff"/>
+
+  <!-- Your CI/CD and the release storage -->
+  <rect x="40" y="30" width="270" height="72" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text x="175" y="60" text-anchor="middle" font-size="16" font-weight="700" fill="#0f172a">Your CI/CD</text>
+  <text x="175" y="83" text-anchor="middle" font-size="13" fill="#475569">mix release · rebar3 tar · gleam export</text>
+
+  <path d="M310,66 H386" stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <text x="348" y="56" text-anchor="middle" font-size="12" fill="#475569">publishes</text>
+
+  <rect x="390" y="30" width="770" height="72" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+  <text x="414" y="60" font-size="16" font-weight="700" fill="#0f172a">Release storage</text>
+  <text x="414" y="83" font-size="13" fill="#475569">S3, Google Cloud Storage or a directory</text>
+  <rect x="742" y="48" width="190" height="36" rx="6" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="837" y="71" text-anchor="middle" font-size="13" fill="#14532d" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">myapp-1.0.1.tar.gz</text>
+  <rect x="946" y="48" width="196" height="36" rx="6" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="1044" y="71" text-anchor="middle" font-size="13" fill="#7f1d1d" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">current.json → 1.0.1</text>
+
+  <!-- DeployEx reads the storage -->
+  <path d="M430,102 V258" stroke="#ea580c" stroke-width="1.5" fill="none" marker-end="url(#o)"/>
+  <path d="M1006,102 V258" stroke="#ea580c" stroke-width="1.5" fill="none" marker-end="url(#o)"/>
+  <rect x="444" y="118" width="300" height="24" fill="#ffffff"/>
+  <text x="444" y="135" font-size="12" fill="#9a3412">reads current.json and downloads the release</text>
+
+  <!-- On a host -->
+  <rect x="40" y="160" width="540" height="480" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="64" y="196" font-size="18" font-weight="700" fill="#0f172a">On a host</text>
+  <text x="64" y="218" font-size="13" fill="#475569">An EC2 instance, a virtual machine, bare metal</text>
+  <path d="M430,160 V258" stroke="#ea580c" stroke-width="1.5" fill="none"/>
+
+  <rect x="310" y="262" width="240" height="72" rx="10" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
+  <text x="430" y="293" text-anchor="middle" font-size="17" font-weight="700" fill="#7c2d12">DeployEx</text>
+  <text x="430" y="315" text-anchor="middle" font-size="12" fill="#9a3412">a service of the host · :5001</text>
+
+  <path d="M340,334 V416" stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <text x="352" y="366" font-size="12" fill="#334155">starts, monitors, restarts</text>
+  <text x="352" y="384" font-size="12" fill="#334155">full deployment or hot upgrade</text>
+
+  <rect x="310" y="420" width="240" height="48" rx="8" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="326" y="449" font-size="14" font-weight="600" fill="#0f172a">myapp 1.0.0</text>
+  <text x="534" y="449" text-anchor="end" font-size="12" fill="#475569">running · :4000</text>
+  <rect x="310" y="484" width="240" height="48" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="326" y="513" font-size="14" font-weight="600" fill="#0f172a">myapp 1.0.1</text>
+  <text x="534" y="513" text-anchor="end" font-size="12" fill="#475569">next · :4001</text>
+
+  <text x="149" y="352" text-anchor="middle" font-size="12" fill="#475569">your users · :443</text>
+  <path d="M149,358 V376" stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <rect x="64" y="380" width="170" height="112" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="149" y="412" text-anchor="middle" font-size="15" font-weight="700" fill="#0f172a">Reverse proxy</text>
+  <text x="149" y="436" text-anchor="middle" font-size="12" fill="#475569">NGINX, HAProxy,</text>
+  <text x="149" y="454" text-anchor="middle" font-size="12" fill="#475569">a cloud load balancer,</text>
+  <text x="149" y="472" text-anchor="middle" font-size="12" fill="#475569">the one you have</text>
+
+  <path d="M234,400 H272 V298 H306" stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <text x="264" y="290" text-anchor="end" font-size="12" fill="#475569">dashboard</text>
+  <path d="M234,444 H306" stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <path d="M272,444 V508 H306" stroke="#334155" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#a)"/>
+
+  <text x="64" y="596" font-size="13" fill="#334155">DeployEx is installed once and stays. Every release after that</text>
+  <text x="64" y="616" font-size="13" fill="#334155">is a file in the storage, with no image to build.</text>
+
+  <!-- In a container -->
+  <rect x="620" y="160" width="540" height="480" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="644" y="196" font-size="18" font-weight="700" fill="#0f172a">In a container</text>
+  <text x="644" y="218" font-size="13" fill="#475569">Docker, a Kubernetes pod</text>
+
+  <rect x="868" y="236" width="276" height="328" rx="12" fill="#ffffff" stroke="#64748b" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="1006" y="553" text-anchor="middle" font-size="11" fill="#64748b" letter-spacing="0.6">THE DEPLOYEX CONTAINER</text>
+  <path d="M1006,160 V258" stroke="#ea580c" stroke-width="1.5" fill="none"/>
+
+  <rect x="886" y="262" width="240" height="72" rx="10" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
+  <text x="1006" y="293" text-anchor="middle" font-size="17" font-weight="700" fill="#7c2d12">DeployEx</text>
+  <text x="1006" y="315" text-anchor="middle" font-size="12" fill="#9a3412">the image has no application · :5001</text>
+
+  <path d="M916,334 V416" stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <text x="928" y="366" font-size="12" fill="#334155">starts, monitors, restarts</text>
+  <text x="928" y="384" font-size="12" fill="#334155">full deployment or hot upgrade</text>
+
+  <rect x="886" y="420" width="240" height="48" rx="8" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="902" y="449" font-size="14" font-weight="600" fill="#0f172a">myapp 1.0.0</text>
+  <text x="1110" y="449" text-anchor="end" font-size="12" fill="#475569">running · :4000</text>
+  <rect x="886" y="484" width="240" height="48" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="902" y="513" font-size="14" font-weight="600" fill="#0f172a">myapp 1.0.1</text>
+  <text x="1110" y="513" text-anchor="end" font-size="12" fill="#475569">next · :4001</text>
+
+  <text x="729" y="352" text-anchor="middle" font-size="12" fill="#475569">Service or published port</text>
+  <path d="M729,358 V376" stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <rect x="644" y="380" width="170" height="112" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="729" y="412" text-anchor="middle" font-size="15" font-weight="700" fill="#0f172a">HAProxy</text>
+  <text x="729" y="436" text-anchor="middle" font-size="12" fill="#475569">a second container,</text>
+  <text x="729" y="454" text-anchor="middle" font-size="12" fill="#475569">sends requests only to</text>
+  <text x="729" y="472" text-anchor="middle" font-size="12" fill="#475569">an instance that is ready</text>
+
+  <path d="M814,444 H882" stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <path d="M848,444 V508 H882" stroke="#334155" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#a)"/>
+
+  <text x="644" y="596" font-size="13" fill="#334155">The platform still schedules and replaces the container.</text>
+  <text x="644" y="616" font-size="13" fill="#334155">DeployEx changes the release inside it, without a new image.</text>
+</svg>
