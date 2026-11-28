@@ -20,7 +20,9 @@ defmodule Foundation.Peers do
     * **Short names**, which DeployEx uses - the first label of the host name the address
       resolves back to. `10.244.0.14`, which resolves to
       `dx-1.dx.default.svc.cluster.local`, is `deployex@dx-1`. That name has to resolve from
-      the other hosts too, see the YAML guide.
+      the other hosts too, see the YAML guide. An address can resolve back to several
+      names, the pod of a Kubernetes Service that is not the one of the query for instance.
+      The one under the name of the query is taken, and the first one when none is.
     * **Long names**, with which DeployEx is started when `DEPLOYEX_NODE_HOST` is set - the
       address itself, `deployex@10.244.0.14`.
 
@@ -39,7 +41,7 @@ defmodule Foundation.Peers do
     """
 
     @callback lookup(query :: String.t()) :: [:inet.ip_address()]
-    @callback host_name(address :: :inet.ip_address()) :: {:ok, String.t()} | {:error, term()}
+    @callback host_names(address :: :inet.ip_address()) :: [String.t()]
     @callback long_names?() :: boolean()
     @callback connect(node()) :: boolean() | :ignored
     @callback connected() :: [node()]
@@ -56,12 +58,12 @@ defmodule Foundation.Peers do
       end)
     end
 
+    # Every name the address resolves back to. :inet_res.gethostbyaddr/1 answers with an
+    # error when there is more than one, which is the case of a Kubernetes pod that is
+    # behind a second Service, so the PTR records are asked for themselves
     @impl true
-    def host_name(address) do
-      case :inet_res.gethostbyaddr(address) do
-        {:ok, {:hostent, name, _aliases, _type, _length, _addresses}} -> {:ok, to_string(name)}
-        {:error, reason} -> {:error, reason}
-      end
+    def host_names(address) do
+      address |> :inet_res.lookup(:in, :ptr) |> Enum.map(&to_string/1)
     end
 
     @impl true
@@ -104,19 +106,26 @@ defmodule Foundation.Peers do
   The node name of the DeployEx at `address`, or `nil` when the address does not resolve
   back to a host name and the nodes have short names.
 
+  `query` is the DNS name the address came from. Of several host names of the address, the
+  one under it is the name of the peer.
+
   ## Examples
 
-      iex> Foundation.Peers.node_name("deployex", {10, 244, 0, 14}, Foundation.Peers.Resolver, true)
+      iex> Foundation.Peers.node_name("deployex", {10, 244, 0, 14}, Foundation.Peers.Resolver, true, "dx")
       :"deployex@10.244.0.14"
   """
-  @spec node_name(String.t(), :inet.ip_address(), module(), boolean()) :: node() | nil
-  def node_name(base_name, address, _resolver, true = _long_names?),
+  @spec node_name(String.t(), :inet.ip_address(), module(), boolean(), String.t()) ::
+          node() | nil
+  def node_name(base_name, address, _resolver, true = _long_names?, _query),
     do: :"#{base_name}@#{:inet.ntoa(address)}"
 
-  def node_name(base_name, address, resolver, false = _long_names?) do
-    case resolver.host_name(address) do
-      {:ok, host_name} -> :"#{base_name}@#{host_name |> String.split(".") |> hd()}"
-      {:error, _reason} -> nil
+  def node_name(base_name, address, resolver, false = _long_names?, query) do
+    host_names = address |> resolver.host_names() |> Enum.map(&normalize/1)
+    domain = "." <> normalize(query)
+
+    case Enum.find(host_names, List.first(host_names), &String.ends_with?(&1, domain)) do
+      nil -> nil
+      host_name -> :"#{base_name}@#{host_name |> String.split(".") |> hd()}"
     end
   end
 
@@ -162,7 +171,7 @@ defmodule Foundation.Peers do
     peers =
       state.query
       |> resolver.lookup()
-      |> Enum.map(&node_name(state.base_name, &1, resolver, long_names?))
+      |> Enum.map(&node_name(state.base_name, &1, resolver, long_names?, state.query))
       |> Enum.reject(&(is_nil(&1) or &1 == Node.self() or &1 in connected))
       |> Enum.uniq()
 
@@ -188,4 +197,7 @@ defmodule Foundation.Peers do
   end
 
   defp base_name(node), do: node |> Atom.to_string() |> String.split("@") |> hd()
+
+  # A DNS name is not case sensitive, and may end with the dot of the root
+  defp normalize(name), do: name |> String.downcase() |> String.trim_trailing(".")
 end
