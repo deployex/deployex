@@ -8,14 +8,24 @@ defmodule Deployer.Status.Db do
   convention Ecto's own Mix tasks rely on, so nothing needs to be configured on
   the DeployEx side - including for an umbrella app, where the key can live
   under any of its child applications.
+
+  CockroachDB speaks the Postgres wire protocol and uses the same
+  `Ecto.Adapters.Postgres` adapter as Postgres itself, so the adapter module
+  alone cannot tell them apart. `SHOW server_version` makes it worse: CockroachDB
+  reports a Postgres version it merely emulates there, not its own. `SELECT
+  version()` is the one that self-identifies, so both read it and the result is
+  parsed to tell which database actually answered.
   """
 
   alias Foundation.Rpc
 
   @rpc_timeout 1_000
 
-  @postgres_version_query "SHOW server_version"
+  @postgres_family_version_query "SELECT version()"
   @mysql_version_query "SELECT VERSION()"
+
+  @crdb_version_regex ~r/CockroachDB.*?v([\d.]+)/
+  @postgres_version_regex ~r/^PostgreSQL ([\d.]+)/
 
   ### ==========================================================================
   ### Public APIs
@@ -76,17 +86,33 @@ defmodule Deployer.Status.Db do
   end
 
   defp adapter_version(node, repo, Ecto.Adapters.Postgres),
-    do: run_query(node, repo, @postgres_version_query, "PostgreSQL")
+    do: run_query(node, repo, @postgres_family_version_query, &parse_postgres_family/1)
 
   defp adapter_version(node, repo, Ecto.Adapters.MyXQL),
-    do: run_query(node, repo, @mysql_version_query, "MySQL")
+    do: run_query(node, repo, @mysql_version_query, &"MySQL #{&1}")
 
   defp adapter_version(_node, _repo, _adapter), do: {:ok, nil}
 
-  defp run_query(node, repo, query, label) do
+  defp run_query(node, repo, query, format) do
     case Rpc.call(node, Ecto.Adapters.SQL, :query, [repo, query, []], @rpc_timeout) do
-      {:ok, %{rows: [[version]]}} -> {:ok, "#{label} #{version}"}
+      {:ok, %{rows: [[version]]}} -> {:ok, format.(version)}
       _ -> {:ok, nil}
+    end
+  end
+
+  # CockroachDB identifies itself in the free-form "SELECT version()" string;
+  # anything else that answers through the Postgres adapter is treated as Postgres itself.
+  defp parse_postgres_family(version_string) do
+    case Regex.run(@crdb_version_regex, version_string) do
+      [_, version] -> "CockroachDB #{version}"
+      nil -> parse_postgres(version_string)
+    end
+  end
+
+  defp parse_postgres(version_string) do
+    case Regex.run(@postgres_version_regex, version_string) do
+      [_, version] -> "PostgreSQL #{version}"
+      nil -> version_string
     end
   end
 end

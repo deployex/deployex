@@ -28,12 +28,48 @@ defmodule Deployer.Status.DbTest do
     |> expect(:call, fn @node,
                         Ecto.Adapters.SQL,
                         :query,
-                        [MyElixir.Repo, "SHOW server_version", []],
+                        [MyElixir.Repo, "SELECT version()", []],
                         _timeout ->
-      {:ok, %{rows: [["16.4"]]}}
+      {:ok,
+       %{
+         rows: [
+           [
+             "PostgreSQL 16.4 (Debian 16.4-1.pgdg120+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14) 12.2.0, 64-bit"
+           ]
+         ]
+       }}
     end)
 
     assert {:ok, "PostgreSQL 16.4"} = Db.version(@node)
+  end
+
+  test "version/1 recognizes CockroachDB behind the same Postgres adapter" do
+    Foundation.RpcMock
+    |> expect(:call, fn @node, :application, :which_applications, [], _timeout ->
+      [{@app, "myelixir", "1.0.0"}]
+    end)
+    |> expect(:call, fn @node, Application, :get_env, [@app, :ecto_repos, []], _timeout ->
+      [MyElixir.Repo]
+    end)
+    |> expect(:call, fn @node, MyElixir.Repo, :__adapter__, [], _timeout ->
+      Ecto.Adapters.Postgres
+    end)
+    |> expect(:call, fn @node,
+                        Ecto.Adapters.SQL,
+                        :query,
+                        [MyElixir.Repo, "SELECT version()", []],
+                        _timeout ->
+      {:ok,
+       %{
+         rows: [
+           [
+             "CockroachDB CCL v23.1.11 (x86_64-pc-linux-gnu, built 2023/08/14 18:42:21, go1.19.10)"
+           ]
+         ]
+       }}
+    end)
+
+    assert {:ok, "CockroachDB 23.1.11"} = Db.version(@node)
   end
 
   test "version/1 returns the MySQL server version" do
@@ -73,9 +109,9 @@ defmodule Deployer.Status.DbTest do
     |> expect(:call, fn @node,
                         Ecto.Adapters.SQL,
                         :query,
-                        [MyElixir.Repo, "SHOW server_version", []],
+                        [MyElixir.Repo, "SELECT version()", []],
                         _timeout ->
-      {:ok, %{rows: [["16.4"]]}}
+      {:ok, %{rows: [["PostgreSQL 16.4 on x86_64-pc-linux-gnu"]]}}
     end)
 
     assert {:ok, "PostgreSQL 16.4"} = Db.version(@node)
