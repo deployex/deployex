@@ -4,6 +4,9 @@ DeployEx can serve a JSON API and an event stream on a port of its own. Scripts,
 the state of the host and the logs of its apps without the dashboard, and to restart an app, clear its ghosted versions or set
 its mode. It is off by default.
 
+The HTTP resources below are also described as an [OpenAPI document](openapi.yaml), for a generated client or an agent that
+reads the API from its schema instead of this guide.
+
 ## Turn it on
 
 1. Make a token and its entry:
