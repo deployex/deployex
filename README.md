@@ -2,24 +2,56 @@
 
 > Who supervises the supervisor (of your application)?
 
-![Development](https://img.shields.io/badge/STATUS-Development%20v0.9.x-blue) [![Build Status](https://github.com/deployex/deployex/workflows/Deployex%20CI/badge.svg)](https://github.com/deployex/deployex/actions/workflows/pr-ci.yml)
+![Development](https://img.shields.io/badge/STATUS-Development%20v1.0.x-blue) [![Build Status](https://github.com/deployex/deployex/workflows/Deployex%20CI/badge.svg)](https://github.com/deployex/deployex/actions/workflows/pr-ci.yml)
 
-DeployEx is a lightweight tool designed for managing deployments for Beam applications (Elixir, Gleam and Erlang) without relying on additional deployment tools like Docker or Kubernetes. Its primary goal is to utilize the release package for executing full deployments or hot-upgrades, depending on the package's content, while leveraging OTP distribution for monitoring and data extraction.
+DeployEx is a lightweight tool that deploys and runs Beam applications (Elixir, Gleam and Erlang) from their release package. It executes a full deployment or a hot-upgrade, depending on the package's content, and leverages OTP distribution for monitoring and data extraction. It runs where your application runs: as a service on a host, bare metal or a virtual machine, or inside a container, on Docker or Kubernetes.
 
 DeployEx acts as a central deployment runner, gathering crucial deployment data such as the current version and release package contents. The content of the release package enables it to run for a full deployment or a hot-upgrade. Meanwhile, on the development front, your CI/CD pipeline takes charge of crafting and updating packages for the target release. This integration ensures that DeployEx is always equipped with the latest packages, ready to facilitate deployments.
 
-To learn more about DeployEx and the advantages of removing containerized abstractions from your deployment process, check out the talk [Bring back the power of Beam deployments with DeployEx](https://www.youtube.com/watch?v=MV4ROe6xmlI) at CODE BEAM America 2025.
+To learn more about where DeployEx comes from, and what the release of a Beam application can do by itself, check out the talk [Bring back the power of Beam deployments with DeployEx](https://www.youtube.com/watch?v=MV4ROe6xmlI) at CODE BEAM America 2025.
 
-![Deployment Architecture](guides/static/deployex.png)
+![DeployEx on a host and in a container](guides/static/deployex.svg)
 
 Upon deployment, the following dashboard becomes available, providing easy access to logs, the terminal, process observability, and much more for both DeployEx and the monitored applications.
 
-![Deployex Monitoring](guides/static/deployex_monitoring_app_tls.png)
+![DeployEx dashboard](guides/static/dashboard.png)
+
+## 🚢 Two ways to run it
+
+The release, the YAML and the dashboard are the same in both. What changes is what is around DeployEx.
+
+| | On a host | In a container |
+|---|---|---|
+| Where | An EC2 instance, a virtual machine, bare metal | Docker, a Kubernetes pod |
+| DeployEx is | A service of the host, installed and upgraded by a [script](/devops/installer/deployex.sh) | An image with DeployEx and no application |
+| In front of the application | The proxy you have: NGINX, HAProxy, a cloud load balancer | HAProxy as a second container, which sends requests only to an instance that is ready |
+| A release of the application | A file in the release storage | A file in the release storage, with no new image |
+| What replaces the host or the container | You, or an autoscaler | The platform, as it does today |
+| Where to start | The cloud guides, with Terraform for [AWS](guides/docs/aws-elixir/README.md) and [GCP](guides/docs/gcp-elixir/README.md) | [DeployEx in a container](guides/docs/docker/README.md) |
+
+On a host is where DeployEx started.
+In a container is newer: it was run with Docker and on a local Kubernetes cluster, and the guide has what was seen and what is still open.
+
+### Try it with Docker
+
+It needs Docker and `make`, and nothing else on your machine:
+
+```bash
+git clone https://github.com/deployex/deployex && cd deployex
+make docker-up     # DeployEx and HAProxy. The dashboard is at http://localhost:5001, admin / deployex
+
+git clone https://github.com/thiagoesteves/myphoenixapp ../myphoenixapp
+make docker-app    # builds the sample application and publishes it. It answers at http://localhost:8080
+```
+
+Change the application, set the next version in its `mix.exs` and run `make docker-app` again: DeployEx applies it as a hot upgrade, in the same OS process.
+The rest is in [DeployEx in a container](guides/docs/docker/README.md).
 
 ## 🧭 Is it for your project?
 
 DeployEx runs the release of a BEAM application on a host and keeps it running: it starts it, watches it, restarts it, deploys the next version and goes back when that one does not hold.
-It takes the place of the container and the orchestrator for applications that are better served by the node staying up.
+On a host it takes the place of the container and the orchestrator, for applications that are better served by the node staying up.
+In a container it works inside what the platform already schedules, and a release of the application no longer replaces the container.
 
 What a restart costs is the same for every team: the connections that were open, what the node held in memory, the work it was doing.
 How often you release decides what you get back.
@@ -38,8 +70,9 @@ It is what you open to see what a node is doing right now, and it works with tho
 
 What it asks for:
 
- * **Hosts or virtual machines**, in a cloud or not. DeployEx runs the release on the host, and a hot upgrade changes the code of the node that was running. Where a deployment replaces the instance, as with containers, every release is a restart.
- * **Your own clustering across hosts.** DeployEx connects the nodes of a host to each other, and connecting hosts is left to the application.
+ * **A place where the node can stay**: a host or a virtual machine, in a cloud or not, or a container. DeployEx runs the release there, and a hot upgrade changes the code of the node that was running. A container that is replaced, for a new image of DeployEx or a node that is drained, is still a restart: it comes back on the version `current.json` points at.
+ * **A release storage** that DeployEx can read: S3, Google Cloud Storage or a directory.
+ * **Clustering across hosts is yours, or DeployEx's.** DeployEx connects the nodes of a host to each other. With `peers_dns_query` in the [YAML](guides/docs/yaml/README.md) it also connects to the DeployEx of the other hosts or pods, and the applications they run are then connected to each other too.
 
 An application that holds nothing, where a rolling restart behind a load balancer is already invisible, has little to gain from hot upgrades, and still gets the rest.
 
@@ -81,13 +114,21 @@ What DeployEx adds to it is in [Hot-Upgrades](guides/docs/hot-upgrades/README.md
   - Webhook — generic HTTP POST to any endpoint (n8n, Zapier, custom scripts, etc.)
   - Slack — formatted Incoming Webhook messages with per-event emoji and mrkdwn.
   - PagerDuty — Events API v2 incidents with automatic severity mapping.
+- Runs on a host, bare metal or a virtual machine, or in a container on Docker or Kubernetes, see [DeployEx in a container](guides/docs/docker/README.md).
 - Supports local environments for non-cloud deployments
+- Connects to the DeployEx of other hosts or pods, deploys an application on one of them at a time, and shows all of them on the Fleet page.
+- Supports readiness and liveness probes for the monitored applications, over OTP or HTTP.
+- Gives an application time to stop by itself before it is killed (time configurable).
 - Provides rollback functionality if a monitored app version remains unstable for 10 minutes (time configurable).
 - Rolled-back monitored app versions are ghosted, preventing their redeployment.
 - Ensures all nodes remain connected to the OTP distribution, including DeployEx itself.
 - Supports OTP distribution with mutual TLS (mTLS) for secure monitoring of apps and DeployEx.
 - Provides the ability to run pre-commands prior deployments for Database migrations or any other eval command.
-- Provides a friendly UI that only authenticated users can access.
+- Provides a friendly UI that only authenticated users can access, with admin and read-only roles:
+  - The admin user and its password.
+  - GitHub sign-in, for the emails and domains of an allow-list.
+  - Cloudflare Access, with the groups of your identity provider.
+- Provides an [API for agents and pipelines](guides/docs/agent-api/README.md), with tokens and scopes.
 - Allows setting a previously configured version in the UI, enabling DeployEx to enforce deployment of a specific version.
 - Supports individual application restarts via the UI, including DeployEx itself.
 - Shows the URLs each connected application is serving on, read from the application itself.
@@ -110,7 +151,7 @@ What DeployEx adds to it is in [Hot-Upgrades](guides/docs/hot-upgrades/README.md
 - And much more ...
 
 > [!NOTE]
-> The cloud examples in this project use NGINX as a reverse proxy and load balancer, and the container trial uses HAProxy. DeployEx depends on neither; they are used here purely for convenience.
+> The cloud examples in this project use NGINX as a reverse proxy and load balancer, and the container setup uses HAProxy. DeployEx depends on neither: any proxy that can reach the ports of the application works, and one that checks each port before it sends a request, as HAProxy does, sends none to an instance that is still starting.
 
 ## ⚠️ What is coming next? 
 
@@ -122,7 +163,7 @@ Since OTP distribution is heavily used between the DeployEx and Monitored Applic
 
 | DeployEx version                                                          | <img src="https://img.shields.io/badge/OTP-28-green.svg"/> | <img src="https://img.shields.io/badge/OTP-29-green.svg"/> |
 | ------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| :soon: [**0.10.1**](https://github.com/deployex/deployex/releases/tag/0.10.1) | **28.5.0.8**                                               | **29.1.2**                                                 |
+| :soon: [**1.0.0**](https://github.com/deployex/deployex/releases/tag/1.0.0)   | **28.5.0.8**                                               | **29.1.2**                                                 |
 | [**0.10.0**](https://github.com/deployex/deployex/releases/tag/0.10.0) | **28.5.0.6**                                               | **29.0.6**                                                 |
 
 ### Running the application
@@ -154,12 +195,12 @@ Done in 993ms.
 [warning] No versions set yet for myphoenixapp
 ```
 
-Now you can visit [`localhost:5001`](http://localhost:5001) from your browser and sign in as the admin user, _**username: admin password: deployex**_. In development the sign-in page comes with them filled in. If something else on your machine listens on 5001, start DeployEx with `DEPLOYEX_PORT` set to another port. You should expect the following dashboard:
+Now you can visit [`localhost:5001`](http://localhost:5001) from your browser and sign in as the admin user, _**username: admin password: deployex**_. In development the sign-in page comes with them filled in. If something else on your machine listens on 5001, start DeployEx with `DEPLOYEX_PORT` set to another port. You should expect a dashboard like this one, with DeployEx running and the application waiting for a version:
 
-![Empty Dashboard](guides/static/deployex_no_monitoring_app.png)
+![Dashboard with no version published](guides/static/dashboard_empty.png)
 
 > [!NOTE]
-> The error message in the CLI is due to no monitored app is available to be deployed. If you want to proceed for a local test, follow the steps at [Running DeployEx and Monitored app locally](https://github.com/deployex/deployex/tree/thi/add-erlang-hot-upgrade-support?tab=readme-ov-file#-running-deployex-locally). Also, it is important to note that the distribution will be required so this is the reason to add `-sname deployex` in the command
+> The error message in the CLI is due to no monitored app is available to be deployed. If you want to proceed for a local test, follow the steps at [Local Development & Application Setup](#-local-development--application-setup), or run `make dev-app`. Also, it is important to note that the distribution will be required so this is the reason to add `-sname deployex` in the command
 
 ### How DeployEx handles monitored application Version/Release
 
@@ -233,6 +274,8 @@ DeployEx offers a comprehensive set of Terraform examples for programmatically d
 
 ### Installation
 
+For a container, the image is built from [`devops/docker`](/devops/docker), see [DeployEx in a container](guides/docs/docker/README.md).
+
 If you intend to install DeployEx directly on an Ubuntu/Debian server, you can utilize the [deployex script](/devops/installer/deployex.sh) provided in the release package. This script is able to `install`, `update` and `hot-upgrade` DeployEx. However, you have the option to manually compile and install DeployEx on your target system.
 
 For a host with no internet route, the script can install and upgrade DeployEx from a private S3 bucket,
@@ -286,43 +329,63 @@ For local testing and development, check out these complementary repositories:
 - [Elixir - myumbrella](https://github.com/thiagoesteves/myumbrella)
 - [Elixir - ectoapp](https://github.com/thiagoesteves/ectoapp)
 
-## 🔨 Throubleshooting
+## 🔨 Troubleshooting
 
-### Accessing DeployEx logs
+The dashboard has the logs and a shell of DeployEx and of every instance, and that is the place to look first.
+The commands below are for when the dashboard cannot be reached, or DeployEx itself does not start.
+
+### On a host
 
 ```bash
-# production
+# The logs of DeployEx
 tail -f /var/log/deployex/deployex-stdout.log
 tail -f /var/log/deployex/deployex-stderr.log
-# local test
-# not available when running as dev env
-```
+journalctl -u deployex            # what systemd says about the service
 
-### Connecting to the DeployEx IEX CLI
-
-```bash
+# A shell in DeployEx
 export RELEASE_COOKIE=cookie
-# production
 /opt/deployex/bin/deployex remote
-# local test
-# not available when running as dev env
-```
 
-### Accessing monitored app logs
-
-```bash
+# The logs of an instance of a monitored app
 export monitored_app_name=myphoenixapp
 export sname="${monitored_app_name}-2l0rkp"
-
-# production
 tail -f /var/log/monitored-apps/${monitored_app_name}/${sname}-stdout.log
 tail -f /var/log/monitored-apps/${monitored_app_name}/${sname}-stderr.log
-# local test
+```
+
+### In a container
+
+DeployEx writes its logs to the output of the container, with the logs of the applications when `monitored_app_log_stdout` is set.
+The paths inside the container are the ones of a host, so everything else is the same after `exec`:
+
+```bash
+# Docker, from the root of this repository
+docker compose -f devops/docker/compose.yaml logs -f deployex
+docker compose -f devops/docker/compose.yaml exec deployex bash
+
+# Kubernetes
+kubectl logs -f deploy/deployex -c deployex
+kubectl exec -it deploy/deployex -c deployex -- bash
+
+# Then, inside the container
+RELEASE_COOKIE=cookie /opt/deployex/bin/deployex remote
+tail -f /var/log/monitored-apps/myphoenixapp/*-stdout.log
+```
+
+A container that is killed while the application starts is usually out of memory, see [On Kubernetes](guides/docs/docker/README.md#on-kubernetes) for the limit of open files that causes it.
+
+### Running locally, in development
+
+DeployEx runs in your terminal, so its logs and its shell are there. The files of the applications are under `/tmp/deployex`:
+
+```bash
 tail -f /tmp/deployex/varlog/${monitored_app_name}/${sname}-stdout.log
 tail -f /tmp/deployex/varlog/${monitored_app_name}/${sname}-stderr.log
 ```
 
-### Connecting to the monitored app manually
+### Connecting to a monitored app manually
+
+The paths are for a host or a container. In development, replace `/var/lib/deployex` with `/tmp/deployex/varlib`.
 
 #### Elixir
 
@@ -331,10 +394,7 @@ export monitored_app_name=myphoenixapp
 export sname="${monitored_app_name}-v636fq"
 export RELEASE_NODE=${sname}
 export RELEASE_COOKIE=cookie
-# production
 /var/lib/deployex/service/${monitored_app_name}/${sname}/current/bin/${monitored_app_name} remote
-# local test
-/tmp/deployex/varlib/service/${monitored_app_name}/${sname}/current/bin/${monitored_app_name} remote
 ```
 
 #### Gleam
@@ -342,11 +402,8 @@ export RELEASE_COOKIE=cookie
 ```bash
 export monitored_app_name=mygleamapp
 export sname="${monitored_app_name}-v636fq"
-export hostname=???? # From the local machine
+export hostname=???? # The host name of the machine or of the container
 export ssl_options="-proto_dist inet_tls -ssl_dist_optfile /tmp/inet_tls.conf" # If enabled
-# production
-erl -remsh ${sname}@${hostname} -setcookie cookie ${ssl_options}
-# local test
 erl -remsh ${sname}@${hostname} -setcookie cookie ${ssl_options}
 ```
 
@@ -359,10 +416,7 @@ export RELX_REPLACE_OS_VARS=true
 export RELEASE_NODE=${sname}
 export RELEASE_COOKIE=cookie
 export RELEASE_SSL_OPTIONS="-proto_dist inet_tls -ssl_dist_optfile /tmp/inet_tls.conf" # If enabled
-# production
 /var/lib/deployex/service/${monitored_app_name}/${sname}/current/bin/${monitored_app_name} remote_console
-# local test
-/tmp/deployex/varlib/service/${monitored_app_name}/${sname}/current/bin/${monitored_app_name} remote_console
 ```
 
 ## ❓How DeployEx handles services
@@ -377,7 +431,7 @@ DeployEx operates by monitoring applications and versions using folders and file
 ```
 
 ```bash
-# production environment
+# on a host or in a container
 /var/lib/deployex/service/${monitored_app}/${sname}/previous/${monitored_app}
 /var/lib/deployex/service/${monitored_app}/${sname}/new/${monitored_app}
 /var/lib/deployex/service/${monitored_app}/${sname}/current/${monitored_app}
