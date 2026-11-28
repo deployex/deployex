@@ -109,6 +109,7 @@
  * [`PULL-403`](https://github.com/deployex/deployex/pull/403) Admin and read-only access to the dashboard
  * [`PULL-404`](https://github.com/deployex/deployex/pull/404) Sign in with the identity of Cloudflare Access
  * [`PULL-405`](https://github.com/deployex/deployex/pull/405) Apply a change of the YAML as soon as it is seen, as an option
+ * [`PULL-423`](https://github.com/deployex/deployex/pull/423) Publish a multi-arch DeployEx image to ghcr.io alongside the host binaries
 
 # Host Binaries Available
 
@@ -120,6 +121,11 @@ This release includes binaries for the following Ubuntu versions:
  * Ubuntu 24.04 arm64 with OTP 29 - [deployex-ubuntu-24.04-arm64-otp-29.tar.gz](https://github.com/deployex/deployex/tree/main/devops/releases/otp-29/.tool-versions)
 
  You can use these pre-built binaries, or you can build your own if preferred.
+
+# Container Image
+
+A multi-arch (amd64/arm64) image is also published to [`ghcr.io/deployex/deployex`](https://github.com/deployex/deployex/pkgs/container/deployex), tagged with this version and with `latest`.
+The [Helm chart](https://github.com/deployex/deployex/tree/main/charts/deployex) uses it by default.
 
 # Previous Releases
 

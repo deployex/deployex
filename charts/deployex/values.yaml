@@ -6,13 +6,12 @@
 replicaCount: 1
 
 image:
-  # -- There is no published DeployEx image. Build your own with
-  # devops/docker/Dockerfile of https://github.com/deployex/deployex, from the root of
-  # the repository, and push it here - the image
-  # has DeployEx and no application, which comes from release storage at runtime.
-  repository: ""
-  # -- Pin to a DeployEx version. Required: there is no sane default, since it must
-  # match whatever you built and pushed.
+  # -- The published, multi-arch (amd64/arm64) DeployEx image - it has DeployEx and
+  # no application, which comes from release storage at runtime. Point this at your
+  # own registry instead if you build from devops/docker/Dockerfile yourself.
+  repository: ghcr.io/deployex/deployex
+  # -- Pin to a DeployEx version. Required: there is no sane default, since a chart
+  # upgrade with a stale tag would silently keep running the old image.
   tag: ""
   pullPolicy: IfNotPresent
 
