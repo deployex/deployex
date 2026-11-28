@@ -104,6 +104,11 @@ defmodule Foundation.Catalog.Local do
     File.mkdir_p!(history_version_path(name))
     File.mkdir_p!(ghosted_version_path(name))
 
+    # setup_new_node/1 creates it when an instance is created. An instance that is already
+    # on disk is started without it, and the directory is not always there any more: the
+    # logs of a container are not kept with /var/lib/deployex when only that is on a volume
+    if name != @deployex_name, do: File.mkdir_p!("#{log_path()}/#{name}")
+
     :ok
   end
 
