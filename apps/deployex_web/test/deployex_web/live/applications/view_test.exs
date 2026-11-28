@@ -704,6 +704,40 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
     assert %{system: "--", up: "--", icon: "linux"} = View.host(nil)
   end
 
+  test "the host card appends the container runtime when the host is running inside one" do
+    assert %{system: "Ubuntu 24.04 · " <> rest} =
+             View.host(%Host.Info{
+               host: "Linux",
+               description: "Ubuntu 24.04",
+               container: "docker"
+             })
+
+    assert String.ends_with?(rest, " · Docker")
+
+    assert %{system: "Ubuntu 24.04 · " <> rest} =
+             View.host(%Host.Info{
+               host: "Linux",
+               description: "Ubuntu 24.04",
+               container: "kubernetes"
+             })
+
+    assert String.ends_with?(rest, " · Kubernetes")
+
+    assert %{system: "Ubuntu 24.04 · " <> rest} =
+             View.host(%Host.Info{host: "Linux", description: "Ubuntu 24.04", container: "lxc"})
+
+    assert String.ends_with?(rest, " · LXC")
+
+    assert %{system: "Ubuntu 24.04 · " <> rest} =
+             View.host(%Host.Info{
+               host: "Linux",
+               description: "Ubuntu 24.04",
+               container: "podman"
+             })
+
+    assert String.ends_with?(rest, " · Podman")
+  end
+
   test "bytes and ages read as short text" do
     assert View.bytes(52_428_800) == "50 MB"
     assert View.age(~U[2026-10-28 15:55:00Z], @now) == "5m ago"
