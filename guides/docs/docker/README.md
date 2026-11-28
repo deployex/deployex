@@ -164,6 +164,9 @@ An application that makes its readiness path fail when it is asked to stop gets 
 
 ### On Kubernetes
 
+This section is the trial: the same two containers as one pod, by hand, to see exactly what is needed.
+For an actual install, use the [Helm chart](https://github.com/deployex/deployex/tree/main/charts/deployex) instead - a StatefulSet with a PVC per pod rather than this section's `Deployment` and node-local directory, built from what this trial found.
+
 The same two containers as one pod, on a local cluster made with [kind](https://kind.sigs.k8s.io).
 It needs `kind` and `kubectl` installed.
 

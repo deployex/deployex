@@ -1,0 +1,17 @@
+{{- if .Values.deployexConfig.agent_api.enabled }}
+# Keep this off a public load balancer - see guides/docs/agent-api/README.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "deployex.fullname" . }}-agent-api
+  labels:
+    {{- include "deployex.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.agentApi.type }}
+  selector:
+    {{- include "deployex.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: agent-api
+      port: {{ .Values.service.agentApi.port }}
+      targetPort: {{ .Values.service.agentApi.port }}
+{{- end }}

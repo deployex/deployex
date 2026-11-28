@@ -29,10 +29,11 @@ The release, the YAML and the dashboard are the same in both. What changes is wh
 | In front of the application | The proxy you have: NGINX, HAProxy, a cloud load balancer | HAProxy as a second container, which sends requests only to an instance that is ready |
 | A release of the application | A file in the release storage | A file in the release storage, with no new image |
 | What replaces the host or the container | You, or an autoscaler | The platform, as it does today |
-| Where to start | The cloud guides, with Terraform for [AWS](guides/docs/aws-elixir/README.md) and [GCP](guides/docs/gcp-elixir/README.md) | [DeployEx in a container](guides/docs/docker/README.md) |
+| Where to start | The cloud guides, with Terraform for [AWS](guides/docs/aws-elixir/README.md) and [GCP](guides/docs/gcp-elixir/README.md) | [DeployEx in a container](guides/docs/docker/README.md), or the [Helm chart](charts/deployex/README.md) directly on Kubernetes |
 
 On a host is where DeployEx started.
 In a container is newer: it was run with Docker and on a local Kubernetes cluster, and the guide has what was seen and what is still open.
+The [Helm chart](charts/deployex/README.md) is the packaged way to run it on Kubernetes, a StatefulSet with a PVC per pod rather than the guide's hand-written manifests.
 
 ### Try it with Docker
 
@@ -118,6 +119,7 @@ What DeployEx adds to it is in [Hot-Upgrades](guides/docs/hot-upgrades/README.md
   - Slack — formatted Incoming Webhook messages with per-event emoji and mrkdwn.
   - PagerDuty — Events API v2 incidents with automatic severity mapping.
 - Runs on a host, bare metal or a virtual machine, or in a container on Docker or Kubernetes, see [DeployEx in a container](guides/docs/docker/README.md).
+- Ships a [Helm chart](charts/deployex/README.md) for Kubernetes: a StatefulSet with a PVC per pod, a headless Service for peer discovery, and an HAProxy sidecar.
 - Supports local environments for non-cloud deployments
 - Connects to the DeployEx of other hosts or pods, deploys an application on one of them at a time, and shows all of them on the Fleet page.
 - Supports readiness and liveness probes for the monitored applications, over OTP or HTTP.

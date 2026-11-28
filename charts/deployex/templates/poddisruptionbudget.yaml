@@ -1,0 +1,15 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# Keeps a node drain from taking more DeployEx pods at once than this allows. Each pod
+# that goes is a full restart of its applications.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "deployex.fullname" . }}
+  labels:
+    {{- include "deployex.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "deployex.selectorLabels" . | nindent 6 }}
+{{- end }}

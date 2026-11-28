@@ -1,0 +1,34 @@
+# Values the chart is rendered with in CI (.github/workflows/helm.yaml): the options
+# that are off by default turned on, so their templates are rendered too.
+image:
+  repository: registry.example.com/deployex
+  tag: "0.10.0"
+replicaCount: 3
+imagePullSecrets:
+  - name: registry-credentials
+haproxy:
+  readinessPath: /readyz
+deployexConfig:
+  hostname: deployex.example.com
+  release_bucket: myphoenixapp-prod-distribution
+  aws_region: sa-east-1
+  agent_api:
+    enabled: true
+  applications:
+    - name: myphoenixapp
+      language: elixir
+      replicas: 1
+      replica_ports:
+        - key: PORT
+          base: 4000
+secret:
+  existingSecret: deployex-secrets
+podDisruptionBudget:
+  enabled: true
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: deployex

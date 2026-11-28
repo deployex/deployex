@@ -1,0 +1,23 @@
+DeployEx is starting as {{ .Values.replicaCount }} pod{{ if gt (.Values.replicaCount | int) 1 }}s{{ end }} ({{ include "deployex.fullname" . }}).
+
+Dashboard (user admin, password from your secret's DEPLOYEX_ADMIN_HASHED_PASSWORD):
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "deployex.fullname" . }}-dashboard {{ .Values.service.dashboard.port }}:{{ .Values.service.dashboard.port }}
+  open http://localhost:{{ .Values.service.dashboard.port }}
+
+It has no application yet. Publish one to the release storage named by deployexConfig.release_bucket
+(adapter: {{ .Values.deployexConfig.release_adapter }}), the same way as
+https://github.com/deployex/deployex/blob/main/guides/docs/docker/README.md#2-publish-an-application,
+and DeployEx picks it up within a few seconds.
+
+{{- if not .Values.deployexConfig.agent_api.enabled }}
+
+The Agent API is off (deployexConfig.agent_api.enabled: false). Turn it on to drive DeployEx from a
+script, a CI pipeline, or rollout-guard (https://github.com/deployex/rollout-guard) instead of the
+dashboard - see https://github.com/deployex/deployex/blob/main/guides/docs/agent-api/README.md.
+{{- end }}
+
+{{- if not .Values.persistence.enabled }}
+
+persistence.enabled is false: a pod that restarts starts over with none of its release history or
+ghosted versions. Fine for a disposable trial, not recommended otherwise.
+{{- end }}
