@@ -26,6 +26,16 @@ defmodule DeployexWeb.Application do
       {DynamicSupervisor, name: DeployexWeb.Shell.Supervisor, strategy: :one_for_one},
       # Start the Finch HTTP client for sending emails
       {Finch, name: DeployexWeb.Finch},
+      # TRIAL ONLY - one facade repo + one dashboard-only Oban instance per "monitored app" -
+      # see DeployexWeb.Trial.MonitoredObanRepo
+      DeployexWeb.Trial.MonitoredObanRepo,
+      {Oban,
+       Application.fetch_env!(:deployex_web, DeployexWeb.Trial.MonitoredOban)
+       |> Keyword.put(:name, DeployexWeb.Trial.MonitoredOban)},
+      DeployexWeb.Trial.MyphoenixappObanRepo,
+      {Oban,
+       Application.fetch_env!(:deployex_web, DeployexWeb.Trial.MyphoenixappOban)
+       |> Keyword.put(:name, DeployexWeb.Trial.MyphoenixappOban)},
       # Start a worker by calling: DeployexWeb.Worker.start_link(arg)
       # {DeployexWeb.Worker, arg},
       # Start to serve requests, typically the last entry

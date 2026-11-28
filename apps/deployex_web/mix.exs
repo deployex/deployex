@@ -66,6 +66,12 @@ defmodule DeployexWeb.MixProject do
       {:dns_cluster, "~> 0.3"},
       {:bandit, "~> 1.5"},
       {:observer_web, "~> 0.2.0"},
+      # TRIAL: validating an Oban Web dashboard that reads a monitored app's
+      # Oban tables directly over Postgres, with no Erlang RPC to that app's node
+      {:ecto_sql, "~> 3.14"},
+      {:postgrex, "~> 0.23.0"},
+      {:oban, "~> 2.24"},
+      {:oban_web, "~> 2.11"},
       {:assent, "~> 0.3"},
       # The tokens of Cloudflare Access
       {:jose, "~> 1.11"},

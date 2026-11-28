@@ -222,3 +222,36 @@ if System.get_env("DEPLOYEX_API_TOKENS") do
 
   config :deployex_web, DeployexWeb.AgentApi, tokens: System.get_env("DEPLOYEX_API_TOKENS")
 end
+
+# TRIAL ONLY: Oban Web mounted against a monitored app's own database (myumbrella's
+# app_1, dev env) with no Erlang RPC to that app's node - see DeployexWeb.Trial.MonitoredObanRepo
+config :deployex_web, DeployexWeb.Trial.MonitoredObanRepo,
+  username: "postgres",
+  password: "postgres",
+  hostname: "localhost",
+  database: "myumbrella_dev",
+  pool_size: 5
+
+config :deployex_web,
+  ecto_repos: [DeployexWeb.Trial.MonitoredObanRepo, DeployexWeb.Trial.MyphoenixappObanRepo]
+
+config :deployex_web, DeployexWeb.Trial.MonitoredOban,
+  repo: DeployexWeb.Trial.MonitoredObanRepo,
+  # Dashboard-only: never run the monitored app's jobs from inside DeployEx
+  queues: false,
+  plugins: false
+
+# TRIAL ONLY: a second "monitored app" target (myphoenixapp_prod, migrated with empty Oban
+# tables) to prove the dashboard's own instance switcher is the app picker - see
+# DeployexWeb.Trial.MyphoenixappObanRepo
+config :deployex_web, DeployexWeb.Trial.MyphoenixappObanRepo,
+  username: "postgres",
+  password: "postgres",
+  hostname: "localhost",
+  database: "myphoenixapp_prod",
+  pool_size: 5
+
+config :deployex_web, DeployexWeb.Trial.MyphoenixappOban,
+  repo: DeployexWeb.Trial.MyphoenixappObanRepo,
+  queues: false,
+  plugins: false

@@ -28,6 +28,8 @@ defmodule DeployexWeb.Layouts do
     # One item for the Logs page, which switches between Live and History itself
     %{path: "/logs/live", label: "Logs", icon: "lines", section: "/logs/"},
     %{path: "/embedded-observer", label: "Observer Web", icon: "observer-web", admin: true},
+    # TRIAL ONLY - see DeployexWeb.Trial.MonitoredObanRepo
+    %{path: "/oban", label: "Oban", icon: "cube", admin: true},
     %{path: "/terminal", label: "Terminal", icon: "command-line", admin: true},
     %{path: "/hotupgrade", label: "Hot Upgrade", icon: "arrow-up-circle", admin: true},
     %{path: "/documentation", label: "Documentation", icon: "book-open"}
