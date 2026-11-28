@@ -248,6 +248,10 @@ echo "running on every host"
 
 When the version is ghosted, the pipeline writes the previous version back to `current.json`.
 
+[`rollout-guard`](https://github.com/deployex/rollout-guard) is this as a GitHub Action: it polls every host, fails fast on a ghosted
+version, an unauthorized token, or an app not monitored on a host, and otherwise keeps waiting up to a timeout, rather than on a
+single check against a single host.
+
 ## Local run
 
 Export the tokens before you start DeployEx. The listener then serves `http://localhost:5002`:
