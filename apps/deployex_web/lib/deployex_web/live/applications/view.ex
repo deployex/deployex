@@ -735,7 +735,7 @@ defmodule DeployexWeb.ApplicationsLive.View do
   defp language_name("gleam"), do: "Gleam"
   defp language_name(other), do: to_string(other)
 
-  defp system(%Host.Info{host: host, description: description})
+  defp system(%Host.Info{host: host, description: description, container: container})
        when is_binary(host) and host != "" do
     arch = :erlang.system_info(:system_architecture) |> to_string() |> String.split("-") |> hd()
 
@@ -747,10 +747,20 @@ defmodule DeployexWeb.ApplicationsLive.View do
         description -> description
       end
 
-    "#{os} · #{arch}"
+    case container_label(container) do
+      nil -> "#{os} · #{arch}"
+      label -> "#{os} · #{arch} · #{label}"
+    end
   end
 
   defp system(_host_info), do: "--"
+
+  defp container_label(nil), do: nil
+  defp container_label("docker"), do: "Docker"
+  defp container_label("podman"), do: "Podman"
+  defp container_label("kubernetes"), do: "Kubernetes"
+  defp container_label("lxc"), do: "LXC"
+  defp container_label(other), do: String.capitalize(other)
 
   defp system_icon(%Host.Info{host: host}) when is_binary(host) do
     if String.contains?(String.downcase(host), "mac"), do: "macos", else: "linux"

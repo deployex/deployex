@@ -157,11 +157,13 @@ defmodule DeployexWeb.VersionsLive do
               </div>
               <%= for row <- rows(@history, @filter, @currents, @now) do %>
                 <div class="dx-vrow">
-                  <div class="flex items-center gap-2">
-                    <b class="dx-mono text-sm">{row.version}</b>
+                  <div class="min-w-0 flex flex-wrap items-center gap-2">
+                    <b class="dx-mono wrap-anywhere text-sm">{row.version}</b>
                     <span :if={row.current} class="dx-chip dx-s-ok px-2 py-px text-xs">current</span>
                   </div>
-                  <div class="dx-mono text-[0.8125rem]">{row.sname}</div>
+                  <div class="dx-mono min-w-0 wrap-anywhere text-[0.8125rem]">
+                    {row.sname}
+                  </div>
                   <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <Tags.deploy_tag
                       type={if row.deployment == :hot_upgrade, do: :hot, else: :full}
