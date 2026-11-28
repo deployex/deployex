@@ -65,6 +65,9 @@ defmodule Host.InfoTest do
 
       "cat /etc/os-release | grep VERSION= | sed 's/VERSION=//; s/\"//g'", [:stdout, :sync] ->
         {:ok, [{:stdout, [os_description]}]}
+
+      "if grep -qa kubepods" <> _, [:stdout, :sync] ->
+        {:ok, [{:stdout, ["docker"]}]}
     end)
 
     assert {:ok, _pid} = InfoServer.start_link(name: name, update_info_interval: 100)
@@ -75,6 +78,7 @@ defmodule Host.InfoTest do
                     %Host.Info{
                       host: "Linux",
                       description: ^os_description,
+                      container: "docker",
                       memory_free: 1_263_837_184,
                       memory_total: 2_055_806_976,
                       uptime: "15 days",
@@ -153,6 +157,9 @@ defmodule Host.InfoTest do
 
       "cat /etc/os-release | grep VERSION= | sed 's/VERSION=//; s/\"//g'", [:stdout, :sync] ->
         {:ok, [{:stdout, [os_description]}]}
+
+      "if grep -qa kubepods" <> _, [:stdout, :sync] ->
+        {:ok, [{:stdout, ["none"]}]}
     end)
 
     assert {:ok, _pid} = InfoServer.start_link(name: name, update_info_interval: 100)
@@ -163,6 +170,7 @@ defmodule Host.InfoTest do
                     %Host.Info{
                       host: "Linux",
                       description: ^os_description,
+                      container: nil,
                       memory_free: 1_263_837_184,
                       memory_total: 2_055_806_976,
                       uptime: "15 days",
