@@ -312,7 +312,7 @@ Where it matters, a release's changelog says so under `Backwards incompatible ch
 
 Coding practices that make a project hot-upgradable (closures, `code_change/3`, supervision tree changes, cross-version compatibility, native code) and framework-level pitfalls (Phoenix static assets, LiveView) are covered in [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades#good-practices-for-a-project-that-can-be-hot-upgraded). They apply to any project DeployEx hot-upgrades, not just this one.
 
-The one DeployEx-specific addition: exercising the upgrade before production belongs in CI. This project does that in [`hot_upgrade.yaml`](/.github/workflows/hot_upgrade.yaml): it checks out both tags, builds each, and publishes the target release with its hot-upgrade information as an artifact. It still does not apply the upgrade itself, that step is run by hand against a real node. The local guides walk through exactly that on a machine, see [Local-Elixir](/guides/docs/local-elixir/README.md). The [Calori project](https://github.com/thiagoesteves/calori/blob/main/.github/workflows/hot-upgrade.yaml) shows the same build-in-CI approach for a monitored application.
+The one DeployEx-specific addition: exercising the upgrade before production belongs in CI. This project does that in [`hot_upgrade.yaml`](/.github/workflows/hot_upgrade.yaml): it checks out both tags, builds each, and publishes the target release with its hot-upgrade information as an artifact. It still does not apply the upgrade itself, that step is run by hand against a real node. The local guides walk through exactly that on a machine, see [Local-Elixir](/guides/docs/local-elixir/README.md). [myumbrella](https://github.com/deployex/myumbrella) goes further for a monitored application: its [`relup-guard.yml`](https://github.com/deployex/myumbrella/blob/main/.github/workflows/relup-guard.yml) uses [relup-guard-elixir](https://github.com/deployex/relup-guard-elixir) to actually apply the upgrade against a live node in CI, rather than only building and publishing it as an artifact for a later manual install.
 
 ## Checking whether a hot upgrade is possible
 
@@ -499,14 +499,14 @@ Past that point the new code is already loaded, and the message says so instead.
 
 ## Hot-Upgrading Monitored Applications
 
-Example GitHub CI workflow for hot-upgrading applications:
+A monitored application's CI can go further than building a hot-upgrade artifact for a later manual install, and actually apply the upgrade in CI, the same way DeployEx itself does in production:
 
-1. Fetch `current.json` to identify deployed version
-2. Checkout current version and compile
-3. Checkout target version and compile
-4. Generate release with hot-upgrade information
+1. Build the currently-deployed version, boot it as a daemon
+2. Unpack the target version into the running node
+3. Synthesize and apply the relup for real (`systools:make_relup/4`, `install_release`, `make_permanent`)
+4. Fail the build if any of that fails, instead of only generating an artifact
 
-See [example workflow](https://github.com/thiagoesteves/calori/blob/main/.github/workflows/hot-upgrade.yaml) for implementation details.
+See [myumbrella](https://github.com/deployex/myumbrella)'s [`relup-guard.yml`](https://github.com/deployex/myumbrella/blob/main/.github/workflows/relup-guard.yml), which drives this through [relup-guard-elixir](https://github.com/deployex/relup-guard-elixir), for a working example.
 
 Two things about the rollout are worth knowing before you rely on it.
 
@@ -619,6 +619,6 @@ The general `appup`/`relup`/`release_handler` terms are in [beam-hotupgrades' gl
 
 - [beam-hotupgrades](https://github.com/deployex/beam-hotupgrades) - the BEAM hot upgrade mechanism, good practices, and pitfalls, not specific to DeployEx
 - [Jellyfish Documentation][jyf] - AppUp file generation
-- [Calori Project](https://github.com/thiagoesteves/calori) - Real-world implementation examples
+- [myumbrella](https://github.com/deployex/myumbrella) - Real-world implementation example, including a hot-upgrade CI check that applies a real upgrade
 
 [jyf]: https://github.com/deployex/jellyfish
