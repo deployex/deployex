@@ -16,9 +16,7 @@ defmodule Foundation.ConfigProvider.Secrets.Directory do
   """
   @behaviour Foundation.ConfigProvider.Secrets.Adapter
 
-  # The run script of a monitored application removes every RELEASE_ and DEPLOYEX_ variable
-  # before it starts the application, so a file with such a name would never reach it
-  @reserved_prefixes ["RELEASE_", "DEPLOYEX_"]
+  alias Foundation.ConfigProvider.Secrets.EnvName
 
   require Logger
 
@@ -49,18 +47,22 @@ defmodule Foundation.ConfigProvider.Secrets.Directory do
 
   defp files(path) do
     with {:ok, names} <- File.ls(path) do
-      {:ok,
-       names
-       |> Enum.reject(&String.starts_with?(&1, "."))
-       |> Map.new(&{&1, read!(path, &1)})}
+      names
+      |> Enum.reject(&String.starts_with?(&1, "."))
+      |> Enum.reduce_while({:ok, %{}}, fn name, {:ok, acc} ->
+        case read(path, name) do
+          {:ok, content} -> {:cont, {:ok, Map.put(acc, name, content)}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
     end
   end
 
-  defp read!(path, name) do
-    path
-    |> Path.join(name)
-    |> File.read!()
-    |> trim_one_trailing_newline()
+  defp read(path, name) do
+    case path |> Path.join(name) |> File.read() do
+      {:ok, content} -> {:ok, trim_one_trailing_newline(content)}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # String.trim_trailing/2 removes every trailing match, not just one, so a file with two
@@ -78,7 +80,7 @@ defmodule Foundation.ConfigProvider.Secrets.Directory do
     {env, skipped} =
       files
       |> Enum.sort()
-      |> Enum.split_with(fn {name, _value} -> env_name?(name) end)
+      |> Enum.split_with(fn {name, _value} -> EnvName.valid?(name) end)
 
     if skipped != [] do
       Logger.warning(
@@ -88,10 +90,5 @@ defmodule Foundation.ConfigProvider.Secrets.Directory do
     end
 
     env
-  end
-
-  defp env_name?(name) do
-    Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*$/, name) and
-      not String.starts_with?(name, @reserved_prefixes)
   end
 end

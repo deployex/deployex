@@ -58,6 +58,14 @@ defmodule Foundation.ConfigProvider.Secrets.DirectoryTest do
                    ~s(Fail to retrieve secrets with reason :enoent),
                    fn -> Directory.secrets([], "/no/such/directory", []) end
     end
+
+    test "raises when an entry cannot be read as a file, instead of a File.Error", %{dir: dir} do
+      File.mkdir_p!(Path.join(dir, "SUBDIR"))
+
+      assert_raise RuntimeError,
+                   ~s(Fail to retrieve secrets with reason :eisdir),
+                   fn -> Directory.secrets([], dir, []) end
+    end
   end
 
   describe "application_env/1" do
@@ -91,6 +99,14 @@ defmodule Foundation.ConfigProvider.Secrets.DirectoryTest do
 
     test "returns the error of a directory that cannot be read" do
       assert Directory.application_env("/no/such/directory") == {:error, :enoent}
+    end
+
+    test "returns the error of an entry that cannot be read as a file, instead of raising", %{
+      dir: dir
+    } do
+      File.mkdir_p!(Path.join(dir, "SUBDIR"))
+
+      assert Directory.application_env(dir) == {:error, :eisdir}
     end
   end
 end

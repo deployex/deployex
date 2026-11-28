@@ -447,7 +447,8 @@ An application that needs 1Password credentials of its own gets them as fields o
 
 ## Secrets from a directory
 
-DeployEx can also read secrets from a directory of files, one secret per file: the file's name is the secret's name, and its content is the value. This is how a Kubernetes Secret appears once mounted as a volume, so the same adapter reads a plain Kubernetes Secret, one kept in sync by the [External Secrets Operator](https://external-secrets.io), or one written to disk by the [Vault Agent injector](https://developer.hashicorp.com/vault/docs/platform/k8s/injector) or the [Vault Secrets Store CSI driver](https://developer.hashicorp.com/vault/docs/platform/k8s/csi), with no code of its own for any of them: by the time the files are on disk, DeployEx cannot tell which one put them there.
+DeployEx can also read secrets from a directory of files, one secret per file: the file's name is the secret's name, and its content is the value.
+This is how a Kubernetes Secret appears once mounted as a volume, so the same adapter reads a plain Kubernetes Secret, one kept in sync by the [External Secrets Operator](https://external-secrets.io), or one written to disk by the [Vault Agent injector](https://developer.hashicorp.com/vault/docs/platform/k8s/injector) or the [Vault Secrets Store CSI driver](https://developer.hashicorp.com/vault/docs/platform/k8s/csi), with no code of its own for any of them: by the time the files are on disk, DeployEx cannot tell which one put them there.
 
 As with 1Password, both of DeployEx's own secrets and the secrets of a monitored application take an adapter and a path, here the path to the directory:
 
