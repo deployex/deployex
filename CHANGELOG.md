@@ -109,7 +109,7 @@
  * [`PULL-403`](https://github.com/deployex/deployex/pull/403) Admin and read-only access to the dashboard
  * [`PULL-404`](https://github.com/deployex/deployex/pull/404) Sign in with the identity of Cloudflare Access
  * [`PULL-405`](https://github.com/deployex/deployex/pull/405) Apply a change of the YAML as soon as it is seen, as an option
- * [`PULL-423`](https://github.com/deployex/deployex/pull/423) Publish a multi-arch DeployEx image to ghcr.io alongside the host binaries
+ * [`PULL-425`](https://github.com/deployex/deployex/pull/425) Publish a multi-arch DeployEx image to ghcr.io alongside the host binaries
 
 # Host Binaries Available
 
