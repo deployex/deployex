@@ -66,7 +66,7 @@ defmodule Host.InfoTest do
       "cat /etc/os-release | grep VERSION= | sed 's/VERSION=//; s/\"//g'", [:stdout, :sync] ->
         {:ok, [{:stdout, [os_description]}]}
 
-      "if [ -f /.dockerenv" <> _, [:stdout, :sync] ->
+      "if grep -qa kubepods" <> _, [:stdout, :sync] ->
         {:ok, [{:stdout, ["docker"]}]}
     end)
 
@@ -158,7 +158,7 @@ defmodule Host.InfoTest do
       "cat /etc/os-release | grep VERSION= | sed 's/VERSION=//; s/\"//g'", [:stdout, :sync] ->
         {:ok, [{:stdout, [os_description]}]}
 
-      "if [ -f /.dockerenv" <> _, [:stdout, :sync] ->
+      "if grep -qa kubepods" <> _, [:stdout, :sync] ->
         {:ok, [{:stdout, ["none"]}]}
     end)
 
