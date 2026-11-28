@@ -15,7 +15,7 @@ defmodule Host.Info.DescriptionTest do
          os_release_result \\ {:ok, [{:stdout, ["24.04.1 LTS (Noble Numbat)"]}]}
        ) do
     stub(Host.CommanderMock, :run, fn
-      "if [ -f /.dockerenv" <> _, [:stdout, :sync] -> container_result
+      "if grep -qa kubepods" <> _, [:stdout, :sync] -> container_result
       @os_release, [:stdout, :sync] -> os_release_result
     end)
   end
@@ -35,12 +35,46 @@ defmodule Host.Info.DescriptionTest do
     assert %Description{host: "Linux", container: "kubernetes"} = Description.get_linux()
   end
 
-  test "Linux inside Podman or LXC reports that runtime" do
+  test "the kubepods cgroup is checked before /.dockerenv, so a dockershim pod is Kubernetes" do
+    stub(Host.CommanderMock, :run, fn
+      "if grep -qa kubepods" <> _ = command, [:stdout, :sync] ->
+        {kubepods_at, _} = :binary.match(command, "kubepods")
+        {dockerenv_at, _} = :binary.match(command, "/.dockerenv")
+        assert kubepods_at < dockerenv_at
+        {:ok, [{:stdout, ["kubernetes"]}]}
+
+      @os_release, [:stdout, :sync] ->
+        {:ok, [{:stdout, ["24.04.1 LTS (Noble Numbat)"]}]}
+    end)
+
+    assert %Description{container: "kubernetes"} = Description.get_linux()
+  end
+
+  test "Linux inside Podman reports the podman runtime" do
     stub_linux({:ok, [{:stdout, ["podman"]}]})
     assert %Description{container: "podman"} = Description.get_linux()
+  end
 
+  test "Linux inside LXC reports the lxc runtime" do
     stub_linux({:ok, [{:stdout, ["lxc"]}]})
     assert %Description{container: "lxc"} = Description.get_linux()
+  end
+
+  test "detection runs once per process and is cached for later calls" do
+    stub(Host.CommanderMock, :run, fn
+      "if grep -qa kubepods" <> _, [:stdout, :sync] -> {:ok, [{:stdout, ["docker"]}]}
+      @os_release, [:stdout, :sync] -> {:ok, [{:stdout, ["24.04.1 LTS (Noble Numbat)"]}]}
+    end)
+
+    assert %Description{container: "docker"} = Description.get_linux()
+
+    # Stubbed to a different runtime: a cached call would still see the first result
+    stub(Host.CommanderMock, :run, fn
+      "if grep -qa kubepods" <> _, [:stdout, :sync] -> {:ok, [{:stdout, ["podman"]}]}
+      @os_release, [:stdout, :sync] -> {:ok, [{:stdout, ["24.04.1 LTS (Noble Numbat)"]}]}
+    end)
+
+    assert %Description{container: "docker"} = Description.get_linux()
   end
 
   test "Linux reports no container runtime when the detection command fails" do

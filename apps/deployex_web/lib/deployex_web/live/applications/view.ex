@@ -760,6 +760,7 @@ defmodule DeployexWeb.ApplicationsLive.View do
   defp container_label("podman"), do: "Podman"
   defp container_label("kubernetes"), do: "Kubernetes"
   defp container_label("lxc"), do: "LXC"
+  defp container_label(other), do: String.capitalize(other)
 
   defp system_icon(%Host.Info{host: host}) when is_binary(host) do
     if String.contains?(String.downcase(host), "mac"), do: "macos", else: "linux"

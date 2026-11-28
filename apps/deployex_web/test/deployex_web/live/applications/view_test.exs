@@ -738,6 +738,17 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
     assert String.ends_with?(rest, " · Podman")
   end
 
+  test "the host card still shows an unrecognized container runtime, capitalized" do
+    assert %{system: "Ubuntu 24.04 · " <> rest} =
+             View.host(%Host.Info{
+               host: "Linux",
+               description: "Ubuntu 24.04",
+               container: "containerd"
+             })
+
+    assert String.ends_with?(rest, " · Containerd")
+  end
+
   test "bytes and ages read as short text" do
     assert View.bytes(52_428_800) == "50 MB"
     assert View.age(~U[2026-10-28 15:55:00Z], @now) == "5m ago"

@@ -58,14 +58,16 @@ defmodule Host.Info.Description do
   ### Private Functions
   ### ==========================================================================
 
-  # /.dockerenv and /run/.containerenv are the markers Docker and Podman each drop into every
-  # container they start. /proc/1/cgroup is the fallback for runtimes that drop neither, such as
-  # containerd or LXC, and for Kubernetes, whose pods are still Docker/containerd underneath.
-  defp container_runtime do
+  # The kubepods cgroup is checked first: a Kubernetes pod using the Docker (dockershim) or
+  # Podman/CRI-O runtime still carries /.dockerenv or /run/.containerenv, and this host is
+  # Kubernetes, not whichever engine it happens to run on. /.dockerenv and /run/.containerenv
+  # are the markers Docker and Podman each drop into every other container they start.
+  # /proc/1/cgroup is the fallback for runtimes that drop neither, such as containerd or LXC.
+  defp detect_container_runtime do
     command = """
-    if [ -f /.dockerenv ]; then echo docker
+    if grep -qa kubepods /proc/1/cgroup 2>/dev/null; then echo kubernetes
+    elif [ -f /.dockerenv ]; then echo docker
     elif [ -f /run/.containerenv ]; then echo podman
-    elif grep -qa kubepods /proc/1/cgroup 2>/dev/null; then echo kubernetes
     elif grep -qaE 'docker|containerd' /proc/1/cgroup 2>/dev/null; then echo docker
     elif grep -qa /lxc/ /proc/1/cgroup 2>/dev/null; then echo lxc
     else echo none
@@ -81,6 +83,23 @@ defmodule Host.Info.Description do
 
       _ ->
         nil
+    end
+  end
+
+  # The container runtime a process is running under never changes for the life of that
+  # process, so it is detected once per process and cached, instead of spawning a shell
+  # command on every poll of Host.Info.Server.
+  @container_runtime_key {__MODULE__, :container_runtime}
+
+  defp container_runtime do
+    case Process.get(@container_runtime_key, :not_detected) do
+      :not_detected ->
+        runtime = detect_container_runtime()
+        Process.put(@container_runtime_key, runtime)
+        runtime
+
+      runtime ->
+        runtime
     end
   end
 end
