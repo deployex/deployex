@@ -1,0 +1,173 @@
+# -- Number of DeployEx pods in the fleet. Each one monitors and deploys its own
+# instance of every application in deployexConfig.applications - this is not the
+# replicas of the application, that is deployexConfig.applications[].replicas.
+# With more than one, each pod finds the others through the headless Service this
+# chart creates, and deploys one at a time; see peers_dns_query below.
+replicaCount: 1
+
+image:
+  # -- There is no published DeployEx image. Build your own with the Dockerfile at
+  # the root of https://github.com/deployex/deployex and push it here - the image
+  # has DeployEx and no application, which comes from release storage at runtime.
+  repository: ""
+  # -- Pin to a DeployEx version. Required: there is no sane default, since it must
+  # match whatever you built and pushed.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+haproxy:
+  image: haproxy:3.2-alpine
+  pullPolicy: IfNotPresent
+  resources: {}
+  # -- The config HAProxy starts with, as a plain string - the same file as
+  # devops/docker/haproxy.cfg, not generated from deployexConfig.applications.
+  # The default below matches one application named myphoenixapp with one replica
+  # on replica_ports base 4000, frontend port 8080 (service.app.targetPort).
+  # Edit this to match your own applications, their ports and their replica counts.
+  config: |
+    defaults
+      mode http
+      timeout connect 2s
+      timeout client 60s
+      timeout server 60s
+      timeout tunnel 1h
+      retries 2
+      option redispatch
+
+    frontend outside
+      bind :8080
+      option forwardfor
+      http-request set-header X-Forwarded-Proto http
+      default_backend application
+
+    backend application
+      option httpchk
+      http-check send meth GET uri / ver HTTP/1.1 hdr Host localhost
+      http-check expect status 200
+      default-server check inter 1s fall 2 rise 2
+      server port0 127.0.0.1:4000
+      server port1 127.0.0.1:4001
+
+# -- The contents of deployex.yaml, passed through almost as-is - see
+# https://github.com/deployex/deployex/blob/main/guides/docs/yaml/README.md for every
+# key this accepts. A few keys are filled in by the chart when left unset here:
+# peers_dns_query (from the headless Service this chart creates) and
+# agent_api.port (from service.agentApi.port). Set them here yourself to override.
+deployexConfig:
+  hostname: ""
+  port: 5001
+  scheme: http
+  check_origin: false
+
+  release_adapter: s3
+  release_bucket: ""
+
+  # env + a Secret (secret.create or secret.existingSecret below), the same pattern
+  # the hand-written Kubernetes manifest trial uses. Switch to "directory" to read a
+  # Kubernetes Secret, one from the External Secrets Operator, or one the Vault Agent
+  # injector writes, mounted as a volume instead - see extraVolumes/extraVolumeMounts
+  # and guides/docs/yaml/README.md#secrets-from-a-directory.
+  secrets_adapter: env
+  secrets_path: not-used
+
+  log_format: text
+  config_auto_apply: true
+  monitored_app_log_stdout: true
+
+  agent_api:
+    enabled: false
+    port: 5002
+
+  # -- Every application DeployEx monitors, in the same shape as the applications
+  # section of deployex.yaml. Empty by default: a pod with no application configured
+  # still starts, with nothing to deploy yet.
+  applications: []
+
+service:
+  app:
+    type: ClusterIP
+    port: 80
+    # -- Must match the port haproxy.config's frontend binds.
+    targetPort: 8080
+  dashboard:
+    type: ClusterIP
+    port: 5001
+  # -- A Service for the Agent API, created only when deployexConfig.agent_api.enabled
+  # is true. Keep this off a public load balancer - see the Agent API guide.
+  agentApi:
+    type: ClusterIP
+    port: 5002
+
+persistence:
+  # -- A PersistentVolumeClaim per pod (via volumeClaimTemplates), mounted at
+  # /var/lib/deployex: the release history and ghosted versions DeployEx keeps for
+  # itself. Without one, a pod that restarts starts over from current.json with none
+  # of that history, same as the hand-written Kubernetes manifest trial's hostPath.
+  enabled: true
+  size: 1Gi
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+
+secret:
+  # -- The chart creates a Secret from the values below. For anything beyond a
+  # trial, set existingSecret instead - a Secret you created by hand, with the
+  # External Secrets Operator, or any other way - and leave this false.
+  create: false
+  # -- Name of a Secret you created yourself, with at least the keys
+  # DEPLOYEX_SECRET_KEY_BASE, DEPLOYEX_ERLANG_COOKIE and
+  # DEPLOYEX_ADMIN_HASHED_PASSWORD, and DEPLOYEX_API_TOKENS /
+  # DEPLOYEX_OAUTH_CLIENT_SECRET if those features are on. Ignored when create is true.
+  existingSecret: ""
+  # -- Only read when create is true. A literal value here ends up in this chart's
+  # release data (visible to anyone who can run `helm get values`) - fine for a
+  # trial, not for production.
+  secretKeyBase: ""
+  erlangCookie: ""
+  adminHashedPassword: ""
+  apiTokens: ""
+  oauthClientSecret: ""
+
+resources: {}
+
+podAnnotations: {}
+podLabels: {}
+
+# -- 1001 is the uid/gid of the "deployex" user the Dockerfile creates with
+# useradd, with no fixed --uid/--gid of its own, so it is whatever the base
+# image's next free one happens to be - checked against the actual built image,
+# not assumed. Confirm it still matches if you build from a different base image.
+podSecurityContext:
+  fsGroup: 1001
+
+securityContext:
+  # runAsNonRoot can't be verified against an image whose USER is a name, not a
+  # number, without also pinning runAsUser - the kubelet refuses to start the
+  # container otherwise ("cannot verify user is non-root").
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  allowPrivilegeEscalation: false
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Extra volumes on the pod, e.g. a Secret mounted for an application's
+# secrets_adapter: "directory", or your own TLS certificates for the OTP distribution.
+extraVolumes: []
+
+# -- Matching mounts for extraVolumes, on the deployex container.
+extraVolumeMounts: []
+
+# -- Extra environment variables on the deployex container, as a list of the usual
+# {name, value} or {name, valueFrom} entries - DEPLOYEX_MAX_OPEN_FILES or
+# LOGROTATE_INTERVAL_SECONDS, for instance.
+extraEnv: []
+
+terminationGracePeriodSeconds: 60

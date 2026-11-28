@@ -1,0 +1,18 @@
+# publishNotReadyAddresses: the dashboard has to answer before an application is
+# published and when a release is bad, which is exactly when a Service would
+# otherwise withhold it for not being ready.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "deployex.fullname" . }}-dashboard
+  labels:
+    {{- include "deployex.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.dashboard.type }}
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "deployex.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: dashboard
+      port: {{ .Values.service.dashboard.port }}
+      targetPort: {{ .Values.deployexConfig.port }}

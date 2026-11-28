@@ -1,0 +1,148 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "deployex.fullname" . }}
+  labels:
+    {{- include "deployex.labels" . | nindent 4 }}
+spec:
+  # Required: this is what makes serviceName's Service create the per-pod DNS
+  # records (<pod>.<serviceName>...) that peers_dns_query relies on resolving.
+  serviceName: {{ include "deployex.fullname" . }}-headless
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "deployex.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "deployex.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "deployex.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # A plain DNS search for the short name of another pod, "deployex-0" say, to
+      # resolve without the caller naming the headless Service's own domain - what
+      # peers_dns_query with a StatefulSet needs instead of DEPLOYEX_NODE_HOST, which
+      # is for a Deployment's pods, which have no such name to begin with.
+      dnsConfig:
+        searches:
+          - {{ printf "%s-headless.%s.svc.cluster.local" (include "deployex.fullname" .) .Release.Namespace }}
+      containers:
+        - name: deployex
+          image: "{{ required "image.repository is required - there is no published DeployEx image, build your own" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: dashboard
+              containerPort: {{ .Values.deployexConfig.port }}
+            - name: epmd
+              containerPort: 4369
+            {{- if .Values.deployexConfig.agent_api.enabled }}
+            - name: agent-api
+              containerPort: {{ .Values.service.agentApi.port }}
+            {{- end }}
+          env:
+            - name: DEPLOYEX_CONFIG_YAML_PATH
+              value: /etc/deployex/deployex.yaml
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.secret.create .Values.secret.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ include "deployex.secretName" . }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # No liveness/readiness probe here: the pod's readiness is the haproxy
+          # container's below, the same way the hand-written Kubernetes manifest trial
+          # does it - a port that answers is not always an application that can.
+          livenessProbe:
+            tcpSocket:
+              port: dashboard
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          volumeMounts:
+            - name: config
+              mountPath: /etc/deployex
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /var/lib/deployex
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        - name: haproxy
+          image: {{ .Values.haproxy.image }}
+          imagePullPolicy: {{ .Values.haproxy.pullPolicy }}
+          ports:
+            - name: app
+              containerPort: {{ .Values.service.app.targetPort }}
+          {{- with .Values.haproxy.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: app
+            periodSeconds: 5
+            failureThreshold: 2
+          volumeMounts:
+            - name: haproxy
+              mountPath: /usr/local/etc/haproxy/haproxy.cfg
+              subPath: haproxy.cfg
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "deployex.fullname" . }}-config
+        - name: haproxy
+          configMap:
+            name: {{ include "deployex.fullname" . }}-haproxy
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "deployex.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- with .Values.persistence.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}
