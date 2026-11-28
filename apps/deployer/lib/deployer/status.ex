@@ -46,6 +46,7 @@ defmodule Deployer.Status do
           otp_version: String.t() | nil,
           elixir_version: String.t() | nil,
           phoenix_version: String.t() | nil,
+          db_version: String.t() | nil,
           logo: String.t() | nil,
           # The app's readiness and liveness config, nil for DeployEx
           readiness: Foundation.Yaml.Readiness.t() | nil,
@@ -85,6 +86,7 @@ defmodule Deployer.Status do
             otp_version: nil,
             elixir_version: nil,
             phoenix_version: nil,
+            db_version: nil,
             logo: nil,
             readiness: nil,
             liveness: nil

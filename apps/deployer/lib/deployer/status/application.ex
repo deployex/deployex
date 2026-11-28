@@ -10,6 +10,7 @@ defmodule Deployer.Status.Application do
   alias Deployer.Github
   alias Deployer.Monitor
   alias Deployer.Status
+  alias Deployer.Status.Db
   alias Deployer.Status.Endpoints
   alias Deployer.Status.Logo
   alias Deployer.Status.Versions
@@ -354,7 +355,8 @@ defmodule Deployer.Status.Application do
       certificates: certificates,
       otp_version: node_otp_version(node),
       elixir_version: node_elixir_version(node),
-      phoenix_version: node_phoenix_version(node)
+      phoenix_version: node_phoenix_version(node),
+      db_version: node_db_version(node)
     }
   end
 
@@ -419,6 +421,7 @@ defmodule Deployer.Status.Application do
       otp_version: node_otp_version(node),
       elixir_version: node_elixir_version(node),
       phoenix_version: node_phoenix_version(node),
+      db_version: node_db_version(node),
       logo: node_logo(node, otp == :connected, name)
     }
   end
@@ -513,6 +516,12 @@ defmodule Deployer.Status.Application do
   defp node_phoenix_version(node) do
     cache_in_process({node, :phoenix}) do
       Versions.phoenix_version(node)
+    end
+  end
+
+  defp node_db_version(node) do
+    cache_in_process({node, :db}) do
+      Db.version(node)
     end
   end
 
