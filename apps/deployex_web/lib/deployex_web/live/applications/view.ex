@@ -583,7 +583,8 @@ defmodule DeployexWeb.ApplicationsLive.View do
             child.version,
             child.otp_version && "OTP #{child.otp_version}",
             status.language == "elixir" && child.elixir_version &&
-              "Elixir #{child.elixir_version}"
+              "Elixir #{child.elixir_version}",
+            child.db_version
           ]
       end
 

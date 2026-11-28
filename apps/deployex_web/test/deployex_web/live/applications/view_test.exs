@@ -463,6 +463,18 @@ defmodule DeployexWeb.ApplicationsLive.ViewTest do
     assert [%{sub: "OTP 29 · Elixir 1.20.4"}] = View.apps([app(children)], %{}, @now)
   end
 
+  test "a subtitle includes the database version when the app reports one" do
+    children = [child(%{db_version: "PostgreSQL 16.4"})]
+
+    assert [%{sub: "1.0.0 · OTP 29 · Elixir 1.20.4 · PostgreSQL 16.4"}] =
+             View.apps([app(children)], %{}, @now)
+  end
+
+  test "a subtitle leaves out the database version when the app reports none" do
+    children = [child(%{})]
+    assert [%{sub: "1.0.0 · OTP 29 · Elixir 1.20.4"}] = View.apps([app(children)], %{}, @now)
+  end
+
   test "apps sort by name, and a crash in the last hour is a problem" do
     children = [child(%{last_crash_at: ~U[2026-10-28 15:40:00Z]})]
 
