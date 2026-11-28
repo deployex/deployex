@@ -8,6 +8,7 @@ on:
 env:
   MIX_ENV: prod
   SHELL: /usr/bin/bash
+  IMAGE_NAME: ghcr.io/deployex/deployex
 
 jobs:
   build:
@@ -93,6 +94,91 @@ jobs:
           path: |
             ${{ env.ARTIFACT_NAME }}
             ${{ env.ARTIFACT_NAME }}.sha256
+
+  # Each arch is built natively (no QEMU emulation) and pushed by digest only,
+  # with no tag yet - dockerManifest below combines both digests into the one
+  # multi-arch tag people actually pull.
+  dockerImage:
+    if: github.event.base_ref == 'refs/heads/main'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: devops/docker/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          labels: org.opencontainers.image.source=https://github.com/deployex/deployex
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  dockerManifest:
+    if: github.event.base_ref == 'refs/heads/main'
+    needs: [dockerImage]
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push the multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          TAG="${{ github.ref_name }}"
+          docker buildx imagetools create \
+            -t ${{ env.IMAGE_NAME }}:$TAG \
+            -t ${{ env.IMAGE_NAME }}:latest \
+            $(printf "${{ env.IMAGE_NAME }}@sha256:%s " *)
+
+      - name: Inspect the published manifest
+        run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
 
   copyInstaller:
     if: github.event.base_ref == 'refs/heads/main'

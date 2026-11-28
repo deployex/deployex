@@ -73,7 +73,7 @@ spec:
           - {{ printf "%s-headless.%s.svc.cluster.local" (include "deployex.fullname" .) .Release.Namespace }}
       containers:
         - name: deployex
-          image: "{{ required "image.repository is required - there is no published DeployEx image, build your own" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.securityContext }}
           securityContext:

@@ -14,7 +14,7 @@ Two things fall out of this almost for free, that a Deployment would need extra 
 
 ## Prerequisites
 
-- **Your own image.** There is no published DeployEx image. Build one from the root of this repository with `docker build -f devops/docker/Dockerfile .`, and push it where `image.repository`/`image.tag` can reach it.
+- **An image tag.** `image.repository` already points at the published, multi-arch (amd64/arm64) image at `ghcr.io/deployex/deployex` - set `image.tag` to the DeployEx version you want. It is published starting with this release; point `image.repository` at your own registry instead if you build from `devops/docker/Dockerfile` yourself, or need an earlier version.
 - **Release storage.** `deployexConfig.release_adapter` + `release_bucket`, reachable from every pod - S3 or GCS in practice, for anything beyond a single replica. `local` only makes sense for `replicaCount: 1`, and needs its own volume mounted at the path `release_bucket` names, via `extraVolumes`/`extraVolumeMounts` - it is not what `persistence` is for.
 - **A Secret with DeployEx's own values**: `DEPLOYEX_SECRET_KEY_BASE`, `DEPLOYEX_ERLANG_COOKIE`, `DEPLOYEX_ADMIN_HASHED_PASSWORD` at least. Either `secret.create: true` from the values below (a trial only - the values end up in this release's own stored data, readable with `helm get values`), or `secret.existingSecret`, a Secret you made yourself, with the External Secrets Operator, or any other way.
   Generate the password hash the same way every other guide does, from an `iex` session: `Bcrypt.hash_pwd_salt("my-pass")`.
@@ -23,7 +23,6 @@ Two things fall out of this almost for free, that a Deployment would need extra 
 
 ```bash
 helm install my-deployex . \
-  --set image.repository=my-registry/deployex \
   --set image.tag=0.10.0 \
   --set deployexConfig.release_adapter=s3 \
   --set deployexConfig.release_bucket=myphoenixapp-prod-distribution \
@@ -104,8 +103,8 @@ Turn on `deployexConfig.agent_api` (off by default) to drive DeployEx from a pip
 | Key | Default | Description |
 |---|---|---|
 | `replicaCount` | `1` | Number of DeployEx pods. |
-| `image.repository` | `""` | Required. Your own image - there is no published one. |
-| `image.tag` | `""` | Required. |
+| `image.repository` | `ghcr.io/deployex/deployex` | The published, multi-arch image. Point it at your own registry to use a self-built one instead. |
+| `image.tag` | `""` | Required. The DeployEx version to run. |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `haproxy.image` | `haproxy:3.2-alpine` | |
 | `haproxy.config` | one app, one replica | The `haproxy.cfg`, not generated from `deployexConfig.applications`. It is a template, and a change of it replaces the pods. |
