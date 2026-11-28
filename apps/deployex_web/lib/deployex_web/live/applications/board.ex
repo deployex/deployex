@@ -277,7 +277,9 @@ defmodule DeployexWeb.ApplicationsLive.Board do
           <div class="flex min-w-0 items-center gap-3.5">
             <Tags.lang name={@app.language} label={@app.language_name} logo={@app.logo} />
             <div class="min-w-0">
-              <div class="text-lg font-bold tracking-[-0.01em]">{@app.name}</div>
+              <div class="truncate text-lg font-bold tracking-[-0.01em]" title={@app.name}>
+                {@app.name}
+              </div>
               <div class="dx-muted dx-mono mt-0.5 truncate text-[0.8125rem]" title={@app.sub}>
                 {@app.sub}
               </div>

@@ -63,14 +63,19 @@ defmodule DeployexWeb.FleetLive do
                 id={"fleet-node-#{node.host}"}
                 class={[@columns, "border-t border-(--dx-base-300) px-5 py-3"]}
               >
-                <div class="flex flex-col gap-1">
-                  <b class="dx-mono text-sm">{node.host}</b>
+                <div class="min-w-0 flex flex-col gap-1">
+                  <b class="dx-mono text-sm truncate" title={node.host}>{node.host}</b>
                   <span :if={node.node == Node.self()} class="dx-muted text-[0.8125rem]">
                     This DeployEx
                   </span>
                 </div>
-                <div class="dx-mono text-[0.8125rem]">{node.deployex_version || "--"}</div>
-                <div class="flex flex-col gap-1.5">
+                <div
+                  class="dx-mono min-w-0 truncate text-[0.8125rem]"
+                  title={node.deployex_version || "--"}
+                >
+                  {node.deployex_version || "--"}
+                </div>
+                <div class="min-w-0 flex flex-col gap-1.5">
                   <span :if={not node.answers?} class="dx-muted text-[0.8125rem]">
                     Connected, and it does not answer
                   </span>
@@ -84,23 +89,23 @@ defmodule DeployexWeb.FleetLive do
                     :for={app <- node.applications}
                     class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[0.8125rem]"
                   >
-                    <b>{app.name}</b>
-                    <span class="dx-mono">{versions(app)}</span>
+                    <b class="wrap-anywhere">{app.name}</b>
+                    <span class="dx-mono wrap-anywhere">{versions(app)}</span>
                     <span class="dx-muted">{running(app)}</span>
-                    <span :if={app.ghosted != []} class="dx-chip dx-s-ghost">
+                    <span :if={app.ghosted != []} class="dx-chip dx-s-ghost wrap-anywhere">
                       <Icons.icon name="ghost" class="dx-gh" />
                       {Enum.join(app.ghosted, ", ")}
                     </span>
                   </div>
                 </div>
-                <div class="flex flex-col gap-1.5">
+                <div class="min-w-0 flex flex-col gap-1.5">
                   <span :if={node.locks == []} class="dx-muted text-[0.8125rem]">Idle</span>
                   <div
                     :for={lock <- node.locks}
                     class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[0.8125rem]"
                   >
                     <span class={["dx-chip", lock_class(lock.state)]}>{lock_label(lock.state)}</span>
-                    <span>
+                    <span class="wrap-anywhere">
                       <b>{lock.name}</b>
                       <span class="dx-mono">{lock.from_version} → {lock.to_version}</span>
                     </span>

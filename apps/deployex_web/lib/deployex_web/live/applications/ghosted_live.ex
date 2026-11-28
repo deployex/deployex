@@ -86,11 +86,15 @@ defmodule DeployexWeb.GhostedLive do
                 <div></div>
               </div>
               <div :for={version <- @shown} id={"ghosted-#{version.version}"} class="dx-grow">
-                <div class="flex items-center gap-2 text-(--dx-error-text)">
+                <div class="min-w-0 flex items-center gap-2 text-(--dx-error-text)">
                   <Icons.icon name="ghost" class="dx-gh" />
-                  <b class="dx-mono text-sm text-(--dx-base-content)">{version.version}</b>
+                  <b class="dx-mono truncate text-sm text-(--dx-base-content)" title={version.version}>
+                    {version.version}
+                  </b>
                 </div>
-                <div class="dx-mono text-[0.8125rem]">{version.sname}</div>
+                <div class="dx-mono min-w-0 truncate text-[0.8125rem]" title={version.sname}>
+                  {version.sname}
+                </div>
                 <div class="flex items-baseline gap-2.5">
                   <span class="dx-mono text-[0.8125rem]">{at(version)}</span>
                   <span class="dx-muted text-[0.8125rem]">{View.age(datetime(version), @now)}</span>
