@@ -18,7 +18,7 @@ defmodule Foundation.PeersTest do
     def lookup(_query), do: get(:addresses)
 
     @impl true
-    def host_name(address), do: Map.get(get(:host_names), address, {:error, :nxdomain})
+    def host_names(address), do: Map.get(get(:host_names), address, [])
 
     @impl true
     def long_names?, do: get(:long_names?)
@@ -44,8 +44,8 @@ defmodule Foundation.PeersTest do
           test: self(),
           addresses: [@own_address, @peer_address],
           host_names: %{
-            @own_address => {:ok, "nohost.dx.default.svc.cluster.local"},
-            @peer_address => {:ok, "dx-1.dx.default.svc.cluster.local"}
+            @own_address => ["nohost.dx.default.svc.cluster.local"],
+            @peer_address => ["dx-1.dx.default.svc.cluster.local"]
           },
           long_names?: false,
           connecting: [:"nonode@dx-1"],
@@ -92,10 +92,36 @@ defmodule Foundation.PeersTest do
   end
 
   test "skips an address that does not resolve back to a host name" do
-    network(host_names: %{@own_address => {:ok, "nohost"}})
+    network(host_names: %{@own_address => ["nohost"]})
     start()
 
     refute_receive {:tried, _node}, 100
+  end
+
+  test "takes the host name under the DNS query when the address has several" do
+    # A pod behind a second Kubernetes Service resolves back to a name in each
+    network(
+      host_names: %{
+        @own_address => ["nohost.dx.default.svc.cluster.local"],
+        @peer_address => [
+          "10-244-0-14.dx-dashboard.default.svc.cluster.local",
+          "DX-1.dx.default.svc.cluster.local."
+        ]
+      }
+    )
+
+    capture_log(fn ->
+      start(query: "dx.default.svc.cluster.local")
+      assert_receive {:tried, :"nonode@dx-1"}
+    end)
+
+    refute_received {:tried, :"nonode@10-244-0-14"}
+  end
+
+  test "takes the first host name when none is under the DNS query" do
+    network(host_names: %{@peer_address => ["dx-1.hosts.internal", "other.hosts.internal"]})
+
+    capture_log(fn -> start() && assert_receive({:tried, :"nonode@dx-1"}) end)
   end
 
   test "tries a peer that does not connect again, and reports it once" do

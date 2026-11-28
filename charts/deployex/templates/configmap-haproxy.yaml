@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deployex.fullname" . }}-haproxy
+  labels:
+    {{- include "deployex.labels" . | nindent 4 }}
+data:
+  haproxy.cfg: |
+    {{- tpl .Values.haproxy.config . | nindent 4 }}
