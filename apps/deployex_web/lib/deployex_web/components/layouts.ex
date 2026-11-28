@@ -29,8 +29,7 @@ defmodule DeployexWeb.Layouts do
     %{path: "/logs/live", label: "Logs", icon: "lines", section: "/logs/"},
     %{path: "/embedded-observer", label: "Observer Web", icon: "observer-web", admin: true},
     %{path: "/terminal", label: "Terminal", icon: "command-line", admin: true},
-    %{path: "/hotupgrade", label: "Hot Upgrade", icon: "arrow-up-circle", admin: true},
-    %{path: "/documentation", label: "Documentation", icon: "book-open"}
+    %{path: "/hotupgrade", label: "Hot Upgrade", icon: "arrow-up-circle", admin: true}
   ]
 
   @doc """

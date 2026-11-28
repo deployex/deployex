@@ -19,8 +19,7 @@ defmodule DeployexWeb.Components.Search do
     {"History Logs", "stored log lines", "/logs/history"},
     {"Observer Web", "processes, ETS, tracing", "/embedded-observer"},
     {"Terminal", "IEx on an instance, or a shell on this host", "/terminal"},
-    {"Hot Upgrade", "apply a hot upgrade", "/hotupgrade"},
-    {"Documentation", "guides and the YAML reference", "/documentation"}
+    {"Hot Upgrade", "apply a hot upgrade", "/hotupgrade"}
   ]
 
   @impl true

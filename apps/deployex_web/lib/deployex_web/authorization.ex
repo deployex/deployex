@@ -39,7 +39,6 @@ defmodule DeployexWeb.Authorization do
     DeployexWeb.GhostedLive => ~w(cancel-clear),
     DeployexWeb.LogsLive =>
       ~w(clear every-app filter mode pause range toggle-app toggle-source toggle-stream),
-    DeployexWeb.DocsLive => [],
     DeployexWeb.FleetLive => ~w(keep),
     DeployexWeb.DockLive =>
       ~w(open split-open split-pick toggle-help select unsplit close-tab close cancel-close confirm-close filter-logs toggle-stream)
