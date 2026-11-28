@@ -1,0 +1,17 @@
+# For peers_dns_query: resolves to every pod, ready or not, so each DeployEx can find
+# and connect to the others over OTP distribution (epmd) before any of them is ready.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "deployex.fullname" . }}-headless
+  labels:
+    {{- include "deployex.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "deployex.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: epmd
+      port: 4369
+      targetPort: 4369

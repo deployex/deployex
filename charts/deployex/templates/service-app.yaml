@@ -1,0 +1,16 @@
+# The application's one stable port, through HAProxy, which only sends requests to an
+# instance that passes its own check - see haproxy.config in values.yaml.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "deployex.fullname" . }}-app
+  labels:
+    {{- include "deployex.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.app.type }}
+  selector:
+    {{- include "deployex.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: app
+      port: {{ .Values.service.app.port }}
+      targetPort: {{ .Values.service.app.targetPort }}

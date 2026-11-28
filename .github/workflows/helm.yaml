@@ -1,0 +1,39 @@
+name: Helm chart
+
+on:
+  pull_request:
+    paths:
+      - "charts/**"
+      - ".github/workflows/helm.yaml"
+  push:
+    branches: [main]
+    paths:
+      - "charts/**"
+      - ".github/workflows/helm.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      # Helm is on the GitHub-hosted runners already, so nothing is installed
+      - name: Helm version
+        run: helm version --short
+
+      - name: Lint
+        run: helm lint --strict charts/deployex -f charts/deployex/ci/test-values.yaml
+
+      - name: Render
+        run: helm template deployex charts/deployex -f charts/deployex/ci/test-values.yaml > /dev/null
+
+      - name: The chart refuses to render without a Secret
+        run: |
+          if helm template deployex charts/deployex --set image.repository=r --set image.tag=t > /dev/null 2>&1; then
+            echo "::error::The chart rendered with no secret.create and no secret.existingSecret."
+            exit 1
+          fi

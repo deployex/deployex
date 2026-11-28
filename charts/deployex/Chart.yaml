@@ -1,0 +1,19 @@
+apiVersion: v2
+name: deployex
+description: Deploys and runs BEAM applications (Elixir, Erlang, Gleam) on Kubernetes, with DeployEx and HAProxy in one pod per replica.
+type: application
+version: 0.1.0
+appVersion: "0.10.0"
+home: https://github.com/deployex/deployex
+sources:
+  - https://github.com/deployex/deployex
+keywords:
+  - deployex
+  - beam
+  - elixir
+  - erlang
+  - gleam
+maintainers:
+  - name: Thiago Esteves
+    url: https://github.com/thiagoesteves
+icon: https://raw.githubusercontent.com/deployex/deployex/main/guides/static/deployex.svg

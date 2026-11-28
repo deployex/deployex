@@ -16,7 +16,8 @@ Current status: pre-1.0, see the version badge in [README.md](https://github.com
 
 ## Running it
 
-- [Docker and Kubernetes](https://github.com/deployex/deployex/blob/main/guides/docs/docker/README.md): one container with Docker Compose, one pod on a local `kind` cluster, and several pods - what was measured in each setup and what is still open (there is no Helm chart or operator yet; the Kubernetes manifests are hand-written and meant as a starting point, not a packaged install)
+- [Docker and Kubernetes](https://github.com/deployex/deployex/blob/main/guides/docs/docker/README.md): one container with Docker Compose, one pod on a local `kind` cluster, and several pods - what was measured in each setup and what is still open
+- [Helm chart](https://github.com/deployex/deployex/tree/main/charts/deployex): the packaged install for Kubernetes, a StatefulSet with a PVC per pod rather than the Docker guide's hand-written manifests
 - [Hot upgrades](https://github.com/deployex/deployex/blob/main/guides/docs/hot-upgrades/README.md): when a release can be applied without restarting the BEAM node, and what it leaves to the application
 - Local, no cloud dependency: [Elixir](https://github.com/deployex/deployex/blob/main/guides/docs/local-elixir/README.md), [Elixir with Ecto](https://github.com/deployex/deployex/blob/main/guides/docs/local-elixir-ecto/README.md), [Elixir umbrella](https://github.com/deployex/deployex/blob/main/guides/docs/local-elixir-umbrella/README.md), [Erlang](https://github.com/deployex/deployex/blob/main/guides/docs/local-erlang/README.md), [Gleam](https://github.com/deployex/deployex/blob/main/guides/docs/local-gleam/README.md)
 
