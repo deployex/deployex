@@ -14,7 +14,7 @@ Two things fall out of this almost for free, that a Deployment would need extra 
 
 ## Prerequisites
 
-- **Your own image.** There is no published DeployEx image. Build one with the Dockerfile at the root of this repository and push it where `image.repository`/`image.tag` can reach it.
+- **Your own image.** There is no published DeployEx image. Build one from the root of this repository with `docker build -f devops/docker/Dockerfile .`, and push it where `image.repository`/`image.tag` can reach it.
 - **Release storage.** `deployexConfig.release_adapter` + `release_bucket`, reachable from every pod - S3 or GCS in practice, for anything beyond a single replica. `local` only makes sense for `replicaCount: 1`, and needs its own volume mounted at the path `release_bucket` names, via `extraVolumes`/`extraVolumeMounts` - it is not what `persistence` is for.
 - **A Secret with DeployEx's own values**: `DEPLOYEX_SECRET_KEY_BASE`, `DEPLOYEX_ERLANG_COOKIE`, `DEPLOYEX_ADMIN_HASHED_PASSWORD` at least. Either `secret.create: true` from the values below (a trial only - the values end up in this release's own stored data, readable with `helm get values`), or `secret.existingSecret`, a Secret you made yourself, with the External Secrets Operator, or any other way.
   Generate the password hash the same way every other guide does, from an `iex` session: `Bcrypt.hash_pwd_salt("my-pass")`.
@@ -50,6 +50,8 @@ The chart's default matches one application on `replica_ports` base `4000` with 
 Edit it yourself to match your own applications, their ports, and how many replicas each one runs - the same hand-written file the Docker guide already asks for, just as a chart value instead of a file on disk.
 
 ## Fleet: more than one replica
+
+It needs a DeployEx with [#419](https://github.com/deployex/deployex/pull/419): each pod is behind more than one Service, so its address resolves back to more than one name, and a DeployEx without that fix does not connect to the others.
 
 Set `replicaCount` above `1` and every pod finds the others through the headless Service, deploys one at a time, and shows the rest on the Fleet page - see ["More than one pod"](https://github.com/deployex/deployex/blob/main/guides/docs/docker/README.md#more-than-one-pod).
 
@@ -106,7 +108,12 @@ Turn on `deployexConfig.agent_api` (off by default) to drive DeployEx from a pip
 | `image.tag` | `""` | Required. |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `haproxy.image` | `haproxy:3.2-alpine` | |
-| `haproxy.config` | one app, one replica | The literal `haproxy.cfg`, not generated from `deployexConfig.applications`. |
+| `haproxy.config` | one app, one replica | The `haproxy.cfg`, not generated from `deployexConfig.applications`. It is a template, and a change of it replaces the pods. |
+| `haproxy.readinessPath` | `/` | The path HAProxy checks each instance with, and the readiness probe of the pod asks for. |
+| `imagePullSecrets` | `[]` | For a private registry. |
+| `updateStrategy` | `{}` | How pods are replaced when the pod template changes. |
+| `podDisruptionBudget.enabled`, `.maxUnavailable` | `false`, `1` | For more than one replica. |
+| `topologySpreadConstraints` | `[]` | Spread the pods over nodes or zones. |
 | `haproxy.resources` | `{}` | |
 | `deployexConfig` | see `values.yaml` | The contents of `deployex.yaml`. `peers_dns_query` and `agent_api.port` are filled in by the chart when left unset. |
 | `service.app.*` | `ClusterIP`, port `80` → `8080` | The application, through HAProxy. |
@@ -124,13 +131,28 @@ Turn on `deployexConfig.agent_api` (off by default) to drive DeployEx from a pip
 
 ## Tested against
 
-`helm lint` and `helm template` on every change, plus, by hand against a real `kind` cluster before this chart's first version: a 3-replica install resolving peers by short name over `dnsConfig.searches`, a PVC bound per pod and actually written to by DeployEx, and the real image (built from this repository's own Dockerfile) booting, reading its Secret and ConfigMap correctly, and answering on the dashboard Service.
-No automated self-test against a live cluster yet - see [What this does not do (yet)](#what-this-does-not-do-yet).
+`helm lint --strict` and `helm template` in CI on every change of the chart (`.github/workflows/helm.yaml`).
+
+By hand, with `helm install` and `helm upgrade` on a local `kind` cluster, two replicas, the image built from this repository and a sample Phoenix application read from a directory:
+
+| Step | Result |
+|---|---|
+| `helm install` | Both pods ready, 2 of 2 containers, a PVC bound for each, the application deployed on each |
+| The two DeployEx | Connected to each other by short name |
+| `helm upgrade` to a new `image.tag` | One pod replaced at a time. Each came back with the instance it had, read from its volume |
+| `helm upgrade` with a new chart version and `appVersion` | Applied, and no pod was replaced |
+| A hot upgrade of the application, five requests a second through the Service | 200 requests, none failed. Applied on one pod, then on the other six seconds later, and no pod restarted |
+
+Two of these needed a fix in DeployEx itself, so the image has to be built from a version that has them: [#419](https://github.com/deployex/deployex/pull/419), without which the pods of more than one replica do not connect to each other, and [#420](https://github.com/deployex/deployex/pull/420), without which a pod that is replaced does not start its application again.
+
+Not run: S3 or GCS as the release storage, a cluster with several nodes, and a cloud volume, which belongs to one zone.
 
 ## What this does not do (yet)
 
 - **Generate `haproxy.cfg` from `deployexConfig.applications`.** It is a value you write, matching the Docker guide's own hand-written file - not a gap introduced by this chart, the file was never generated there either.
 - **Shared Fleet state across pods.** Each pod's dashboard and ghosted versions are still its own; see "Fleet" above.
-- **A CI self-test against a live cluster**, the way [`rollout-guard`](https://github.com/deployex/rollout-guard)'s `ci.yml` runs against a fixture on every push. This chart was validated by hand against a real `kind` cluster once, not on every change yet.
+- **A CI self-test against a live cluster**, the way [`rollout-guard`](https://github.com/deployex/rollout-guard)'s `ci.yml` runs against a fixture on every push. CI lints and renders the chart; the install above was run by hand.
+- **Remove the volumes on uninstall.** `helm uninstall` leaves the PersistentVolumeClaim of each pod, as Kubernetes does for every StatefulSet. Delete them yourself when the history they hold is no longer wanted.
+- **Move a pod to another zone.** A `ReadWriteOnce` volume of a cloud provider belongs to one zone, so the pod it is bound to only runs on a node of that zone.
 - **TLS for the Agent API or the dashboard.** Terminate it at an Ingress, a mesh, or your cloud's load balancer in front of the Services this chart creates.
 - **An Ingress.** `service.app`/`service.dashboard`/`service.agentApi` are plain Services; put whatever Ingress controller or mesh you already run in front of them.

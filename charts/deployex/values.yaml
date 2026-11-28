@@ -6,8 +6,9 @@
 replicaCount: 1
 
 image:
-  # -- There is no published DeployEx image. Build your own with the Dockerfile at
-  # the root of https://github.com/deployex/deployex and push it here - the image
+  # -- There is no published DeployEx image. Build your own with
+  # devops/docker/Dockerfile of https://github.com/deployex/deployex, from the root of
+  # the repository, and push it here - the image
   # has DeployEx and no application, which comes from release storage at runtime.
   repository: ""
   # -- Pin to a DeployEx version. Required: there is no sane default, since it must
@@ -15,15 +16,24 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# -- Secrets to pull the images with, as a list of {name: ...}, for a private registry.
+imagePullSecrets: []
+
 haproxy:
   image: haproxy:3.2-alpine
   pullPolicy: IfNotPresent
   resources: {}
+  # -- The path HAProxy asks each instance for, and the readiness probe of the pod asks
+  # HAProxy for. An application with a readiness path names it here, /readyz for
+  # instance. The default config below uses it.
+  readinessPath: /
   # -- The config HAProxy starts with, as a plain string - the same file as
   # devops/docker/haproxy.cfg, not generated from deployexConfig.applications.
   # The default below matches one application named myphoenixapp with one replica
   # on replica_ports base 4000, frontend port 8080 (service.app.targetPort).
   # Edit this to match your own applications, their ports and their replica counts.
+  # It is a template: {{ .Values... }} is replaced when the chart is rendered. A
+  # change of it replaces the pods, one at a time, since HAProxy reads it at start.
   config: |
     defaults
       mode http
@@ -42,7 +52,7 @@ haproxy:
 
     backend application
       option httpchk
-      http-check send meth GET uri / ver HTTP/1.1 hdr Host localhost
+      http-check send meth GET uri {{ .Values.haproxy.readinessPath }} ver HTTP/1.1 hdr Host localhost
       http-check expect status 200
       default-server check inter 1s fall 2 rise 2
       server port0 127.0.0.1:4000
@@ -128,7 +138,22 @@ secret:
   apiTokens: ""
   oauthClientSecret: ""
 
+# -- On the deployex container, which also runs the applications. Give it a memory
+# limit that covers DeployEx, each application, and a second instance of each
+# during a full deployment.
 resources: {}
+
+# -- How the pods are replaced when the pod template changes, a new image.tag for
+# instance. The Kubernetes default when empty: one pod at a time.
+updateStrategy: {}
+
+podDisruptionBudget:
+  # -- Only useful with more than one replica.
+  enabled: false
+  maxUnavailable: 1
+
+# -- For more than one replica: spread the pods over nodes or zones.
+topologySpreadConstraints: []
 
 podAnnotations: {}
 podLabels: {}

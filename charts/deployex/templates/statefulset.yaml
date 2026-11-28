@@ -10,22 +10,43 @@ spec:
   serviceName: {{ include "deployex.fullname" . }}-headless
   replicas: {{ .Values.replicaCount }}
   podManagementPolicy: Parallel
+  {{- with .Values.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "deployex.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      # The selector labels only, not the chart or the DeployEx version: a label that
+      # changes here replaces every pod, which restarts every application, on a chart
+      # upgrade that changed nothing else.
       labels:
-        {{- include "deployex.labels" . | nindent 8 }}
+        {{- include "deployex.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
       annotations:
+        # HAProxy reads its config when it starts, and the file is mounted with subPath,
+        # which a change of the ConfigMap does not reach. A change of haproxy.config
+        # therefore replaces the pods, one at a time. deployex.yaml has no such
+        # annotation on purpose: DeployEx reads it again by itself.
+        # Of the config itself, not of the ConfigMap, whose labels have the chart version.
+        checksum/haproxy: {{ tpl .Values.haproxy.config . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "deployex.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.podSecurityContext }}
       securityContext:
@@ -73,18 +94,18 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or .Values.secret.create .Values.secret.existingSecret }}
           envFrom:
             - secretRef:
                 name: {{ include "deployex.secretName" . }}
-          {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          # No liveness/readiness probe here: the pod's readiness is the haproxy
-          # container's below, the same way the hand-written Kubernetes manifest trial
-          # does it - a port that answers is not always an application that can.
+          # No readiness probe here: the pod's readiness is the haproxy container's
+          # below, the same way the hand-written Kubernetes manifest trial does it - a
+          # port that answers is not always an application that can. The liveness probe
+          # is on DeployEx itself: a container that is restarted for it restarts every
+          # application with it.
           livenessProbe:
             tcpSocket:
               port: dashboard
@@ -112,7 +133,7 @@ spec:
           {{- end }}
           readinessProbe:
             httpGet:
-              path: /
+              path: {{ .Values.haproxy.readinessPath }}
               port: app
             periodSeconds: 5
             failureThreshold: 2
@@ -134,8 +155,11 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
+        # The selector labels only: volumeClaimTemplates cannot change once the
+        # StatefulSet exists, so a label with the chart or the DeployEx version here
+        # makes every later helm upgrade fail.
         labels:
-          {{- include "deployex.labels" . | nindent 10 }}
+          {{- include "deployex.selectorLabels" . | nindent 10 }}
       spec:
         accessModes:
           {{- toYaml .Values.persistence.accessModes | nindent 10 }}

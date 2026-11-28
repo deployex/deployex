@@ -6,4 +6,4 @@ metadata:
     {{- include "deployex.labels" . | nindent 4 }}
 data:
   haproxy.cfg: |
-    {{- .Values.haproxy.config | nindent 4 }}
+    {{- tpl .Values.haproxy.config . | nindent 4 }}
