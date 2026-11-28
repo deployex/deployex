@@ -46,7 +46,7 @@ release_adapter: "s3"                                    # Release adapter: s3, 
 release_bucket: "myphoenixapp-prod-distribution"         # Release distribution bucket name
 
 # Secrets Management
-secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp, env, 1password-connect or 1password-cli
+secrets_adapter: "aws"                                   # Secrets adapter: aws, gcp, env, directory, 1password-connect or 1password-cli
 secrets_path: "deployex-myphoenixapp-prod-secrets"       # Secret path to retrieve from
 
 # Cloud Provider Configuration
@@ -291,10 +291,11 @@ applications:
       - key: AWS_REGION
         value: "sa-east-1"
 
-    # Secrets (optional). The fields of a 1Password item, passed to the monitored app as
-    # environment variables every time it starts. See "Secrets from 1Password"
+    # Secrets (optional). The fields of a 1Password item, or the files of a directory, passed
+    # to the monitored app as environment variables every time it starts. See
+    # "Secrets from 1Password" and "Secrets from a directory"
     secrets:
-      adapter: "1password-connect"     # 1password-connect or 1password-cli
+      adapter: "1password-connect"     # 1password-connect, 1password-cli or directory
       path: "vaults/production/items/myphoenixapp"
     
     # Application-Level Monitoring (optional with defaults)
@@ -443,6 +444,52 @@ An application that needs 1Password credentials of its own gets them as fields o
 - **A restart does not depend on 1Password being reachable.** When the item cannot be read at a later start, the instance starts with the secrets of its previous start and DeployEx logs a warning. They are kept in memory, and not across a restart of DeployEx.
 - **The pre-commands get the same secrets**, so a migration can reach the database.
 - **The values are not written anywhere.** They are passed in the environment of the process, not on its command line, and they are not in the logs, the dashboard or the Agent API. The dashboard shows only the adapter and the path.
+
+## Secrets from a directory
+
+DeployEx can also read secrets from a directory of files, one secret per file: the file's name is the secret's name, and its content is the value.
+This is how a Kubernetes Secret appears once mounted as a volume, so the same adapter reads a plain Kubernetes Secret, one kept in sync by the [External Secrets Operator](https://external-secrets.io), or one written to disk by the [Vault Agent injector](https://developer.hashicorp.com/vault/docs/platform/k8s/injector) or the [Vault Secrets Store CSI driver](https://developer.hashicorp.com/vault/docs/platform/k8s/csi), with no code of its own for any of them: by the time the files are on disk, DeployEx cannot tell which one put them there.
+
+As with 1Password, both of DeployEx's own secrets and the secrets of a monitored application take an adapter and a path, here the path to the directory:
+
+```yaml
+secrets_adapter: "directory"
+secrets_path: "/etc/deployex/secrets/deployex"
+
+applications:
+  - name: "myphoenixapp"
+    secrets:
+      adapter: "directory"
+      path: "/etc/deployex/secrets/myphoenixapp"
+```
+
+### The directory
+
+- A name that starts with `.` is skipped. This is what a Kubernetes Secret volume needs: alongside each key it mounts, it keeps a hidden `..data` symlink and a hidden, timestamped directory it uses to update every file at once, and both are skipped along with any other dotfile.
+- A file with one trailing newline has it removed, since an editor or `kubectl create secret generic --from-file` commonly adds one that is not part of the value. A file with no trailing newline, or with other trailing whitespace, is read as it is.
+- For DeployEx's own secrets the file names are the ones in this README, such as `DEPLOYEX_SECRET_KEY_BASE`. For an application they are the names of the environment variables it reads, such as `DATABASE_URL`.
+- A file whose name is not a valid environment variable name, or starts with `RELEASE_` or `DEPLOYEX_`, which DeployEx removes from the environment of every application it starts, is left out of an application's secrets. The names left out are logged, values never are.
+
+### On Kubernetes
+
+Mount the Secret at the path named by `secrets_path` or an application's `path`, read-only, and give DeployEx no other access to it:
+
+```yaml
+volumes:
+  - name: myphoenixapp-secrets
+    secret:
+      secretName: myphoenixapp-prod-secrets
+containers:
+  - name: deployex
+    volumeMounts:
+      - name: myphoenixapp-secrets
+        mountPath: /etc/deployex/secrets/myphoenixapp
+        readOnly: true
+```
+
+A `SecretStore` and an `ExternalSecret` of the External Secrets Operator, or the Vault Agent injector's annotations, write to the same kind of path, a directory DeployEx reads with no change to the YAML above.
+
+What a monitored application can expect from its secrets (read at every start, refreshed on a hot upgrade, never written anywhere) is the same as with 1Password, see [What to expect for an application](#what-to-expect-for-an-application) above - it is a property of DeployEx, not of the adapter.
 
 ### An application that reads its own secrets
 

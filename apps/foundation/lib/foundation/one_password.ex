@@ -11,11 +11,9 @@ defmodule Foundation.OnePassword do
 
   require Logger
 
-  @path_format "vaults/<vault>/items/<item>"
+  alias Foundation.ConfigProvider.Secrets.EnvName
 
-  # The run script of a monitored application removes every RELEASE_ and DEPLOYEX_ variable
-  # before it starts the application, so a field with such a name would never reach it
-  @reserved_prefixes ["RELEASE_", "DEPLOYEX_"]
+  @path_format "vaults/<vault>/items/<item>"
 
   @type fields :: %{optional(String.t()) => String.t()}
 
@@ -108,7 +106,7 @@ defmodule Foundation.OnePassword do
     {env, skipped} =
       fields
       |> Enum.sort()
-      |> Enum.split_with(fn {name, _value} -> env_name?(name) end)
+      |> Enum.split_with(fn {name, _value} -> EnvName.valid?(name) end)
 
     if skipped != [] do
       Logger.warning(
@@ -118,10 +116,5 @@ defmodule Foundation.OnePassword do
     end
 
     env
-  end
-
-  defp env_name?(name) do
-    Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*$/, name) and
-      not String.starts_with?(name, @reserved_prefixes)
   end
 end

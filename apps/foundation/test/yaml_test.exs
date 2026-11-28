@@ -1269,9 +1269,9 @@ defmodule Foundation.YamlTest do
     test "rejects application secrets that could never be read" do
       for {section, message} <- [
             {~s(adapter: "aws"\n      path: "vaults/production/items/myphoenixapp"),
-             ~s(application secrets adapter "aws" not supported, expected 1password-connect or 1password-cli)},
+             ~s(application secrets adapter "aws" not supported, expected 1password-connect, 1password-cli or directory)},
             {~s(path: "vaults/production/items/myphoenixapp"),
-             "application secrets adapter nil not supported, expected 1password-connect or 1password-cli"},
+             "application secrets adapter nil not supported, expected 1password-connect, 1password-cli or directory"},
             {~s(adapter: "1password-cli"\n      path: "production/myphoenixapp"),
              ~s(1Password path "production/myphoenixapp" not supported, expected vaults/<vault>/items/<item>)},
             {~s(adapter: "1password-cli"),
@@ -1300,6 +1300,59 @@ defmodule Foundation.YamlTest do
         assert_raise RuntimeError,
                      ~s(application secrets "1password-cli" not supported, expected adapter and path),
                      fn -> Yaml.load() end
+      end
+    end
+  end
+
+  describe "directory secrets" do
+    test "the secrets of DeployEx can come from a directory" do
+      path =
+        replace_in_default_yaml(
+          ~s(secrets_adapter: "aws"),
+          ~s(secrets_adapter: "directory")
+        )
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, config} = Yaml.load()
+
+        assert config.secrets_adapter == Foundation.ConfigProvider.Secrets.Directory
+      end
+    end
+
+    test "parses the secrets of an application" do
+      path =
+        application_secrets_yaml(
+          ~s(adapter: "directory"\n      path: "/etc/deployex/secrets/myphoenixapp")
+        )
+
+      with_mocks([
+        {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+      ]) do
+        {:ok, %{applications: [app | _rest]}} = Yaml.load()
+
+        assert app.secrets == %Yaml.Secrets{
+                 adapter: Foundation.ConfigProvider.Secrets.Directory,
+                 path: "/etc/deployex/secrets/myphoenixapp"
+               }
+      end
+    end
+
+    test "rejects a directory path that is not a non-empty string" do
+      for {section, message} <- [
+            {~s(adapter: "directory"\n      path: ""),
+             ~s(application secrets path "" not supported, expected a directory)},
+            {~s(adapter: "directory"),
+             "application secrets path nil not supported, expected a directory"}
+          ] do
+        path = application_secrets_yaml(section)
+
+        with_mocks([
+          {System, [:passthrough], [get_env: fn "DEPLOYEX_CONFIG_YAML_PATH" -> path end]}
+        ]) do
+          assert_raise RuntimeError, message, fn -> Yaml.load() end
+        end
       end
     end
   end
