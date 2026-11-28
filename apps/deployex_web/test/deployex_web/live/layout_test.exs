@@ -9,7 +9,8 @@ defmodule DeployexWeb.LayoutTest do
   setup [
     :set_mox_global,
     :verify_on_exit!,
-    :log_in_default_user
+    :log_in_default_user,
+    :stub_applications_mount
   ]
 
   @nav_items [
@@ -17,20 +18,27 @@ defmodule DeployexWeb.LayoutTest do
     {"/logs/live", "Logs"},
     {"/embedded-observer", "Observer Web"},
     {"/terminal", "Terminal"},
-    {"/hotupgrade", "Hot Upgrade"},
-    {"/documentation", "Documentation"}
+    {"/hotupgrade", "Hot Upgrade"}
   ]
+
+  defp stub_applications_mount(_context) do
+    Deployer.StatusMock
+    |> stub(:subscribe, fn -> :ok end)
+    |> stub(:monitoring, fn -> {:ok, []} end)
+
+    :ok
+  end
 
   @tag :capture_log
   test "the sidebar has every page as a live link, with the current page active", %{conn: conn} do
-    {:ok, _view, html} = live(conn, ~p"/documentation")
+    {:ok, _view, html} = live(conn, ~p"/applications")
 
     for {path, label} <- @nav_items do
       assert html =~ ~r/<a href="#{path}" data-phx-link="redirect"[^>]*title="#{label}"/
     end
 
     assert [_active] = Regex.scan(~r/aria-current="page"/, html)
-    assert html =~ ~r/href="\/documentation"[^>]*aria-current="page"/
+    assert html =~ ~r/href="\/applications"[^>]*aria-current="page"/
 
     # Observer Web keeps its own logo
     assert html =~ "dx-ow-logo-gradient"
@@ -58,7 +66,7 @@ defmodule DeployexWeb.LayoutTest do
   test "the keyboard meets the skip link, then the top bar, then the sidebar before the page", %{
     conn: conn
   } do
-    {:ok, _view, html} = live(conn, ~p"/documentation")
+    {:ok, _view, html} = live(conn, ~p"/applications")
 
     [skip, sidebar, main] =
       Enum.map([~s(href="#shell-main"), ~s(id="shell-sidebar"), ~s(id="shell-main")], fn marker ->
@@ -72,7 +80,7 @@ defmodule DeployexWeb.LayoutTest do
 
   @tag :capture_log
   test "a sidebar link changes the page with live navigation", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/documentation")
+    {:ok, view, _html} = live(conn, ~p"/applications")
 
     Deployer.HotUpgradeMock
     |> stub(:subscribe_events, fn -> :ok end)
@@ -91,7 +99,7 @@ defmodule DeployexWeb.LayoutTest do
     conn: conn,
     user: user
   } do
-    {:ok, _view, html} = live(conn, ~p"/documentation")
+    {:ok, _view, html} = live(conn, ~p"/applications")
 
     assert html =~ "Agent Console"
     assert html =~ ~s(id="theme-switch")
@@ -103,7 +111,7 @@ defmodule DeployexWeb.LayoutTest do
 
   @tag :capture_log
   test "the host meters follow this host's readings on any page", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/documentation")
+    {:ok, view, _html} = live(conn, ~p"/applications")
 
     send(
       view.pid,

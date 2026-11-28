@@ -121,7 +121,8 @@ defmodule DeployexWeb.AuthorizationTest do
 
     @tag :capture_log
     test "opens a log tab in the dock, and no shell", %{conn: conn} do
-      {:ok, view, _html} = live(conn, ~p"/documentation")
+      stub_applications()
+      {:ok, view, _html} = live(conn, ~p"/applications")
       dock = find_live_child(view, "dock-live")
 
       html = render_hook(dock, "open", %{"kind" => "shell", "target" => "deployex"})
